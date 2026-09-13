@@ -1,8 +1,9 @@
 (async()=>{
-  const BASE='https://raw.githubusercontent.com/weeyaotan-ops/money-quest-onetap/c5b70fbec00e4288835e25905ba455d6e610b52b/binance_onetap_gateway.js';
-  const r=await fetch(BASE);
-  if(!r.ok) throw new Error('V4_BASE_FETCH_'+r.status);
+  const SRC='https://raw.githubusercontent.com/weeyaotan-ops/money-quest-onetap/main/exact_mirror_gateway.js';
+  const r=await fetch(SRC,{cache:'no-store'});
+  if(!r.ok) throw new Error('EXACT_MIRROR_FETCH_'+r.status);
   const src=await r.text();
-  console.log('ONETAP_V4_SAFE_BASE_FALLBACK',src.length);
+  if(!src.includes("version: 'EXACT_MIRROR_V1'")||!src.includes("strategyGate: 'NONE'")) throw new Error('EXACT_MIRROR_SOURCE_INVALID');
+  console.log('EXACT_MIRROR_LOADER',src.length);
   eval(src);
-})().catch(e=>{console.error('ONETAP_V4_SAFE_BASE_ERR',e&&e.stack||e);process.exit(1)});
+})().catch(e=>{console.error('EXACT_MIRROR_BOOT_ERR',e&&e.stack||e);process.exit(1)});
