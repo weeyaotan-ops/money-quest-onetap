@@ -56,7 +56,9 @@
   );
 
   src=src.replace(/EXACT_MIRROR_V1/g,'EXACT_MIRROR_V2_RESTING');
-  mustReplace("entryPolicy: 'EXACT_LIMIT_IOC_NO_CHASE'","entryPolicy: 'EXACT_LIMIT_GTC_BOUNDED_NO_CHASE'",'HEALTH_POLICY');
+  const oldPolicy="entryPolicy: 'EXACT_LIMIT_IOC_NO_CHASE'";
+  if(!src.includes(oldPolicy)) throw new Error('RESTING_V2_PATCH_MISS_HEALTH_POLICY');
+  src=src.split(oldPolicy).join("entryPolicy: 'EXACT_LIMIT_GTC_BOUNDED_NO_CHASE'");
   mustReplace(
     "'Exact Mirror: no extra EV/RR/setup gate. Combined Edge owns direction + Entry + SL + TP.'",
     "'Exact Mirror: no extra EV/RR/setup gate. Exact Entry rests until ticket expiry; no chase. Combined Edge owns direction + Entry + SL + TP.'",
