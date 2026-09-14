@@ -36,9 +36,11 @@ class ChampionFactoryManager{
     this.minDiscoveryClosed=opts.minDiscoveryClosed??20;
     this.maxElite=opts.maxElite??12;
     this.maxPerRole=opts.maxPerRole??3;
+    this.maxFrozen=opts.maxFrozen??this.maxElite;
     this.archive=new Map();
     this.frozen=new Map();
     this.graduated=new Map();
+    this.failed=new Map();
     this.audit=[];
   }
 
@@ -56,16 +58,24 @@ class ChampionFactoryManager{
     };
     const version=hash(dna);
     const id=`${brain.id}@${version}`;
+
+    if(this.frozen.has(id))return this.frozen.get(id);
+    if(this.graduated.has(id))return this.graduated.get(id);
+    if(this.failed.has(id))return this.failed.get(id);
+
+    // Fixed exam capacity: do not continuously replace candidates. Once a DNA
+    // enters a frozen exam it owns that slot until the exam reaches N>=100 and
+    // receives a final PASS/FAIL decision.
+    if(this.frozen.size>=this.maxFrozen)return null;
+
     const item={
       id,brainId:brain.id,parent:brain.parent||null,role,version,dna:clone(dna),
       frozenAt:Date.now(),holdoutStartIndex:(brain.closedHoldout||[]).length,
-      status:'FROZEN_EXAM'
+      status:'FROZEN_EXAM',proofTargetN:this.gates.minClosed
     };
-    if(!this.frozen.has(id)){
-      this.frozen.set(id,item);
-      this.record('FREEZE',{id,brainId:brain.id,role,version,holdoutStartIndex:item.holdoutStartIndex});
-    }
-    return this.frozen.get(id);
+    this.frozen.set(id,item);
+    this.record('FREEZE',{id,brainId:brain.id,role,version,holdoutStartIndex:item.holdoutStartIndex,targetN:this.gates.minClosed});
+    return item;
   }
 
   discoveryEvidence(brain){
@@ -109,50 +119,78 @@ class ChampionFactoryManager{
 
     const roleCount={};
     const next=new Map();
-    const activeFrozenIds=new Set();
     for(const c of candidates){
       roleCount[c.role]=roleCount[c.role]||0;
       if(roleCount[c.role]>=this.maxPerRole)continue;
       if(next.size>=this.maxElite)break;
       roleCount[c.role]++;
       next.set(c.brain.id,{brainId:c.brain.id,role:c.role,score:c.discoveryScore,stats:c.stats,updatedAt:Date.now()});
-      const frozen=this.freezeGenome(c.brain,c.role);
-      activeFrozenIds.add(frozen.id);
+      this.freezeGenome(c.brain,c.role);
     }
 
-    // An ungraduated exam exists only while its frozen DNA remains an active elite.
-    // This bounds exam slots and prevents stale candidates from blocking pruning forever.
-    for(const [id,f] of [...this.frozen]){
-      if(activeFrozenIds.has(id)||this.graduated.has(id))continue;
-      this.frozen.delete(id);
-      this.record('EXAM_CANCEL',{id,brainId:f.brainId,reason:'NO_LONGER_ELITE'});
-    }
-
+    // IMPORTANT: do NOT cancel a frozen exam merely because a newer generation
+    // displaced it from the current elite list. That was the bug that kept N
+    // near zero forever. Frozen candidates survive evolution until N>=100.
     this.archive=next;
-    this.record('ELITE_REFRESH',{elite:[...next.keys()]});
+    this.record('ELITE_REFRESH',{elite:[...next.keys()],frozen:this.frozen.size});
     return [...next.values()];
   }
 
   evaluateFrozenAgainstBrains(brains){
     const byId=new Map(brains.map(b=>[b.id,b]));
     const results=[];
-    for(const frozen of this.frozen.values()){
+
+    for(const frozen of [...this.frozen.values()]){
       const brain=byId.get(frozen.brainId);
-      if(!brain)continue;
+      if(!brain){
+        results.push({id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats:null,proof:null,status:'FROZEN_EXAM',reason:'BRAIN_MISSING'});
+        continue;
+      }
+
       const stats=this.forwardEvidence(brain,frozen);
       const proof=evaluateChampion(stats,this.gates);
-      const rec={id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats,proof};
-      results.push(rec);
+      const rec={id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats,proof,status:'FROZEN_EXAM'};
+
+      // No early replacement, mutation, graduation or failure. Accumulate the
+      // exact frozen DNA's holdout evidence monotonically until proof N is met.
+      if(stats.n<this.gates.minClosed){
+        results.push(rec);
+        continue;
+      }
+
       if(proof.eligible){
-        const prev=this.graduated.get(frozen.id);
-        this.graduated.set(frozen.id,{...frozen,status:'CHAMPION',stats,proof,graduatedAt:prev?.graduatedAt||Date.now(),lastVerifiedAt:Date.now()});
-        if(!prev)this.record('GRADUATE',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,score:proof.score});
-      }else if(this.graduated.has(frozen.id)){
-        this.graduated.delete(frozen.id);
-        this.record('DETHRONE',{id:frozen.id,brainId:frozen.brainId,reasons:proof.reasons});
+        const champion={...frozen,status:'CHAMPION',stats,proof,graduatedAt:Date.now(),lastVerifiedAt:Date.now()};
+        this.graduated.set(frozen.id,champion);
+        this.frozen.delete(frozen.id);
+        rec.status='CHAMPION';
+        this.record('GRADUATE',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,score:proof.score,n:stats.n});
+      }else{
+        const failed={...frozen,status:'FAILED_EXAM',stats,proof,failedAt:Date.now()};
+        this.failed.set(frozen.id,failed);
+        this.frozen.delete(frozen.id);
+        rec.status='FAILED_EXAM';
+        this.record('FAIL_EXAM',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,n:stats.n,reasons:proof.reasons});
+      }
+      results.push(rec);
+    }
+
+    // Champions remain protected and are continuously re-verified on all later
+    // holdout evidence. If a proof gate breaks, the champion is dethroned.
+    for(const champ of [...this.graduated.values()]){
+      const brain=byId.get(champ.brainId);
+      if(!brain)continue;
+      const stats=this.forwardEvidence(brain,champ);
+      const proof=evaluateChampion(stats,this.gates);
+      if(proof.eligible){
+        this.graduated.set(champ.id,{...champ,stats,proof,lastVerifiedAt:Date.now()});
+      }else{
+        this.graduated.delete(champ.id);
+        this.failed.set(champ.id,{...champ,status:'FAILED_EXAM',stats,proof,failedAt:Date.now()});
+        this.record('DETHRONE',{id:champ.id,brainId:champ.brainId,reasons:proof.reasons});
       }
     }
-    return results.sort((a,b)=>Number(b.proof.eligible)-Number(a.proof.eligible)||b.proof.score-a.proof.score);
+
+    return results.sort((a,b)=>Number(b.proof?.eligible)-Number(a.proof?.eligible)||(b.proof?.score||0)-(a.proof?.score||0));
   }
 
   portfolio(){
@@ -164,6 +202,8 @@ class ChampionFactoryManager{
   }
 
   protectedBrainIds(){
+    // Frozen candidates are hard-protected from pruning/evolution until their
+    // exam ends. This is the lock that allows N to reach 100 on the same DNA.
     return new Set([
       ...this.archive.keys(),
       ...[...this.frozen.values()].map(x=>x.brainId),
@@ -181,12 +221,13 @@ class ChampionFactoryManager{
 
   snapshot(){
     return {
-      architecture:'MASTER_BRAIN_CHAMPION_FACTORY_V1',
+      architecture:'MASTER_BRAIN_CHAMPION_FACTORY_V2_FROZEN_EXAM_LOCK',
       realMoney:false,
       gates:this.gates,
       elite:[...this.archive.values()],
       frozen:[...this.frozen.values()],
       champions:[...this.graduated.values()],
+      failed:[...this.failed.values()],
       portfolio:this.portfolio(),
       audit:this.audit.slice(0,100)
     };
