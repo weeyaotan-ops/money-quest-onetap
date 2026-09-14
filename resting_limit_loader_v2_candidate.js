@@ -41,7 +41,7 @@
 
   mustReplace(
     "const MAX_SIGNAL_AGE = Math.max(TTL, Number(process.env.BINANCE_MAX_SIGNAL_AGE_MS || 120000));",
-    "const MAX_SIGNAL_AGE = Math.max(TTL, Number(process.env.BINANCE_MAX_SIGNAL_AGE_MS || 120000));\nconst ENTRY_POLL_MS = Math.max(250, Number(process.env.BINANCE_RESTING_POLL_MS || 500));\nconst MAX_OPEN_POSITIONS = Math.max(1, Number(process.env.BINANCE_MAX_OPEN_POSITIONS || 8));\nconst REAL_LEDGER_FILE = process.env.BINANCE_REAL_LEDGER_FILE || '/data/exact_mirror_v2_real_ledger.jsonl';",
+    "const MAX_SIGNAL_AGE = Math.max(TTL, Number(process.env.BINANCE_MAX_SIGNAL_AGE_MS || 120000));\nconst ENTRY_POLL_MS = Math.max(250, Number(process.env.BINANCE_RESTING_POLL_MS || 500));\nconst MAX_OPEN_POSITIONS = Math.max(1, Number(process.env.BINANCE_MAX_OPEN_POSITIONS || 8));\nconst REAL_LEDGER_FILE = process.env.BINANCE_REAL_LEDGER_FILE || '/tmp/exact_mirror_v2_real_ledger.jsonl';",
     'POLICY_CONSTS'
   );
 
