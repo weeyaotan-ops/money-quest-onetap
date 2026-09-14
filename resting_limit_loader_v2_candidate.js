@@ -54,6 +54,12 @@
   mustReplace(oldExec,newExec,'EXECUTE_LOCKED');
 
   mustReplace(
+    "if (u.callback_query) await handleCallback(u.callback_query);",
+    "if (u.callback_query) { try { await handleCallback(u.callback_query); } catch (cbErr) { console.warn('EXACT_MIRROR_V2_CALLBACK_DRAIN_ERR', String(cbErr.message || cbErr)); } }",
+    'CALLBACK_ISOLATION'
+  );
+
+  mustReplace(
     "Exact Combined entry was not filled. No chase. No position opened.",
     "Exact Combined entry was not filled before expiry. Resting order cancelled. No chase. No position opened.",
     'NOT_FILLED_TEXT'
