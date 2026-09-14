@@ -15,6 +15,13 @@ assert(src.includes("sizingPolicy: 'LIVE_EQUITY_AT_SIGNAL_LOCK_ONCE'"), 'signal-
 assert(src.includes("confirmPolicy: 'REVALIDATE_ONLY_NO_RESIZE'"), 'confirm no-resize validation missing');
 assert(src.includes('if (executedQty > 0)'), 'fill detection missing');
 assert(src.includes("if (status !== 'FILLED') await cancelEntryOrder(p);"), 'partial-fill remainder cancel missing');
+assert(src.includes('MAX_OPEN_POSITIONS'), 'global max-open constant missing');
+assert(src.includes("PORTFOLIO_MAX_OPEN"), 'portfolio max-open block missing');
+assert(src.includes('portfolioOpenCount(accNow)'), 'confirm-time portfolio recheck missing');
+assert(src.includes('openCount >= MAX_OPEN_POSITIONS'), 'signal-time portfolio gate missing');
+assert(src.includes('EXACT_MIRROR_V2_REAL_LEDGER'), 'real execution ledger log missing');
+assert(src.includes("appendRealLedger('ENTRY_FILL'"), 'entry fill ledger event missing');
+assert(src.includes("appendRealLedger('PORTFOLIO_BLOCK'"), 'portfolio block ledger event missing');
 
 function simulate(states, expiryIndex) {
   let canceled = false;
@@ -62,5 +69,8 @@ console.log('RESTING_V2_POLICY_SELFTEST_PASS', JSON.stringify({
   noChase: true,
   liveEquityAtSignal: true,
   sizingLockedOnce: true,
-  noResizeOnConfirm: true
+  noResizeOnConfirm: true,
+  portfolioCap: true,
+  signalTimePortfolioGate: true,
+  realExecutionLedger: true
 }));
