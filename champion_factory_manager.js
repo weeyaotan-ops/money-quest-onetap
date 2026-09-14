@@ -56,10 +56,14 @@ class ChampionFactoryManager{
     };
     const version=hash(dna);
     const id=`${brain.id}@${version}`;
-    const item={id,brainId:brain.id,parent:brain.parent||null,role,version,dna:clone(dna),frozenAt:Date.now(),status:'FROZEN_EXAM'};
+    const item={
+      id,brainId:brain.id,parent:brain.parent||null,role,version,dna:clone(dna),
+      frozenAt:Date.now(),holdoutStartIndex:(brain.closedHoldout||[]).length,
+      status:'FROZEN_EXAM'
+    };
     if(!this.frozen.has(id)){
       this.frozen.set(id,item);
-      this.record('FREEZE',{id,brainId:brain.id,role,version});
+      this.record('FREEZE',{id,brainId:brain.id,role,version,holdoutStartIndex:item.holdoutStartIndex});
     }
     return this.frozen.get(id);
   }
@@ -68,8 +72,16 @@ class ChampionFactoryManager{
     return tradeStats(brain.closedDiscovery||[],brain.discoveryDD||0,brain.discoveryBalance??null);
   }
 
-  forwardEvidence(brain){
-    return tradeStats(brain.closedHoldout||[],brain.holdoutDD||0,brain.holdoutBalance??null);
+  forwardEvidence(brain,frozen=null){
+    const all=brain.closedHoldout||[];
+    const trades=frozen?all.slice(frozen.holdoutStartIndex||0):all;
+    let peak=1000,bal=1000,dd=0;
+    for(const t of trades){
+      bal=Math.max(.01,bal*(1+0.01*(+t.netR||0)));
+      peak=Math.max(peak,bal);
+      dd=Math.max(dd,(peak-bal)/peak*100);
+    }
+    return tradeStats(trades,dd,bal);
   }
 
   roleOf(brain){
@@ -97,14 +109,25 @@ class ChampionFactoryManager{
 
     const roleCount={};
     const next=new Map();
+    const activeFrozenIds=new Set();
     for(const c of candidates){
       roleCount[c.role]=roleCount[c.role]||0;
       if(roleCount[c.role]>=this.maxPerRole)continue;
       if(next.size>=this.maxElite)break;
       roleCount[c.role]++;
       next.set(c.brain.id,{brainId:c.brain.id,role:c.role,score:c.discoveryScore,stats:c.stats,updatedAt:Date.now()});
-      this.freezeGenome(c.brain,c.role);
+      const frozen=this.freezeGenome(c.brain,c.role);
+      activeFrozenIds.add(frozen.id);
     }
+
+    // An ungraduated exam exists only while its frozen DNA remains an active elite.
+    // This bounds exam slots and prevents stale candidates from blocking pruning forever.
+    for(const [id,f] of [...this.frozen]){
+      if(activeFrozenIds.has(id)||this.graduated.has(id))continue;
+      this.frozen.delete(id);
+      this.record('EXAM_CANCEL',{id,brainId:f.brainId,reason:'NO_LONGER_ELITE'});
+    }
+
     this.archive=next;
     this.record('ELITE_REFRESH',{elite:[...next.keys()]});
     return [...next.values()];
@@ -116,7 +139,7 @@ class ChampionFactoryManager{
     for(const frozen of this.frozen.values()){
       const brain=byId.get(frozen.brainId);
       if(!brain)continue;
-      const stats=this.forwardEvidence(brain);
+      const stats=this.forwardEvidence(brain,frozen);
       const proof=evaluateChampion(stats,this.gates);
       const rec={id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats,proof};
       results.push(rec);
@@ -141,7 +164,11 @@ class ChampionFactoryManager{
   }
 
   protectedBrainIds(){
-    return new Set([...this.archive.keys(),...[...this.graduated.values()].map(x=>x.brainId)]);
+    return new Set([
+      ...this.archive.keys(),
+      ...[...this.frozen.values()].map(x=>x.brainId),
+      ...[...this.graduated.values()].map(x=>x.brainId)
+    ]);
   }
 
   pruneOrder(brains, discoveryRank=[]){
