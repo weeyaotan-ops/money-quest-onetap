@@ -36,9 +36,11 @@ class ChampionFactoryManager{
     this.minDiscoveryClosed=opts.minDiscoveryClosed??20;
     this.maxElite=opts.maxElite??12;
     this.maxPerRole=opts.maxPerRole??3;
+    this.maxFrozen=opts.maxFrozen??this.maxElite;
     this.archive=new Map();
     this.frozen=new Map();
     this.graduated=new Map();
+    this.failed=new Map();
     this.audit=[];
   }
 
@@ -56,12 +58,24 @@ class ChampionFactoryManager{
     };
     const version=hash(dna);
     const id=`${brain.id}@${version}`;
-    const item={id,brainId:brain.id,parent:brain.parent||null,role,version,dna:clone(dna),frozenAt:Date.now(),status:'FROZEN_EXAM'};
-    if(!this.frozen.has(id)){
-      this.frozen.set(id,item);
-      this.record('FREEZE',{id,brainId:brain.id,role,version});
-    }
-    return this.frozen.get(id);
+
+    if(this.frozen.has(id))return this.frozen.get(id);
+    if(this.graduated.has(id))return this.graduated.get(id);
+    if(this.failed.has(id))return this.failed.get(id);
+
+    // Frozen exams are fixed slots. Once admitted, a DNA owns its slot until
+    // it reaches the proof sample size and receives a PASS/FAIL decision.
+    // This prevents rapid evolution from continually replacing candidates
+    // before they can ever reach N >= minClosed.
+    if(this.frozen.size>=this.maxFrozen)return null;
+
+    const item={
+      id,brainId:brain.id,parent:brain.parent||null,role,version,dna:clone(dna),
+      frozenAt:Date.now(),status:'FROZEN_EXAM',proofTargetN:this.gates.minClosed
+    };
+    this.frozen.set(id,item);
+    this.record('FREEZE',{id,brainId:brain.id,role,version,targetN:this.gates.minClosed});
+    return item;
   }
 
   discoveryEvidence(brain){
@@ -106,30 +120,72 @@ class ChampionFactoryManager{
       this.freezeGenome(c.brain,c.role);
     }
     this.archive=next;
-    this.record('ELITE_REFRESH',{elite:[...next.keys()]});
+    this.record('ELITE_REFRESH',{elite:[...next.keys()],frozen:this.frozen.size});
     return [...next.values()];
   }
 
   evaluateFrozenAgainstBrains(brains){
     const byId=new Map(brains.map(b=>[b.id,b]));
     const results=[];
-    for(const frozen of this.frozen.values()){
+
+    for(const frozen of [...this.frozen.values()]){
       const brain=byId.get(frozen.brainId);
+      if(!brain){
+        results.push({
+          id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,
+          stats:null,proof:null,status:'FROZEN_EXAM',reason:'BRAIN_MISSING'
+        });
+        continue;
+      }
+
+      const stats=this.forwardEvidence(brain);
+      const proof=evaluateChampion(stats,this.gates);
+      const targetReached=stats.n>=this.gates.minClosed;
+      const rec={id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats,proof,status:'FROZEN_EXAM'};
+
+      // Before N reaches the proof target, NEVER replace, mutate, fail or
+      // graduate this candidate. It remains frozen and keeps accumulating.
+      if(!targetReached){
+        results.push(rec);
+        continue;
+      }
+
+      if(proof.eligible){
+        const champion={
+          ...frozen,status:'CHAMPION',stats,proof,
+          graduatedAt:Date.now(),lastVerifiedAt:Date.now()
+        };
+        this.graduated.set(frozen.id,champion);
+        this.frozen.delete(frozen.id);
+        rec.status='CHAMPION';
+        this.record('GRADUATE',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,score:proof.score,n:stats.n});
+      }else{
+        const failed={...frozen,status:'FAILED_EXAM',stats,proof,failedAt:Date.now()};
+        this.failed.set(frozen.id,failed);
+        this.frozen.delete(frozen.id);
+        rec.status='FAILED_EXAM';
+        this.record('FAIL_EXAM',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,n:stats.n,reasons:proof.reasons});
+      }
+      results.push(rec);
+    }
+
+    // Re-verify existing champions against their still-protected brain history.
+    // A champion may be dethroned if later evidence breaks a proof gate.
+    for(const champ of [...this.graduated.values()]){
+      const brain=byId.get(champ.brainId);
       if(!brain)continue;
       const stats=this.forwardEvidence(brain);
       const proof=evaluateChampion(stats,this.gates);
-      const rec={id:frozen.id,brainId:frozen.brainId,role:frozen.role,version:frozen.version,stats,proof};
-      results.push(rec);
       if(proof.eligible){
-        const prev=this.graduated.get(frozen.id);
-        this.graduated.set(frozen.id,{...frozen,status:'CHAMPION',stats,proof,graduatedAt:prev?.graduatedAt||Date.now(),lastVerifiedAt:Date.now()});
-        if(!prev)this.record('GRADUATE',{id:frozen.id,brainId:frozen.brainId,role:frozen.role,score:proof.score});
-      }else if(this.graduated.has(frozen.id)){
-        this.graduated.delete(frozen.id);
-        this.record('DETHRONE',{id:frozen.id,brainId:frozen.brainId,reasons:proof.reasons});
+        this.graduated.set(champ.id,{...champ,stats,proof,lastVerifiedAt:Date.now()});
+      }else{
+        this.graduated.delete(champ.id);
+        this.failed.set(champ.id,{...champ,status:'FAILED_EXAM',stats,proof,failedAt:Date.now()});
+        this.record('DETHRONE',{id:champ.id,brainId:champ.brainId,reasons:proof.reasons});
       }
     }
-    return results.sort((a,b)=>Number(b.proof.eligible)-Number(a.proof.eligible)||b.proof.score-a.proof.score);
+
+    return results.sort((a,b)=>Number(b.proof?.eligible)-Number(a.proof?.eligible)||(b.proof?.score||0)-(a.proof?.score||0));
   }
 
   portfolio(){
@@ -141,7 +197,14 @@ class ChampionFactoryManager{
   }
 
   protectedBrainIds(){
-    return new Set([...this.archive.keys(),...[...this.graduated.values()].map(x=>x.brainId)]);
+    // CRITICAL: every DNA in a frozen exam is protected from evolution/pruning
+    // until its exam ends. This is what allows N to climb monotonically to 100+
+    // instead of being reset when a new generation is bred.
+    return new Set([
+      ...this.archive.keys(),
+      ...[...this.frozen.values()].map(x=>x.brainId),
+      ...[...this.graduated.values()].map(x=>x.brainId)
+    ]);
   }
 
   pruneOrder(brains, discoveryRank=[]){
@@ -154,12 +217,13 @@ class ChampionFactoryManager{
 
   snapshot(){
     return {
-      architecture:'MASTER_BRAIN_CHAMPION_FACTORY_V1',
+      architecture:'MASTER_BRAIN_CHAMPION_FACTORY_V2_FROZEN_EXAM_LOCK',
       realMoney:false,
       gates:this.gates,
       elite:[...this.archive.values()],
       frozen:[...this.frozen.values()],
       champions:[...this.graduated.values()],
+      failed:[...this.failed.values()],
       portfolio:this.portfolio(),
       audit:this.audit.slice(0,100)
     };
