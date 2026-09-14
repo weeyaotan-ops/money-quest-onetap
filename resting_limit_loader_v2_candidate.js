@@ -33,6 +33,12 @@
   }
 
   mustReplace(
+    "const equity = Number(acc.totalWalletBalance || 0);",
+    "const equity = Number(acc.totalMarginBalance || acc.totalWalletBalance || 0);",
+    'LIVE_FUTURES_EQUITY'
+  );
+
+  mustReplace(
     "const MAX_SIGNAL_AGE = Math.max(TTL, Number(process.env.BINANCE_MAX_SIGNAL_AGE_MS || 120000));",
     "const MAX_SIGNAL_AGE = Math.max(TTL, Number(process.env.BINANCE_MAX_SIGNAL_AGE_MS || 120000));\nconst ENTRY_POLL_MS = Math.max(250, Number(process.env.BINANCE_RESTING_POLL_MS || 500));",
     'POLL_CONST'
