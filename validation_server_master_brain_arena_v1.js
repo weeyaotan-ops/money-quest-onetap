@@ -1,0 +1,107 @@
+'use strict';
+const http=require('node:http');
+const {spawn}=require('node:child_process');
+const {attachMasterBrain}=require('./validation_server_master_brain_v1');
+const {classifyRegime}=require('./champion_factory_core');
+
+const PORT=Number(process.env.PORT||8000);
+const CHILD_PORT=Number(process.env.EVOLUTION_INNER_PORT||8001);
+const GRANDCHILD_PORT=Number(process.env.EVOLUTION_INNER_INNER_PORT||8002);
+const GREATGRANDCHILD_PORT=Number(process.env.EVOLUTION_INNER_INNER_INNER_PORT||8003);
+const CHILD_URL='http://127.0.0.1:'+CHILD_PORT+'/ingest';
+const BASES=[process.env.BINANCE_PUBLIC_REST,'https://fapi1.binance.com','https://fapi2.binance.com','https://fapi3.binance.com','https://fapi4.binance.com','https://fapi.binance.com'].filter(Boolean).map(x=>x.replace(/\/$/,''));
+const ENTRY_FEE=Number(process.env.SHADOW_ENTRY_FEE_BPS||2);
+const EXIT_FEE=Number(process.env.SHADOW_EXIT_FEE_BPS||5);
+const EXIT_SLIP=Number(process.env.SHADOW_EXIT_SLIPPAGE_BPS||1);
+const RISK_PCT=Number(process.env.SHADOW_RISK_PCT||1);
+const START_BAL=Number(process.env.SHADOW_START_BALANCE||1000);
+const POP_START=Number(process.env.EVO_POP_START||48);
+const POP_MAX=Number(process.env.EVO_POP_MAX||96);
+const BREED_EVERY=Number(process.env.EVO_BREED_EVERY||30);
+const CHILDREN_PER_BREED=Number(process.env.EVO_CHILDREN_PER_BREED||12);
+const IMMIGRANTS_PER_BREED=Number(process.env.EVO_IMMIGRANTS_PER_BREED||4);
+const START=Date.now();
+const FEATURES=15;
+const S={brains:new Map(),book:new Map(),hist:new Map(),watch:new Set(),seen:new Set(),feed:[],errors:[],fresh:0,trainFresh:0,holdoutFresh:0,generation:0,nextBreed:BREED_EVERY,serial:0,lastBookAt:0,lastBase:null,baseline:false};
+
+const child=spawn(process.execPath,['validation_server_v10_autonomous_pubg.js'],{
+  env:{...process.env,PORT:String(CHILD_PORT),AUTONOMOUS_INNER_PORT:String(GRANDCHILD_PORT),AUTONOMOUS_INNER_INNER_PORT:String(GREATGRANDCHILD_PORT)},
+  stdio:['ignore','inherit','inherit']
+});
+child.on('exit',(c,s)=>console.error('MASTER_BRAIN_CHILD_EXIT',c,s));
+
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const rand=(a=0,b=1)=>a+Math.random()*(b-a);
+const gauss=()=>{let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)};
+const dot=(w,x)=>w.reduce((s,v,i)=>s+v*(x[i]||0),0);
+const clone=o=>JSON.parse(JSON.stringify(o));
+function hash(s){let h=2166136261>>>0;for(const c of String(s)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+function splitOf(id){return hash(id)%5===0?'HOLDOUT':'DISCOVERY'}
+function emit(type,data={}){const e={ts:Date.now(),type,...data};S.feed.unshift(e);if(S.feed.length>300)S.feed.length=300;console.log('MASTER_BRAIN_ARENA',JSON.stringify(e))}
+function fail(where,e){S.errors.push({ts:Date.now(),where,error:String(e?.message||e)});S.errors=S.errors.filter(x=>Date.now()-x.ts<86400000);console.error('MASTER_BRAIN_ERR',where,e?.message||e)}
+function out(res,c,x,ct='application/json; charset=utf-8'){res.writeHead(c,{'content-type':ct,'cache-control':'no-store','access-control-allow-origin':'*'});res.end(ct.startsWith('application/json')?JSON.stringify(x):x)}
+function tickets(x){if(Array.isArray(x))return x;if(!x||typeof x!=='object')return[];for(const k of['tickets','signals','data','items','open','candidates']){if(Array.isArray(x[k]))return x[k];if(x[k]&&typeof x[k]==='object'){const a=tickets(x[k]);if(a.length)return a}}if((x.id||x.ticketId)&&x.side&&(x.symbol||x.instId||x.asset))return[x];return[]}
+function sym(t){const r=String(t.binanceSymbol||t.instId||t.symbol||t.asset||'').toUpperCase().replace(/[-_/]/g,''),b=r.replace(/USDTSWAP$/,'').replace(/USDTPERP$/,'').replace(/USDT$/,'');return b?b+'USDT':''}
+function family(x){x=String(x||'').toUpperCase();if(x.includes('RANGE')||x.includes('MEAN_REVERSION')||x.includes('SWEEP'))return'RANGE';if(x.includes('BREAKOUT')||x.includes('RETEST')||x.includes('MOMENTUM'))return'BREAKOUT';if(x.includes('TREND')||x.includes('PULLBACK')||x.includes('RECLAIM')||x.includes('CONTINUATION'))return'TREND';return'OTHER'}
+function sourceGeom(t){const e=+t.entry,sl=+t.sl,tp=+t.tp,d=String(t.side||'').toUpperCase();if(!['BUY','SELL'].includes(d))return null;const o={d,rb:null,rr:null};if([e,sl,tp].every(Number.isFinite)&&e>0&&Math.abs(e-sl)>0){o.rb=Math.abs(e-sl)/e*1e4;o.rr=Math.abs(tp-e)/Math.abs(e-sl)}return o}
+async function jfetch(path){let last='unavailable';for(const base of BASES){try{const ac=new AbortController(),to=setTimeout(()=>ac.abort(),1800);const r=await fetch(base+path,{signal:ac.signal});clearTimeout(to);const txt=await r.text();if(!r.ok||!txt){last=base+'_'+r.status;continue}const j=JSON.parse(txt);S.lastBase=base;return j}catch(e){last=String(e?.message||e)}}throw new Error('binance_'+last)}
+async function refreshBook(){try{const a=await jfetch('/fapi/v1/ticker/bookTicker');if(!Array.isArray(a))throw new Error('book_not_array');const now=Date.now();for(const x of a){const b=+x.bidPrice,a1=+x.askPrice;if(!(b>0&&a1>0))continue;const s=String(x.symbol);S.book.set(s,{b,a:a1,t:now});if(S.watch.has(s)){const h=S.hist.get(s)||[];if(!h.length||now-h.at(-1).t>=4000){h.push({t:now,m:(b+a1)/2});while(h.length>150)h.shift();S.hist.set(s,h)}}}S.lastBookAt=now}catch(e){fail('book',e)}}
+function spreadBps(s){const q=S.book.get(s);if(!q||Date.now()-q.t>8000)return null;return(q.a-q.b)/((q.a+q.b)/2)*1e4}
+function marketState(s){const h=S.hist.get(s)||[];if(h.length<3)return{mom:0,er:0,vol:0};let path=0;for(let i=1;i<h.length;i++)path+=Math.abs(h[i].m-h[i-1].m);const mom=Math.log(h.at(-1).m/h[0].m)*1e4;const er=path?Math.abs(h.at(-1).m-h[0].m)/path:0;const rs=[];for(let i=1;i<h.length;i++)rs.push(Math.log(h[i].m/h[i-1].m)*1e4);const av=rs.reduce((a,b)=>a+b,0)/(rs.length||1);const vol=Math.sqrt(rs.reduce((a,x)=>a+(x-av)**2,0)/Math.max(1,rs.length-1));return{mom,er,vol}}
+function features(t,g,s){const f=family(t.setup),m=marketState(s),sp=spreadBps(s)||0;const side=g.d==='BUY'?1:-1;return[1,side,clamp(m.mom/25,-2,2),clamp(m.er*2-1,-1,1),clamp(m.vol/25,0,2),clamp(sp/8,0,2),g.rb==null?0:clamp((g.rb-50)/100,-1,2),g.rr==null?0:clamp((g.rr-1.5)/2,-1,2),f==='RANGE'?1:0,f==='TREND'?1:0,f==='BREAKOUT'?1:0,f==='OTHER'?1:0,m.er>.38?1:0,m.er<.16?1:0,m.vol>18?1:0]}
+function randomGenome(parent=null){const id='G'+S.generation+'-'+String(++S.serial).padStart(3,'0');const wTake=Array.from({length:FEATURES},()=>rand(-1.2,1.2));const wDir=Array.from({length:FEATURES},()=>rand(-1.2,1.2));return{id,name:id,parent:parent?.id||null,born:Date.now(),generation:S.generation,wTake,wDir,threshold:rand(-.6,.8),stopBase:rand(18,140),stopMom:rand(-.5,.5),stopVol:rand(-.4,.8),stopSpread:rand(0,4),rrBase:rand(.8,3.2),rrMom:rand(-.4,.4),rrTrend:rand(-.3,.5),rrVol:rand(-.3,.5),passiveBps:rand(0,7),entryTtlSec:rand(20,160),holdSec:rand(90,1200),open:new Map(),closedDiscovery:[],closedHoldout:[],discoveryBalance:START_BAL,holdoutBalance:START_BAL,discoveryPeak:START_BAL,holdoutPeak:START_BAL,discoveryDD:0,holdoutDD:0}}
+function crossover(a,b){const c=randomGenome(a);c.parent=a.id+'×'+b.id;for(let i=0;i<FEATURES;i++){c.wTake[i]=Math.random()<.5?a.wTake[i]:b.wTake[i];c.wDir[i]=Math.random()<.5?a.wDir[i]:b.wDir[i]}for(const k of['threshold','stopBase','stopMom','stopVol','stopSpread','rrBase','rrMom','rrTrend','rrVol','passiveBps','entryTtlSec','holdSec'])c[k]=Math.random()<.5?a[k]:b[k];return c}
+function mutate(g,strength=.22){const c=clone(g);c.id='G'+S.generation+'-'+String(++S.serial).padStart(3,'0');c.name=c.id;c.parent=g.id;c.born=Date.now();c.generation=S.generation;c.open=new Map();c.closedDiscovery=[];c.closedHoldout=[];c.discoveryBalance=START_BAL;c.holdoutBalance=START_BAL;c.discoveryPeak=START_BAL;c.holdoutPeak=START_BAL;c.discoveryDD=0;c.holdoutDD=0;c.wTake=c.wTake.map(v=>clamp(v+gauss()*strength,-3,3));c.wDir=c.wDir.map(v=>clamp(v+gauss()*strength,-3,3));c.threshold=clamp(c.threshold+gauss()*strength,-2,2);c.stopBase=clamp(c.stopBase*Math.exp(gauss()*strength),10,300);c.stopMom=clamp(c.stopMom+gauss()*strength,-1.5,1.5);c.stopVol=clamp(c.stopVol+gauss()*strength,-1.5,2);c.stopSpread=clamp(c.stopSpread+gauss()*strength,0,8);c.rrBase=clamp(c.rrBase*Math.exp(gauss()*strength*.7),.5,5);c.rrMom=clamp(c.rrMom+gauss()*strength,-1,1);c.rrTrend=clamp(c.rrTrend+gauss()*strength,-1,1);c.rrVol=clamp(c.rrVol+gauss()*strength,-1,1);c.passiveBps=clamp(c.passiveBps+gauss()*strength*3,0,15);c.entryTtlSec=clamp(c.entryTtlSec*Math.exp(gauss()*strength),10,300);c.holdSec=clamp(c.holdSec*Math.exp(gauss()*strength),45,3600);return c}
+function brainStats(b){const calc=(c,bal,dd)=>{const n=c.length,net=c.reduce((s,x)=>s+x.netR,0),ex=n?net/n:null,pos=c.filter(x=>x.netR>0).reduce((s,x)=>s+x.netR,0),neg=Math.abs(c.filter(x=>x.netR<0).reduce((s,x)=>s+x.netR,0)),pf=neg?pos/neg:(pos?99:null);let lcb=null;if(n>1){const sd=Math.sqrt(c.reduce((s,x)=>s+(x.netR-ex)**2,0)/(n-1));lcb=ex-1.282*sd/Math.sqrt(n)}return{n,netR:net,expectancy:ex,pf,dd,balance:bal,lcb90:lcb}};const d=calc(b.closedDiscovery,b.discoveryBalance,b.discoveryDD),h=calc(b.closedHoldout,b.holdoutBalance,b.holdoutDD);const fitness=Math.log(Math.max(.01,d.balance)/START_BAL)-.35*(d.dd/100);const holdoutFitness=h.n?Math.log(Math.max(.01,h.balance)/START_BAL)-.35*(h.dd/100):null;return{id:b.id,name:b.name,parent:b.parent,generation:b.generation,born:b.born,open:b.open.size,fitness,holdoutFitness,discovery:d,holdout:h,dna:{threshold:b.threshold,stopBase:b.stopBase,rrBase:b.rrBase,passiveBps:b.passiveBps,entryTtlSec:b.entryTtlSec,holdSec:b.holdSec}}}
+function discoveryRank(){return[...S.brains.values()].map(brainStats).sort((a,b)=>b.fitness-a.fitness||b.discovery.n-a.discovery.n)}
+function holdoutRank(){return[...S.brains.values()].map(brainStats).filter(x=>x.holdout.n>0).sort((a,b)=>(b.holdoutFitness??-99)-(a.holdoutFitness??-99)||b.holdout.n-a.holdout.n)}
+function makePlan(b,t,split){const s=sym(t),q=S.book.get(s),g=sourceGeom(t);if(!s||!q||Date.now()-q.t>8000||!g)return null;const x=features(t,g,s);const take=dot(b.wTake,x);if(take<=b.threshold)return null;const dir=dot(b.wDir,x)>=0?'BUY':'SELL';const m=marketState(s),sp=spreadBps(s)||0;let stop=b.stopBase*Math.exp(b.stopMom*clamp(m.mom/50,-1,1)+b.stopVol*clamp(m.vol/40,0,1));stop+=b.stopSpread*sp;stop=clamp(stop,10,300);let rr=b.rrBase+b.rrMom*clamp(m.mom/50,-1,1)+b.rrTrend*clamp(m.er*2-1,-1,1)+b.rrVol*clamp(m.vol/40,0,1);rr=clamp(rr,.5,5);const raw=dir==='BUY'?q.a:q.b;const passive=clamp(b.passiveBps,0,15);const e=dir==='BUY'?raw*(1-passive/1e4):raw*(1+passive/1e4);const sl=dir==='BUY'?e*(1-stop/1e4):e*(1+stop/1e4);const tp=dir==='BUY'?e*(1+stop*rr/1e4):e*(1-stop*rr/1e4);return{id:String(t.id||t.ticketId),split,s,side:dir,e,sl,tp,stopBps:stop,rr,openedAt:Date.now(),filledAt:null,entryDeadline:Date.now()+b.entryTtlSec*1000,holdDeadline:null,sourceSide:g.d,setup:String(t.setup||''),takeScore:take,threshold:b.threshold,market:m,regime:classifyRegime(m)}}
+function openPlan(b,p){const key=p.id+'|'+p.side+'|'+p.e.toPrecision(12);if(b.open.has(key))return;b.open.set(key,{...p,key});emit('DNA_ORDER',{brain:b.id,parent:b.parent,symbol:p.s,side:p.side,entry:+p.e.toPrecision(10),sl:+p.sl.toPrecision(10),tp:+p.tp.toPrecision(10),split:p.split,score:+p.takeScore.toFixed(3),regime:p.regime})}
+function updateEquity(b,split,netR){const k=split==='HOLDOUT'?'holdout':'discovery',balK=k+'Balance',peakK=k+'Peak',ddK=k+'DD';b[balK]=Math.max(.01,b[balK]*(1+(RISK_PCT/100)*netR));b[peakK]=Math.max(b[peakK],b[balK]);b[ddK]=Math.max(b[ddK],(b[peakK]-b[balK])/b[peakK]*100)}
+function closeTrade(b,p,exitMid,reason){const risk=Math.abs(p.e-p.sl),riskBps=risk/p.e*1e4;if(!(risk>0&&riskBps>0))return;const slip=EXIT_SLIP/1e4;const exitPx=p.side==='BUY'?exitMid*(1-slip):exitMid*(1+slip);const gross=p.side==='BUY'?(exitPx-p.e)/risk:(p.e-exitPx)/risk;const feeR=(ENTRY_FEE+EXIT_FEE)/riskBps;const netR=gross-feeR;const rec={ts:Date.now(),id:p.id,symbol:p.s,side:p.side,entry:p.e,sl:p.sl,tp:p.tp,exit:exitPx,reason,netR,rr:p.rr,stopBps:p.stopBps,setup:p.setup,split:p.split,market:p.market,regime:p.regime};const arr=p.split==='HOLDOUT'?b.closedHoldout:b.closedDiscovery;arr.push(rec);if(arr.length>1000)arr.shift();updateEquity(b,p.split,netR);emit('DNA_CLOSE',{brain:b.id,symbol:p.s,side:p.side,reason,netR:+netR.toFixed(3),split:p.split,regime:p.regime})}
+function processOpen(){const now=Date.now();for(const b of S.brains.values())for(const [k,p] of [...b.open]){const q=S.book.get(p.s);if(!q||now-q.t>8000)continue;if(!p.filledAt){const fill=p.side==='BUY'?q.a<=p.e:q.b>=p.e;if(fill){p.filledAt=now;p.holdDeadline=now+b.holdSec*1000;emit('DNA_FILL',{brain:b.id,symbol:p.s,side:p.side,entry:+p.e.toPrecision(10),split:p.split})}else if(now>=p.entryDeadline){b.open.delete(k);emit('DNA_NO_FILL',{brain:b.id,symbol:p.s,split:p.split})}continue}const m=(q.a+q.b)/2;let reason=null,px=m;if(p.side==='BUY'){if(m<=p.sl){reason='SL';px=p.sl}else if(m>=p.tp){reason='TP';px=p.tp}}else{if(m>=p.sl){reason='SL';px=p.sl}else if(m<=p.tp){reason='TP';px=p.tp}}if(!reason&&now>=p.holdDeadline){reason='TIME';px=m}if(reason){b.open.delete(k);closeTrade(b,p,px,reason)}}}
+
+const MB=attachMasterBrain({state:S,brainStats,discoveryRank,emit});
+
+function breed(){
+  S.generation++;
+  const parentLimit=Math.max(6,Math.floor(Math.sqrt(S.brains.size)*1.5));
+  const parents=MB.breedingParents(parentLimit);
+  if(!parents.length){S.nextBreed=S.trainFresh+BREED_EVERY;return}
+  const get=id=>S.brains.get(id);
+  const strength=clamp(.30-Math.log1p(S.generation)*.03,.10,.30);
+  let made=0;
+  for(let i=0;i<CHILDREN_PER_BREED;i++){
+    const pa=get(parents[Math.floor(Math.random()*parents.length)].id),pb=get(parents[Math.floor(Math.random()*parents.length)].id);
+    if(!pa)continue;
+    let c=i%3===0&&pb?crossover(pa,pb):randomGenome(pa);
+    c=mutate(c,strength);S.brains.set(c.id,c);made++;
+  }
+  for(let i=0;i<IMMIGRANTS_PER_BREED;i++){const c=randomGenome();S.brains.set(c.id,c);made++}
+  const retired=MB.pruneTo(POP_MAX);
+  S.nextBreed=S.trainFresh+BREED_EVERY;
+  emit('EVOLUTION',{generation:S.generation,newBrains:made,population:S.brains.size,parents:parents.slice(0,5).map(x=>x.id),retired:retired.length,mutationStrength:+strength.toFixed(3),parentPolicy:'MASTER_BRAIN_ELITE_FIRST'});
+}
+function prune(){return MB.pruneTo(POP_MAX)}
+function ingestCandidate(t){const id=String(t.id||t.ticketId||''),s=sym(t),g=sourceGeom(t);if(!id||!s||!g)return;if(S.seen.has(id))return;S.seen.add(id);if(S.seen.size>5000)S.seen=new Set([...S.seen].slice(-3500));S.watch.add(s);S.fresh++;const split=splitOf(id);if(split==='HOLDOUT')S.holdoutFresh++;else S.trainFresh++;for(const b of S.brains.values()){const p=makePlan(b,t,split);if(p)openPlan(b,p)}if(split==='DISCOVERY'&&S.trainFresh>=S.nextBreed)breed()}
+async function forward(payload){try{const r=await fetch(CHILD_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const txt=await r.text();return{status:r.status,body:txt}}catch(e){fail('child_forward',e);return{status:502,body:'child_unavailable'}}}
+function snapshot(){
+  const d=discoveryRank(),h=holdoutRank();
+  const master=MB.masterSnapshot();
+  return{version:'MASTER_BRAIN_ARENA_V1',live:false,realMoney:false,architecture:master.architecture,objective:'Search everything, trust nothing without post-freeze forward proof, route only to proven regime-matched champions.',startedAt:START,now:Date.now(),generation:S.generation,population:S.brains.size,fresh:S.fresh,discoveryOpportunities:S.trainFresh,holdoutOpportunities:S.holdoutFresh,nextEvolutionIn:Math.max(0,S.nextBreed-S.trainFresh),discoveryLeader:d[0]||null,validationLeader:master.champions[0]||h[0]||null,discoveryTop:d.slice(0,20),validationTop:h.slice(0,20),masterBrain:master,feed:S.feed.slice(0,80),errors24h:S.errors.length,bookAgeMs:S.lastBookAt?Date.now()-S.lastBookAt:null,bookBase:S.lastBase,fixedRules:['No look-ahead','Binance executable quotes','Fees and exit slippage included','1% shadow risk normalization','Holdout never used for breeding','Frozen exam counts only post-freeze holdout trades','N>=100','Expectancy>+0.10R','PF>1.20','DD<10%','LCB90>0','Symbol/regime concentration gates','Real money OFF'],evolvedGenes:['whether to trade','direction','stop distance','risk-reward target','passive entry distance','entry patience','maximum holding time','market-state feature weights']}
+}
+function html(){return`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Money Hunter Master Brain</title><style>body{margin:0;background:#06111b;color:#e8f0f7;font:15px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.w{max-width:980px;margin:auto;padding:22px}.card{background:#0a1825;border:1px solid #294158;border-radius:16px;padding:16px;margin:12px 0}.big{font-size:28px;font-weight:800}.muted{color:#8ea2b3}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}</style></head><body><div class="w"><h1>Money Hunter Master Brain</h1><p class="muted">Locked architecture · Champion Factory · Shadow only · Real money OFF</p><div id="app">Loading…</div></div><script>const f=x=>x==null?'—':Number(x).toFixed(3);async function go(){const x=await fetch('/validation.json?'+Date.now()).then(r=>r.json()),m=x.masterBrain||{};document.getElementById('app').innerHTML='<div class="grid"><div class="card"><div class="muted">Generation</div><div class="big">'+x.generation+'</div><div>'+x.population+' DNA</div></div><div class="card"><div class="muted">Elite</div><div class="big">'+(m.elite?.length||0)+'</div></div><div class="card"><div class="muted">Frozen Exams</div><div class="big">'+(m.frozen?.length||0)+'</div></div><div class="card"><div class="muted">Proven Champions</div><div class="big">'+(m.champions?.length||0)+'</div></div></div><div class="card"><b>Rule:</b> no proven regime-matched champion = NO TRADE.</div><div class="card"><b>Discovery leader:</b> '+(x.discoveryLeader?.id||'—')+' · Exp '+f(x.discoveryLeader?.discovery?.expectancy)+' · N '+(x.discoveryLeader?.discovery?.n||0)+'</div><div class="card"><b>Proof gates:</b> N≥100 · Exp&gt;0.10R · PF&gt;1.20 · DD&lt;10% · LCB90&gt;0 · diversified evidence</div>'}go();setInterval(go,5000)</script></body></html>`}
+for(let i=0;i<POP_START;i++){const b=randomGenome();S.brains.set(b.id,b)}
+setInterval(refreshBook,2000).unref();
+setInterval(processOpen,1000).unref();
+setInterval(()=>{try{MB.refresh()}catch(e){fail('master_refresh',e)}},15000).unref();
+refreshBook();
+const server=http.createServer(async(req,res)=>{try{
+  if(req.method==='GET'&&req.url.startsWith('/health'))return out(res,200,{ok:true,version:'MASTER_BRAIN_ARENA_V1',live:false,realMoney:false,population:S.brains.size,generation:S.generation,architecture:'MASTER_BRAIN_CHAMPION_FACTORY_V1'});
+  if(req.method==='GET'&&req.url.startsWith('/validation.json'))return out(res,200,snapshot());
+  if(req.method==='GET'&&req.url.startsWith('/master-brain.json'))return out(res,200,MB.masterSnapshot());
+  if(req.method==='GET'&&(req.url==='/'||req.url.startsWith('/?')))return out(res,200,html(),'text/html; charset=utf-8');
+  if(req.method==='POST'&&req.url.startsWith('/ingest')){let raw='';for await(const ch of req){raw+=ch;if(raw.length>2e6){res.destroy();return}}let payload={};try{payload=JSON.parse(raw||'{}')}catch{return out(res,400,{ok:false,error:'invalid_json'})}const ts=tickets(payload);if(!S.baseline){S.baseline=true;emit('BASELINE',{tickets:ts.length})}else for(const t of ts)ingestCandidate(t);const fw=await forward(payload);return out(res,200,{ok:true,arena:'MASTER_BRAIN_ARENA_V1',candidates:ts.length,childStatus:fw.status})}
+  return out(res,404,{ok:false,error:'not_found'})
+}catch(e){fail('http',e);return out(res,500,{ok:false,error:String(e?.message||e)})}});
+server.listen(PORT,()=>console.log('MASTER_BRAIN_ARENA_V1_READY',JSON.stringify({port:PORT,childPort:CHILD_PORT,population:S.brains.size,live:false,realMoney:false,breedEvery:BREED_EVERY,proof:'post-freeze holdout only'})));
