@@ -24,9 +24,26 @@ const shadow=launch('validation_server_master_brain_self_discovery_v1.js',{
   MASTER_BRAIN_SHADOW:'1'
 },'MASTER_BRAIN_SHADOW');
 
-function proxy(req,res,targetPort,path){
+function proxy(req,res,targetPort,path,rewriteMasterHtml=false){
   const headers={...req.headers,host:HOST+':'+targetPort};
   const q=http.request({host:HOST,port:targetPort,path,method:req.method,headers},r=>{
+    const ct=String(r.headers['content-type']||'');
+    if(rewriteMasterHtml&&ct.includes('text/html')){
+      const chunks=[];
+      r.on('data',c=>chunks.push(c));
+      r.on('end',()=>{
+        let body=Buffer.concat(chunks).toString('utf8');
+        // The Master Brain is mounted under /master-brain/. Keep its dashboard
+        // API request inside that mount instead of accidentally hitting V13.
+        body=body.replace("fetch('/validation.json?","fetch('validation.json?");
+        const h={...r.headers};
+        delete h['content-length'];
+        h['content-length']=Buffer.byteLength(body);
+        res.writeHead(r.statusCode||502,h);
+        res.end(body);
+      });
+      return;
+    }
     res.writeHead(r.statusCode||502,r.headers);
     r.pipe(res);
   });
@@ -43,7 +60,7 @@ const server=http.createServer((req,res)=>{
   const u=req.url||'/';
   if(u==='/master-brain'||u.startsWith('/master-brain/')){
     const path=u==='/master-brain'?'/':u.slice('/master-brain'.length)||'/';
-    return proxy(req,res,SHADOW_PORT,path);
+    return proxy(req,res,SHADOW_PORT,path,true);
   }
   return proxy(req,res,PROD_PORT,u);
 });
