@@ -1,15 +1,9 @@
 'use strict';
-const http=require('node:http'),crypto=require('node:crypto');
-const REST=(process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com').replace(/\/$/,'');
-const KEY=process.env.BINANCE_API_KEY||'',PRIV=process.env.BINANCE_ED25519_PRIVATE_KEY_PEM||'';
-const MINRR=Math.max(0,Number(process.env.MIN_NET_RR||1.5)),FEE=Math.max(0,Number(process.env.EST_FEE_BPS_PER_SIDE||5))/10000,SLIP=Math.max(0,Number(process.env.EST_SLIPPAGE_BPS_PER_SIDE||1))/10000,MAXOPEN=Math.max(1,Number(process.env.BINANCE_MAX_OPEN_POSITIONS||2));
-let meta=new Map(),metaAt=0,acc=null,accAt=0;
-const qs=o=>Object.entries(o).map(([k,v])=>k+'='+encodeURIComponent(String(v))).join('&');
-function sign(s){return crypto.sign(null,Buffer.from(s),crypto.createPrivateKey(PRIV)).toString('base64')}
-async function signed(path){const p={recvWindow:5000,timestamp:Date.now()},b=qs(p),r=await fetch(REST+path+'?'+b+'&signature='+encodeURIComponent(sign(b)),{headers:{'X-MBX-APIKEY':KEY}});if(!r.ok)throw Error('BINANCE_'+r.status);return r.json()}
-async function metadata(){if(meta.size&&Date.now()-metaAt<300000)return;const r=await fetch(REST+'/fapi/v1/exchangeInfo'),j=await r.json(),m=new Map();for(const x of j.symbols||[])if(x.status==='TRADING'&&x.contractType==='PERPETUAL'&&x.quoteAsset==='USDT'){const pf=(x.filters||[]).find(f=>f.filterType==='PRICE_FILTER');if(pf)m.set(x.symbol,Number(pf.tickSize))}meta=m;metaAt=Date.now()}
-async function account(){if(acc&&Date.now()-accAt<1200)return acc;acc=await signed('/fapi/v3/account');accAt=Date.now();return acc}
-const symbol=t=>{const r=String(t.binanceSymbol||t.instId||t.symbol||'').toUpperCase().replace(/[-_/]/g,''),b=r.replace(/USDTSWAP$/,'').replace(/USDTPERP$/,'').replace(/USDT$/,'');return b?b+'USDT':''};
-async function pre(t){await metadata();const s=symbol(t),tick=meta.get(s);if(!tick)return{ok:false,reason:'SYMBOL_NOT_USDM_PERP',symbol:s};const side=String(t.side||'').toUpperCase(),round=x=>Math.round(Number(x)/tick)*tick,e=round(t.entry),sl=round(t.sl),tp=round(t.tp);if(!['BUY','SELL'].includes(side)||![e,sl,tp].every(Number.isFinite))return{ok:false,reason:'BAD_LEVELS',symbol:s};if(side==='BUY'&&!(sl<e&&tp>e)||side==='SELL'&&!(sl>e&&tp<e))return{ok:false,reason:'BAD_GEOMETRY',symbol:s};const d=Math.abs(e-sl),rw=Math.abs(tp-e),loss=d+(e+sl)*(FEE+SLIP),reward=rw-(e+tp)*(FEE+SLIP),netRR=reward/loss;if(!(reward>0)||netRR<MINRR)return{ok:false,reason:'NET_RR_TOO_LOW',symbol:s,netRR};const a=await account(),nz=(a.positions||[]).filter(p=>Math.abs(Number(p.positionAmt||0))>0);if(nz.some(p=>p.symbol===s))return{ok:false,reason:'EXISTING_SYMBOL_POSITION',symbol:s,netRR};if(nz.length>=MAXOPEN)return{ok:false,reason:'MAX_OPEN_POSITIONS',symbol:s,netRR,open:nz.length};return{ok:true,symbol:s,netRR,estimatedRoundTripBps:2*(FEE+SLIP)*10000,open:nz.length}}
-const orig=http.createServer;http.createServer=function(listener,...rest){if(typeof listener!=='function')return orig.call(this,listener,...rest);return orig.call(this,async(req,res)=>{const path=String(req.url||'').split('?')[0];if(req.method==='POST'&&path==='/competition-preview'){try{const chunks=[];for await(const c of req)chunks.push(c);const t=JSON.parse(Buffer.concat(chunks).toString('utf8'));const out=await pre(t);res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify(out))}catch(e){res.writeHead(500,{'content-type':'application/json'});return res.end(JSON.stringify({ok:false,reason:'PREVIEW_ERROR',detail:String(e.message||e)}))}}return listener(req,res)},...rest)};
-console.log('COMPETITION_PREFLIGHT_READY',JSON.stringify({route:'/competition-preview',readOnly:true,minNetRR:MINRR}));
+/*
+ * Compatibility marker only.
+ * /competition-preview is now implemented inside binance_onetap_gateway.js
+ * and calls the exact same preview(ticket, true) used immediately before
+ * live execution. Keeping this preload avoids changing boot wiring while
+ * removing the old duplicated approximate preflight implementation.
+ */
+console.log('COMPETITION_PREFLIGHT_READY',JSON.stringify({route:'/competition-preview',readOnly:true,mode:'EXACT_GATEWAY_PREVIEW',duplicatedLogic:false}));
