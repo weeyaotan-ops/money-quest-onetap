@@ -1,0 +1,58 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T07:18:50.703345827Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 250,
+  "open": 115,
+  "baseline": {"wins":84,"losses":166,"totalR":-14.8,"winRate":0.336,"expectancyR":-0.0592},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":250,"wins":84,"losses":166,"breakeven":0,"totalR":-14.8,"expectancyR":-0.0592},
+    "BE_AFTER_0.5R": {"n":250,"wins":66,"losses":109,"breakeven":75,"totalR":9.8,"expectancyR":0.0392},
+    "BE_AFTER_1R": {"n":250,"wins":76,"losses":142,"breakeven":32,"totalR":-5.2,"expectancyR":-0.0208},
+    "TRAIL_1R_AFTER_1.5R": {"n":250,"wins":92,"losses":158,"breakeven":0,"totalR":-13.580028271820268,"expectancyR":-0.054320113087281074}
+  },
+  "timeframe": {
+    "1m": {"n":90,"wins":27,"losses":63,"totalR":-14.4,"expectancyR":-0.16},
+    "5m": {"n":103,"wins":39,"losses":64,"totalR":6.2,"expectancyR":0.06019417475728151},
+    "15m": {"n":57,"wins":18,"losses":39,"totalR":-6.6,"expectancyR":-0.1157894736842105}
+  },
+  "side": {
+    "SELL": {"n":122,"wins":44,"losses":78,"totalR":1.2,"expectancyR":0.009836065573770498},
+    "BUY": {"n":128,"wins":40,"losses":88,"totalR":-16.0,"expectancyR":-0.125}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":51,"wins":21,"losses":30,"totalR":7.8,"expectancyR":0.15294117647058822},
+    "1.00-1.05": {"n":120,"wins":42,"losses":78,"totalR":-2.4,"expectancyR":-0.02},
+    "0.95-1.00": {"n":59,"wins":17,"losses":42,"totalR":-11.4,"expectancyR":-0.19322033898305077},
+    "0.85-0.90": {"n":16,"wins":4,"losses":12,"totalR":-4.8,"expectancyR":-0.3},
+    "0.80-0.85": {"n":4,"wins":0,"losses":4,"totalR":-4.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":79,"wins":33,"losses":46,"totalR":13.4,"expectancyR":0.1696202531645571},
+    "2-4bps": {"n":123,"wins":36,"losses":87,"totalR":-22.2,"expectancyR":-0.18048780487804864},
+    "0.5-1bps": {"n":26,"wins":7,"losses":19,"totalR":-6.4,"expectancyR":-0.24615384615384617},
+    "<0.5bps": {"n":21,"wins":8,"losses":13,"totalR":1.4,"expectancyR":0.06666666666666662},
+    "4bps+": {"n":1,"wins":0,"losses":1,"totalR":-1.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":187,"wins":68,"losses":119,"totalR":3.4,"expectancyR":0.018181818181818195},
+    "MIXED": {"n":45,"wins":12,"losses":33,"totalR":-11.4,"expectancyR":-0.2533333333333333},
+    "BREAKOUT": {"n":12,"wins":3,"losses":9,"totalR":-3.6,"expectancyR":-0.3},
+    "TREND": {"n":6,"wins":1,"losses":5,"totalR":-3.2,"expectancyR":-0.5333333333333333}
+  },
+  "volatility": {
+    "EXTREME_VOL": {"n":249,"wins":83,"losses":166,"totalR":-16.6,"expectancyR":-0.0666666666666665},
+    "HIGH_VOL": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":141,"wins":39,"losses":102,"totalR":-31.8,"expectancyR":-0.22553191489361687},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":141,"wins":39,"losses":102,"totalR":-31.8,"expectancyR":-0.22553191489361687},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":45,"wins":12,"losses":33,"totalR":-11.4,"expectancyR":-0.2533333333333333},
+    "SPREAD_LT_1BPS": {"n":47,"wins":15,"losses":32,"totalR":-5.0,"expectancyR":-0.10638297872340427},
+    "NO_15M": {"n":193,"wins":66,"losses":127,"totalR":-8.2,"expectancyR":-0.04248704663212433},
+    "TIMEFRAME_1M_ONLY": {"n":90,"wins":27,"losses":63,"totalR":-14.4,"expectancyR":-0.16}
+  },
+  "note": "Candidate-level forward observational evidence, not executed real-money P&L. This freezes the preregistered N250 checkpoint; no live selection, exit, risk, leverage or execution settings were changed."
+}
