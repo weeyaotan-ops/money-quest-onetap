@@ -1,0 +1,26 @@
+{
+  "kind": "PREREGISTERED_HYPOTHESIS_CHECKPOINT",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T06:45:45.993003229Z",
+  "trainingCutoffN": 134,
+  "currentClosedN": 186,
+  "hypothesis": "H5_15M_WEAKNESS",
+  "preregisteredMinimumN15m": 15,
+  "holdout": {
+    "15m": {"n":15,"wins":5,"losses":10,"totalR":-1.0,"expectancyR":-0.06666666666666667,"winRate":0.3333333333333333},
+    "1m": {"n":16,"wins":6,"losses":10,"totalR":0.8,"expectancyR":0.05,"winRate":0.375},
+    "5m": {"n":21,"wins":10,"losses":11,"totalR":7.0,"expectancyR":0.3333333333333333,"winRate":0.47619047619047616},
+    "non15mCombined": {"n":37,"wins":16,"losses":21,"totalR":7.8,"expectancyR":0.21081081081081082,"winRate":0.43243243243243246},
+    "expectancyDifference15mMinusNon15mR": -0.2774774774774775
+  },
+  "uncertaintyCheck": {
+    "fisherExactTwoSidedP15mVsNon15m": 0.551194805699075,
+    "approxDifferenceStandardErrorR": 0.4100655495450209,
+    "approx90PctCIDifferenceR": [-0.9519752839344539,0.39702032897949857],
+    "approx95PctCIDifferenceR": [-1.0811911858863437,0.5262362309313885],
+    "note": "The preregistered 15m minimum sample is reached and observed expectancy is lower than the combined 1m+5m holdout, but uncertainty remains wide and includes no difference."
+  },
+  "status": "MINIMUM_REACHED_NOT_PROVEN",
+  "decision": "Do not disable 15m or change live ranking. Continue the frozen prospective sample toward N250."
+}
