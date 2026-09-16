@@ -1,0 +1,84 @@
+{
+  "kind": "HUNTER_FROZEN_HOLDOUT_SUMMARY",
+  "observationalOnly": true,
+  "frozenAnchor": 250,
+  "watershedTarget": 500,
+  "watershedCheckpoint": 504,
+  "exactN500Available": false,
+  "reason": "The cumulative diagnostic jumped from N499 to N504, so N504 is the first emitted checkpoint at or beyond the preregistered N500 watershed.",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "holdout": {
+    "n": 254,
+    "wins": 92,
+    "losses": 162,
+    "totalR": 3.6,
+    "expectancyR": 0.014173228346456698,
+    "winRate": 0.36220472440944884
+  },
+  "exitPolicyHoldout": {
+    "ORIGINAL_TP_SL": {"n":254,"totalR":3.6,"expectancyR":0.014173228346456698},
+    "BE_AFTER_0.5R": {"n":254,"totalR":5.6,"expectancyR":0.02204724409448819},
+    "BE_AFTER_1R": {"n":254,"totalR":7.4,"expectancyR":0.02913385826771654},
+    "TRAIL_1R_AFTER_1.5R": {"n":254,"totalR":2.176284549719581,"expectancyR":0.008568049408344807}
+  },
+  "phaseCheckpoints": [
+    {"from":250,"to":300,"n":50,"baselineTotalR":-19.2,"baselineExpectancyR":-0.384,"be05ExpectancyR":-0.212,"be1ExpectancyR":-0.356,"trailExpectancyR":-0.3175577997431222},
+    {"from":300,"to":353,"n":53,"note":"N353 is the first retained checkpoint near the planned N350 phase boundary.","baselineTotalR":14.2,"baselineExpectancyR":0.2679245283018868,"be05ExpectancyR":0.12075471698113206,"be1ExpectancyR":0.17735849056603775,"trailExpectancyR":0.2634566624103759},
+    {"from":353,"to":400,"n":47,"baselineTotalR":0.6,"baselineExpectancyR":0.012765957446808541,"be05ExpectancyR":0.11489361702127661,"be1ExpectancyR":0.08085106382978721,"trailExpectancyR":-0.04019613424836393},
+    {"from":400,"to":450,"n":50,"baselineTotalR":6.0,"baselineExpectancyR":0.12,"be05ExpectancyR":0.068,"be1ExpectancyR":0.096,"trailExpectancyR":0.11085797178035296},
+    {"from":450,"to":504,"n":54,"baselineTotalR":2.0,"baselineExpectancyR":0.037037037037037035,"be05ExpectancyR":0.018518518518518517,"be1ExpectancyR":0.13333333333333333,"trailExpectancyR":0.00809798425520785}
+  ],
+  "dimensionHoldout": {
+    "timeframe": {
+      "5m": {"n":97,"totalR":-4.6,"expectancyR":-0.04742268041237113},
+      "15m": {"n":88,"totalR":1.6,"expectancyR":0.018181818181818184},
+      "1m": {"n":69,"totalR":6.6,"expectancyR":0.09565217391304348}
+    },
+    "side": {
+      "SELL": {"n":115,"totalR":8.2,"expectancyR":0.07130434782608696},
+      "BUY": {"n":139,"totalR":-4.6,"expectancyR":-0.033093525179856115}
+    },
+    "scoreBucket": {
+      "0.90-0.95": {"n":42,"totalR":0.0,"expectancyR":0.0},
+      "1.00-1.05": {"n":135,"totalR":5.0,"expectancyR":0.037037037037037035},
+      "0.95-1.00": {"n":63,"totalR":1.4,"expectancyR":0.022222222222222223},
+      "0.85-0.90": {"n":12,"totalR":-0.8,"expectancyR":-0.06666666666666667},
+      "0.80-0.85": {"n":2,"totalR":-2.0,"expectancyR":-1.0}
+    },
+    "spreadBucket": {
+      "1-2bps": {"n":86,"totalR":3.6,"expectancyR":0.04186046511627907},
+      "<0.5bps": {"n":11,"totalR":0.2,"expectancyR":0.018181818181818184},
+      "0.5-1bps": {"n":26,"totalR":4.8,"expectancyR":0.18461538461538463},
+      "2-4bps": {"n":129,"totalR":-3.0,"expectancyR":-0.023255813953488372},
+      "4bps+": {"n":2,"totalR":-2.0,"expectancyR":-1.0}
+    },
+    "shadowStructure": {
+      "RANGE": {"n":186,"totalR":18.4,"expectancyR":0.0989247311827957},
+      "MIXED": {"n":50,"totalR":-16.4,"expectancyR":-0.328},
+      "BREAKOUT": {"n":9,"totalR":-0.6,"expectancyR":-0.06666666666666667},
+      "TREND": {"n":9,"totalR":2.2,"expectancyR":0.24444444444444446,"warning":"tiny sample"}
+    }
+  },
+  "shadowGateHoldout": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":160,"totalR":-6.0,"expectancyR":-0.0375},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":160,"totalR":-6.0,"expectancyR":-0.0375},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":50,"totalR":-16.4,"expectancyR":-0.328},
+    "SPREAD_LT_1BPS": {"n":37,"totalR":5.0,"expectancyR":0.13513513513513514},
+    "NO_15M": {"n":166,"totalR":2.0,"expectancyR":0.012048192771084338},
+    "TIMEFRAME_1M_ONLY": {"n":69,"totalR":6.6,"expectancyR":0.09565217391304348}
+  },
+  "truthAssessment": {
+    "baseline": "The frozen post-N250 holdout is slightly positive overall, but far below the +0.10R expectancy proof gate and highly phase-dependent.",
+    "nonstationarity": "Strongly observed: phase expectancy moved from -0.384R to +0.268R, then near-flat and positive phases. Static relationships changed sign and magnitude.",
+    "exit": "Both BE shadows improved the frozen holdout aggregate, but neither is promoted live from this evidence alone.",
+    "score": "The 0.90-0.95 bucket added exactly 0R after N250 despite looking positive cumulatively, so its apparent cumulative edge was not forward-confirmed in this holdout.",
+    "spread": "1-2bps is positive across the full holdout but had a severe negative N250-N300 phase, so a fixed spread rule is not justified.",
+    "structure": "RANGE is the strongest broad structural candidate in this holdout; MIXED is strongly negative. Both remain observational/correlated rather than causal or proven.",
+    "rejectedShadowCandidate": "STRUCTURE_EDGE_CONSISTENT performed poorly and should not be prioritized as a future live gate in its current definition.",
+    "volatility": "Almost all samples are EXTREME_VOL, so the current volatility overlay has little discriminatory value.",
+    "masterBrainGate": "FAIL: baseline holdout expectancy +0.014R is below the required +0.10R. PF, drawdown and lower-confidence-bound cannot be established from these cumulative aggregates alone."
+  },
+  "liveChanges": "NONE",
+  "nextResearchDirection": "Use the completed watershed evidence to design a preregistered phase-aware Dynamic Expected-R model with long-term shrinkage, recent-window evidence, change detection and abstention; test only on a new future holdout before any live promotion."
+}
