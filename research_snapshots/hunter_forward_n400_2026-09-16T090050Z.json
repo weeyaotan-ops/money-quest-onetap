@@ -1,0 +1,63 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T09:00:50.927702231Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 400,
+  "open": 120,
+  "baseline": {"wins":136,"losses":264,"totalR":-19.2,"winRate":0.34,"expectancyR":-0.048},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":400,"wins":136,"losses":264,"breakeven":0,"totalR":-19.2,"expectancyR":-0.048},
+    "BE_AFTER_0.5R": {"n":400,"wins":100,"losses":169,"breakeven":131,"totalR":11.0,"expectancyR":0.0275},
+    "BE_AFTER_1R": {"n":400,"wins":119,"losses":224,"breakeven":57,"totalR":-9.8,"expectancyR":-0.0245},
+    "TRAIL_1R_AFTER_1.5R": {"n":400,"wins":149,"losses":251,"breakeven":0,"totalR":-17.38393346089956,"expectancyR":-0.0434598336522489}
+  },
+  "timeframe": {
+    "1m": {"n":131,"wins":45,"losses":86,"totalR":-5.0,"expectancyR":-0.03816793893129762},
+    "5m": {"n":158,"wins":55,"losses":103,"totalR":-4.0,"expectancyR":-0.025316455696202566},
+    "15m": {"n":111,"wins":36,"losses":75,"totalR":-10.2,"expectancyR":-0.09189189189189186}
+  },
+  "side": {
+    "SELL": {"n":200,"wins":80,"losses":120,"totalR":24.0,"expectancyR":0.12},
+    "BUY": {"n":200,"wins":56,"losses":144,"totalR":-43.2,"expectancyR":-0.216}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":77,"wins":30,"losses":47,"totalR":7.0,"expectancyR":0.09090909090909087},
+    "1.00-1.05": {"n":193,"wins":70,"losses":123,"totalR":3.0,"expectancyR":0.015544041450777238},
+    "0.95-1.00": {"n":100,"wins":29,"losses":71,"totalR":-18.8,"expectancyR":-0.188},
+    "0.85-0.90": {"n":24,"wins":7,"losses":17,"totalR":-4.4,"expectancyR":-0.18333333333333335},
+    "0.80-0.85": {"n":6,"wins":0,"losses":6,"totalR":-6.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":130,"wins":52,"losses":78,"totalR":15.6,"expectancyR":0.12},
+    "2-4bps": {"n":201,"wins":61,"losses":140,"totalR":-30.2,"expectancyR":-0.1502487562189053},
+    "0.5-1bps": {"n":39,"wins":14,"losses":25,"totalR":0.2,"expectancyR":0.00512820512820511},
+    "<0.5bps": {"n":27,"wins":9,"losses":18,"totalR":-1.8,"expectancyR":-0.0666666666666667},
+    "4bps+": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":305,"wins":113,"losses":192,"totalR":11.4,"expectancyR":0.03737704918032789},
+    "MIXED": {"n":72,"wins":19,"losses":53,"totalR":-18.8,"expectancyR":-0.261111111111111},
+    "BREAKOUT": {"n":15,"wins":3,"losses":12,"totalR":-6.6,"expectancyR":-0.44},
+    "TREND": {"n":8,"wins":1,"losses":7,"totalR":-5.2,"expectancyR":-0.65}
+  },
+  "volatility": {
+    "EXTREME_VOL": {"n":399,"wins":135,"losses":264,"totalR":-21.0,"expectancyR":-0.05263157894736835},
+    "HIGH_VOL": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":230,"wins":74,"losses":156,"totalR":-22.8,"expectancyR":-0.09913043478260876},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":230,"wins":74,"losses":156,"totalR":-22.8,"expectancyR":-0.09913043478260876},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":72,"wins":19,"losses":53,"totalR":-18.8,"expectancyR":-0.261111111111111},
+    "SPREAD_LT_1BPS": {"n":66,"wins":23,"losses":43,"totalR":-1.6,"expectancyR":-0.024242424242424235},
+    "NO_15M": {"n":289,"wins":100,"losses":189,"totalR":-9.0,"expectancyR":-0.03114186851211064},
+    "TIMEFRAME_1M_ONLY": {"n":131,"wins":45,"losses":86,"totalR":-5.0,"expectancyR":-0.03816793893129762}
+  },
+  "pathProfile": {
+    "winners": {"n":136,"avgMfeR":2.0289185527813975,"avgMaeR":-0.29855495530347786,"avgHoldMin":60.489127818627445},
+    "losers": {"n":264,"avgMfeR":0.4382355032394809,"avgMaeR":-1.2343506283935775,"avgHoldMin":40.130893055555546},
+    "nearTpReversal": {"count":29,"shareOfLosers":0.10984848484848485,"avgMfeR":1.463294349882903,"avgTpProgress":0.8129413054905016}
+  },
+  "note": "Candidate-level forward observational evidence, not executed real-money P&L. Frozen N400 checkpoint; no live selection, exit, risk, leverage or execution settings were changed."
+}
