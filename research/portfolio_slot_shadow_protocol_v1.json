@@ -1,0 +1,54 @@
+{
+  "kind": "PORTFOLIO_SLOT_SHADOW_PROTOCOL_V1",
+  "mode": "READ_ONLY_SHADOW",
+  "liveChangesAuthorized": false,
+  "portfolioCap": 8,
+  "observerFile": "portfolio_slot_shadow_observer.js",
+  "problem": "When all 8 live slots are occupied, potentially stronger candidates are blocked by MAX_OPEN_POSITIONS. Measure whether ranking and replacement intelligence could improve portfolio expectancy before changing any live slot behavior.",
+  "cohorts": {
+    "SLOT_AVAILABLE": "candidate observed while live open count is below 8",
+    "BLOCKED_CAP": "candidate observed while live open count is at least 8"
+  },
+  "requiredFieldsAtAdmission": [
+    "symbol",
+    "side",
+    "timeframe",
+    "entry",
+    "sl",
+    "tp",
+    "netRR when available",
+    "Hunter score",
+    "competition rankScore when available",
+    "Dynamic Expected-R shadow score when available",
+    "spreadBps",
+    "portfolio open count",
+    "timestamp"
+  ],
+  "outcomes": {
+    "candidateOutcome": "Track TP/SL/time-expiry R without placing an order",
+    "incumbentComparison": "For blocked candidates, compare eventual candidate R with contemporaneous live incumbents over matched horizon",
+    "noEviction": true
+  },
+  "primaryMetrics": [
+    "BLOCKED_CAP expectancyR",
+    "SLOT_AVAILABLE expectancyR",
+    "top3 versus ranks4-6 versus rank7+ expectancyR",
+    "Dynamic Expected-R rank lift versus current rankScore",
+    "fraction of blocked candidates that outperform the weakest incumbent over matched horizon"
+  ],
+  "minimumEvidenceBeforeAnyLiveReplacementExperiment": {
+    "blockedClosedCandidates": 100,
+    "matchedIncumbentComparisons": 50,
+    "positiveBlockedCandidateExpectancy": true,
+    "positiveExpectedRLift": true,
+    "noMaterialIncreaseInShadowDrawdown": true
+  },
+  "forbidden": [
+    "closing a live position to make room",
+    "raising max-open above 8",
+    "increasing risk or leverage",
+    "changing live ranking",
+    "using future information in admission scoring"
+  ],
+  "note": "The existing observer is not deployed because a separate Railway service hit the resource-provision limit. This protocol freezes the study design before any future deployment or integration."
+}
