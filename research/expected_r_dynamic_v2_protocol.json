@@ -1,0 +1,53 @@
+{
+  "kind": "EXPECTED_R_DYNAMIC_V2_PROSPECTIVE_PROTOCOL",
+  "mode": "SHADOW_ONLY",
+  "frozenAtClosedN": 250,
+  "anchorSnapshot": "research_snapshots/hunter_forward_n250_2026-09-16T071850Z.json",
+  "evaluationWindow": "N250_TO_N500",
+  "liveChangesAuthorized": false,
+  "model": {
+    "file": "research/expected_r_dynamic_shadow_v2.js",
+    "slowModel": "Expected-R V1 using frozen N250 aggregate evidence",
+    "fastModel": "post-N250 aggregate delta only",
+    "fastPriorN": 80,
+    "maxFastWeight": 0.35,
+    "maxDynamicShiftR": 0.20,
+    "rule": "The update formula is frozen now. Future observations may change estimates only through this fixed formula; weights and buckets cannot be retuned before N500."
+  },
+  "primaryQuestion": "Can a fixed two-timescale Expected-R rule adapt to regime changes better than static Hunter score while remaining stable out of sample?",
+  "primaryMetrics": [
+    "mean realized R of top-ranked shadow candidate",
+    "lift versus current Hunter ordering on matched candidate sets",
+    "lift versus frozen Expected-R V1 ordering",
+    "rank correlation between predicted Expected-R and realized R",
+    "top-quartile minus bottom-quartile realized R",
+    "maximum drawdown of the shadow-selected sequence"
+  ],
+  "secondaryDiagnostics": [
+    "side",
+    "timeframe",
+    "spread bucket",
+    "Hunter score bucket",
+    "shadow structure",
+    "volatility overlay",
+    "BE_AFTER_0.5R counterfactual"
+  ],
+  "promotionGate": {
+    "minimumClosedN": 250,
+    "minimumMatchedSelections": 100,
+    "requiredNetExpectancyR": 0.10,
+    "requiredProfitFactor": 1.20,
+    "maxDrawdownPct": 10,
+    "confidenceRequirement": "90% lower confidence bound above 0 when estimable",
+    "diversificationRequirement": "No single side/timeframe/symbol or short streak may explain the result"
+  },
+  "forbiddenBeforeN500": [
+    "changing live Entry/SL/TP",
+    "changing live ranking",
+    "changing risk or leverage",
+    "changing max-open positions",
+    "retuning V2 weights or buckets using post-N250 outcomes",
+    "promoting a static BUY/SELL/timeframe hard filter from subgroup noise"
+  ],
+  "note": "This protocol was registered after the N250 checkpoint and before the N250->N500 evaluation is complete. It is research only and has no live execution authority."
+}
