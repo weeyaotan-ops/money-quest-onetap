@@ -1,0 +1,61 @@
+{
+  "kind": "EXPECTED_R_PROSPECTIVE_SHADOW_PROTOCOL_V1",
+  "mode": "RESEARCH_ONLY",
+  "trainingSnapshot": "research_snapshots/hunter_forward_n134_2026-09-16T060849Z.json",
+  "trainingClosedN": 134,
+  "trainingDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "rankerCommit": "9f2dd2b0169c70f4df983e80979b78e40d795f2d",
+  "holdoutBeginsAtClosedN": 135,
+  "primaryCheckpointClosedN": 250,
+  "freezeRules": {
+    "noRetuningRankerWeightsBeforeCheckpoint": true,
+    "noChangingBucketDefinitionsBeforeCheckpoint": true,
+    "noChangingLiveEntrySlTp": true,
+    "noChangingLiveRiskOrLeverage": true,
+    "noChangingLiveMaxOpen": true,
+    "noChangingLiveRankingFromThisProtocol": true,
+    "sameUninterruptedDeploymentRequiredForCumulativeDelta": true
+  },
+  "primaryHypotheses": [
+    {
+      "id": "H1_SPREAD_1_2_BPS",
+      "claim": "The 1-2bps spread bucket retains positive holdout expectancy.",
+      "minimumHoldoutN": 30,
+      "pass": "holdout expectancyR > 0",
+      "strongPass": "holdout expectancyR >= 0.10"
+    },
+    {
+      "id": "H2_SCORE_090_095",
+      "claim": "Hunter score bucket 0.90-0.95 retains positive holdout expectancy.",
+      "minimumHoldoutN": 20,
+      "pass": "holdout expectancyR > 0",
+      "strongPass": "holdout expectancyR >= 0.10"
+    },
+    {
+      "id": "H3_BE_AFTER_05R",
+      "claim": "BE_AFTER_0.5R outperforms ORIGINAL_TP_SL on the same holdout cohort.",
+      "minimumHoldoutN": 80,
+      "pass": "BE_AFTER_0.5R expectancyR > ORIGINAL_TP_SL expectancyR",
+      "strongPass": "BE_AFTER_0.5R expectancyR > 0 AND lift >= 0.10R/trade"
+    },
+    {
+      "id": "H4_SIDE_ASYMMETRY",
+      "claim": "SELL retains higher expectancy than BUY on holdout.",
+      "minimumHoldoutNPerSide": 25,
+      "pass": "SELL expectancyR > BUY expectancyR",
+      "strongPass": "SELL expectancyR > 0 AND SELL-BUY lift >= 0.15R/trade"
+    },
+    {
+      "id": "H5_15M_WEAKNESS",
+      "claim": "15m remains materially weaker than 1m/5m on holdout.",
+      "minimumHoldoutN15m": 15,
+      "pass": "15m expectancyR < min(1m expectancyR, 5m expectancyR)",
+      "strongPass": "15m is at least 0.15R/trade worse than both"
+    }
+  ],
+  "promotionRule": {
+    "livePromotionAllowedAtN250": false,
+    "nextStepIfSignalsPersist": "Run a second prospective shadow phase using the locked Expected-R ranker at candidate level before any live-ranking change.",
+    "reason": "Current evidence is observational, correlated, and regime-concentrated. N250 is a discovery/replication checkpoint, not proof of live profitability."
+  }
+}
