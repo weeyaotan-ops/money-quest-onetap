@@ -1,0 +1,55 @@
+{
+  "kind": "DYNAMIC_EXPECTED_R_INTERMEDIATE_HOLDOUT_DELTA",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "anchorSnapshot": "research_snapshots/hunter_forward_n250_2026-09-16T071850Z.json",
+  "laterSnapshot": "research_snapshots/hunter_forward_n300_2026-09-16T074147Z.json",
+  "anchorClosed": 250,
+  "laterClosed": 300,
+  "holdout": {"n":50,"wins":11,"losses":39,"totalR":-19.2,"expectancyR":-0.384},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":50,"wins":11,"losses":39,"breakeven":0,"totalR":-19.2,"expectancyR":-0.384},
+    "BE_AFTER_0.5R": {"n":50,"wins":8,"losses":25,"breakeven":17,"totalR":-10.6,"expectancyR":-0.212,"liftVsOriginalR":0.172},
+    "BE_AFTER_1R": {"n":50,"wins":9,"losses":34,"breakeven":7,"totalR":-17.8,"expectancyR":-0.356,"liftVsOriginalR":0.028},
+    "TRAIL_1R_AFTER_1.5R": {"n":50,"wins":14,"losses":36,"breakeven":0,"totalR":-15.87788998715611,"expectancyR":-0.3175577997431222,"liftVsOriginalR":0.0664422002568778}
+  },
+  "timeframe": {
+    "5m": {"n":20,"wins":4,"losses":16,"totalR":-8.8,"expectancyR":-0.44},
+    "15m": {"n":16,"wins":4,"losses":12,"totalR":-4.8,"expectancyR":-0.3},
+    "1m": {"n":14,"wins":3,"losses":11,"totalR":-5.6,"expectancyR":-0.4}
+  },
+  "side": {
+    "SELL": {"n":21,"wins":9,"losses":12,"totalR":4.2,"expectancyR":0.2},
+    "BUY": {"n":29,"wins":2,"losses":27,"totalR":-23.4,"expectancyR":-0.8068965517241379}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":11,"wins":2,"losses":9,"totalR":-5.4,"expectancyR":-0.49090909090909096},
+    "1.00-1.05": {"n":20,"wins":3,"losses":17,"totalR":-11.6,"expectancyR":-0.58},
+    "0.95-1.00": {"n":15,"wins":4,"losses":11,"totalR":-3.8,"expectancyR":-0.25333333333333324},
+    "0.85-0.90": {"n":4,"wins":2,"losses":2,"totalR":1.6,"expectancyR":0.4},
+    "0.80-0.85": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":12,"wins":1,"losses":11,"totalR":-9.2,"expectancyR":-0.7666666666666666},
+    "2-4bps": {"n":33,"wins":9,"losses":24,"totalR":-7.8,"expectancyR":-0.2363636363636364},
+    "0.5-1bps": {"n":2,"wins":1,"losses":1,"totalR":0.8,"expectancyR":0.4},
+    "<0.5bps": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0},
+    "4bps+": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":38,"wins":10,"losses":28,"totalR":-10.0,"expectancyR":-0.2631578947368421},
+    "MIXED": {"n":8,"wins":1,"losses":7,"totalR":-5.2,"expectancyR":-0.65},
+    "BREAKOUT": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0},
+    "TREND": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "driftSignals": {
+    "baselinePhaseCollapse": true,
+    "be05StillReducesLossButIsNegative": true,
+    "spread1to2TrainingEffectReversed": true,
+    "score090to095TrainingEffectReversed": true,
+    "buySideSeverelyNegativeInThisWindow": true,
+    "allThreeTimeframesNegativeInThisWindow": true
+  },
+  "interpretation": "The first 50 trades after N250 show a materially adverse phase. This is precisely the kind of drift the frozen Dynamic Expected-R V2 is meant to detect without turning transient observations into permanent hard filters. Do not retune the preregistered N250-to-N500 model from this intermediate checkpoint.",
+  "liveChanges": false
+}
