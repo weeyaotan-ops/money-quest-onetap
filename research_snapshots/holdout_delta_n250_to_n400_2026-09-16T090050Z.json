@@ -1,0 +1,68 @@
+{
+  "kind": "HUNTER_PROSPECTIVE_HOLDOUT_DELTA",
+  "researchOnly": true,
+  "anchorClosedN": 250,
+  "latestClosedN": 400,
+  "holdoutN": 150,
+  "sourceDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T09:00:50.927702231Z",
+  "baseline": {"wins":52,"losses":98,"totalR":-4.4,"expectancyR":-0.029333333333333336},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":150,"wins":52,"losses":98,"breakeven":0,"totalR":-4.4,"expectancyR":-0.029333333333333336},
+    "BE_AFTER_0.5R": {"n":150,"wins":34,"losses":60,"breakeven":56,"totalR":1.2,"expectancyR":0.008,"liftVsOriginalRPerTrade":0.037333333333333336},
+    "BE_AFTER_1R": {"n":150,"wins":43,"losses":82,"breakeven":25,"totalR":-4.6,"expectancyR":-0.030666666666666665},
+    "TRAIL_1R_AFTER_1.5R": {"n":150,"wins":57,"losses":93,"breakeven":0,"totalR":-3.803905189079292,"expectancyR":-0.02535936792719528}
+  },
+  "timeframe": {
+    "1m": {"n":41,"wins":18,"losses":23,"totalR":9.4,"expectancyR":0.22926829268292684},
+    "5m": {"n":55,"wins":16,"losses":39,"totalR":-10.2,"expectancyR":-0.18545454545454546},
+    "15m": {"n":54,"wins":18,"losses":36,"totalR":-3.6,"expectancyR":-0.06666666666666667}
+  },
+  "side": {
+    "SELL": {"n":78,"wins":36,"losses":42,"totalR":22.8,"expectancyR":0.2923076923076923},
+    "BUY": {"n":72,"wins":16,"losses":56,"totalR":-27.2,"expectancyR":-0.37777777777777777}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":26,"wins":9,"losses":17,"totalR":-0.8,"expectancyR":-0.03076923076923077},
+    "1.00-1.05": {"n":73,"wins":28,"losses":45,"totalR":5.4,"expectancyR":0.07397260273972603},
+    "0.95-1.00": {"n":41,"wins":12,"losses":29,"totalR":-7.4,"expectancyR":-0.18048780487804877},
+    "0.85-0.90": {"n":8,"wins":3,"losses":5,"totalR":0.4,"expectancyR":0.05},
+    "0.80-0.85": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":51,"wins":19,"losses":32,"totalR":2.2,"expectancyR":0.043137254901960784},
+    "2-4bps": {"n":78,"wins":25,"losses":53,"totalR":-8.0,"expectancyR":-0.10256410256410256},
+    "0.5-1bps": {"n":13,"wins":7,"losses":6,"totalR":6.6,"expectancyR":0.5076923076923077},
+    "<0.5bps": {"n":6,"wins":1,"losses":5,"totalR":-3.2,"expectancyR":-0.5333333333333333},
+    "4bps+": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":118,"wins":45,"losses":73,"totalR":8.0,"expectancyR":0.06779661016949153},
+    "MIXED": {"n":27,"wins":7,"losses":20,"totalR":-7.4,"expectancyR":-0.2740740740740741},
+    "BREAKOUT": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0},
+    "TREND": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "shadowGateDelta": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":89,"wins":35,"losses":54,"totalR":9.0,"expectancyR":0.10112359550561797},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":89,"wins":35,"losses":54,"totalR":9.0,"expectancyR":0.10112359550561797},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":27,"wins":7,"losses":20,"totalR":-7.4,"expectancyR":-0.2740740740740741},
+    "SPREAD_LT_1BPS": {"n":19,"wins":8,"losses":11,"totalR":3.4,"expectancyR":0.17894736842105263},
+    "NO_15M": {"n":96,"wins":34,"losses":62,"totalR":-0.8,"expectancyR":-0.008333333333333333},
+    "TIMEFRAME_1M_ONLY": {"n":41,"wins":18,"losses":23,"totalR":9.4,"expectancyR":0.22926829268292684}
+  },
+  "recentPhaseN375ToN400": {
+    "n":25,
+    "baseline": {"wins":7,"losses":18,"totalR":-5.4,"expectancyR":-0.216},
+    "BE_AFTER_0.5R": {"wins":6,"losses":12,"breakeven":7,"totalR":-1.2,"expectancyR":-0.048}
+  },
+  "interpretation": {
+    "overall": "N250-to-N400 remains slightly negative overall and well below promotion criteria.",
+    "beAfterHalfR": "BE after +0.5R remains the strongest tested exit shadow: +1.2R in this 150-trade holdout versus -4.4R original, but its edge is small and N375-to-N400 was negative.",
+    "side": "SELL remains strongly positive while BUY remains strongly negative in this holdout, but prior phase instability means this is not a permanent hard-side rule.",
+    "timeframe": "1m is positive in the holdout while 5m and 15m are negative; this differs from earlier cumulative rankings and reinforces nonstationarity.",
+    "spread": "1-2bps is only mildly positive in the holdout after a severe early reversal; fixed spread rules remain unsafe.",
+    "score": "0.90-0.95 is slightly negative in the holdout while 1.00-1.05 is positive, confirming the old heuristic score ordering is unstable.",
+    "structure": "RANGE is positive across a large holdout sample; other structures remain weak, with BREAKOUT/TREND still tiny samples.",
+    "decision": "No live changes before N500. Continue the frozen prospective study and preserve manual confirmation/risk settings."
+  }
+}
