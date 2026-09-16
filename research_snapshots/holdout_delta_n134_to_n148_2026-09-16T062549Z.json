@@ -1,0 +1,60 @@
+{
+  "kind": "EXPECTED_R_PROSPECTIVE_HOLDOUT_DELTA",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "trainingSnapshot": "research_snapshots/hunter_forward_n134_2026-09-16T060849Z.json",
+  "laterSnapshot": "research_snapshots/hunter_forward_n148_2026-09-16T062549Z.json",
+  "trainClosed": 134,
+  "laterClosed": 148,
+  "holdout": {"n":14,"wins":5,"losses":9,"totalR":0.0,"expectancyR":0.0},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":14,"wins":5,"losses":9,"breakeven":0,"totalR":0.0,"expectancyR":0.0},
+    "BE_AFTER_0.5R": {"n":14,"wins":3,"losses":4,"breakeven":7,"totalR":1.4,"expectancyR":0.1},
+    "BE_AFTER_1R": {"n":14,"wins":4,"losses":7,"breakeven":3,"totalR":0.2,"expectancyR":0.014285714285714287},
+    "TRAIL_1R_AFTER_1.5R": {"n":14,"wins":5,"losses":9,"breakeven":0,"totalR":-1.211005291005293,"expectancyR":-0.0865003779289495}
+  },
+  "timeframe": {
+    "1m": {"n":6,"wins":2,"losses":4,"totalR":-0.4,"expectancyR":-0.06666666666666667},
+    "5m": {"n":3,"wins":2,"losses":1,"totalR":2.6,"expectancyR":0.8666666666666667},
+    "15m": {"n":5,"wins":1,"losses":4,"totalR":-2.2,"expectancyR":-0.44}
+  },
+  "side": {
+    "SELL": {"n":8,"wins":3,"losses":5,"totalR":0.4,"expectancyR":0.05},
+    "BUY": {"n":6,"wins":2,"losses":4,"totalR":-0.4,"expectancyR":-0.06666666666666667}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":5,"wins":1,"losses":4,"totalR":-2.2,"expectancyR":-0.44},
+    "1.00-1.05": {"n":7,"wins":3,"losses":4,"totalR":1.4,"expectancyR":0.2},
+    "0.95-1.00": {"n":2,"wins":1,"losses":1,"totalR":0.8,"expectancyR":0.4},
+    "0.85-0.90": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null},
+    "0.80-0.85": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":4,"wins":2,"losses":2,"totalR":1.6,"expectancyR":0.4},
+    "2-4bps": {"n":6,"wins":1,"losses":5,"totalR":-3.2,"expectancyR":-0.5333333333333333},
+    "0.5-1bps": {"n":2,"wins":1,"losses":1,"totalR":0.8,"expectancyR":0.4},
+    "<0.5bps": {"n":2,"wins":1,"losses":1,"totalR":0.8,"expectancyR":0.4}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":13,"wins":4,"losses":9,"totalR":-1.8,"expectancyR":-0.13846153846153847},
+    "MIXED": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8},
+    "BREAKOUT": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null},
+    "TREND": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":4,"wins":1,"losses":3,"totalR":-1.2,"expectancyR":-0.3},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":4,"wins":1,"losses":3,"totalR":-1.2,"expectancyR":-0.3},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8},
+    "SPREAD_LT_1BPS": {"n":4,"wins":2,"losses":2,"totalR":1.6,"expectancyR":0.4},
+    "NO_15M": {"n":9,"wins":4,"losses":5,"totalR":2.2,"expectancyR":0.24444444444444446},
+    "TIMEFRAME_1M_ONLY": {"n":6,"wins":2,"losses":4,"totalR":-0.4,"expectancyR":-0.06666666666666667}
+  },
+  "hypothesisStatus": {
+    "H1_SPREAD_1_2_BPS": {"holdoutN":4,"minimumN":30,"status":"TOO_EARLY","observedExpectancyR":0.4},
+    "H2_SCORE_090_095": {"holdoutN":5,"minimumN":20,"status":"TOO_EARLY","observedExpectancyR":-0.44},
+    "H3_BE_AFTER_05R": {"holdoutN":14,"minimumN":80,"status":"TOO_EARLY","observedExpectancyR":0.1,"liftVsOriginalR":0.1},
+    "H4_SIDE_ASYMMETRY": {"sellN":8,"buyN":6,"minimumNPerSide":25,"status":"TOO_EARLY","sellExpectancyR":0.05,"buyExpectancyR":-0.06666666666666667},
+    "H5_15M_WEAKNESS": {"holdoutN15m":5,"minimumN15m":15,"status":"TOO_EARLY","expectancy15mR":-0.44,"expectancy1mR":-0.06666666666666667,"expectancy5mR":0.8666666666666667}
+  },
+  "conclusion": "No hypothesis has met its preregistered minimum holdout sample. Do not retune or promote live logic."
+}
