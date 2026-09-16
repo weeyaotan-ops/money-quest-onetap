@@ -1,0 +1,57 @@
+{
+  "kind": "TRUTH_SEEKING_MASTER_BRAIN_V3_PROSPECTIVE_PROTOCOL",
+  "mode": "RESEARCH_ONLY_SHADOW",
+  "codeFrozenAtCommit": "c8dfc29c4a1da79a1a33a0eb3bb34c666110f15f",
+  "createdBeforeClosedN500": true,
+  "liveChangesAuthorized": false,
+  "importantHonestyRule": "V3 was designed while N250-to-N500 data was already partially observed, so that window is not a clean prospective test of V3. The first clean V3 evaluation begins only after the N500 checkpoint.",
+  "evaluation": {
+    "anchor": "Freeze the exact Hunter/Dynamic evidence snapshot at N500.",
+    "primaryWindow": "N500_TO_N750",
+    "extendedWindow": "N500_TO_N1000 if the N750 result remains uncertain",
+    "noRetuningBeforePrimaryEvaluationEnds": true
+  },
+  "brainGoal": "Choose a trade only when estimated edge is positive, sufficiently supported, not dominated by model disagreement, and not contradicted by material regime drift. Otherwise abstain.",
+  "frozenDecisionInputs": [
+    "Dynamic Expected-R V2 estimate",
+    "support score",
+    "slow-versus-fast model disagreement",
+    "regime drift severity",
+    "uncertainty penalty",
+    "truth score",
+    "ABSTAIN versus ELIGIBLE decision"
+  ],
+  "primaryMetrics": [
+    "realized expectancyR of ELIGIBLE selections",
+    "realized expectancyR of ABSTAINED candidates as a counterfactual cohort",
+    "ELIGIBLE minus all-candidate expectancy lift",
+    "ELIGIBLE minus Dynamic-V2 top-rank expectancy lift",
+    "coverage rate: fraction of candidates marked ELIGIBLE",
+    "profit factor of selected sequence",
+    "maximum drawdown of selected sequence",
+    "90% lower confidence bound of selected expectancy when estimable",
+    "calibration between predicted truthScoreR and realized R",
+    "regime-by-regime stability"
+  ],
+  "promotionGate": {
+    "minimumProspectiveClosedSelections": 100,
+    "minimumNetExpectancyR": 0.10,
+    "minimumProfitFactor": 1.20,
+    "maximumDrawdownPct": 10,
+    "confidenceRequirement": "90% lower confidence bound above 0 when estimable",
+    "coverageRequirement": "Must not create a fake edge by abstaining from almost everything; coverage must be reported and justified.",
+    "diversificationRequirement": "Result must not depend mainly on one side, one timeframe, one score bucket, one spread bucket, or one short streak.",
+    "comparisonRequirement": "Must beat the matched current Hunter ordering and frozen Dynamic Expected-R V2 on the same prospective candidate sets."
+  },
+  "forbiddenUntilGatePasses": [
+    "using V3 to place live orders",
+    "changing live Entry/SL/TP",
+    "changing live ranking",
+    "changing live risk or leverage",
+    "raising max-open positions",
+    "closing live incumbents to make room",
+    "retuning V3 thresholds from N500-to-N750 outcomes before the frozen evaluation ends",
+    "calling V3 omniscient, proven, or profitable without the prospective evidence"
+  ],
+  "truthPrinciple": "The brain is rewarded for being correct and for refusing unsupported bets, not for always producing an answer."
+}
