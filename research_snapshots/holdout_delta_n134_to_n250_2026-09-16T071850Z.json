@@ -1,0 +1,70 @@
+{
+  "kind": "EXPECTED_R_PROSPECTIVE_HOLDOUT_DELTA",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "trainingSnapshot": "research_snapshots/hunter_forward_n134_2026-09-16T060849Z.json",
+  "laterSnapshot": "research_snapshots/hunter_forward_n250_2026-09-16T071850Z.json",
+  "trainClosed": 134,
+  "laterClosed": 250,
+  "holdout": {"n":116,"wins":42,"losses":74,"totalR":1.6,"expectancyR":0.013793103448275862,"approx90PctCIExpectancyR":[-0.19261126457785785,0.22019747147440963]},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":116,"wins":42,"losses":74,"breakeven":0,"totalR":1.6,"expectancyR":0.013793103448275862},
+    "BE_AFTER_0.5R": {"n":116,"wins":29,"losses":44,"breakeven":43,"totalR":8.2,"expectancyR":0.0706896551724138,"liftVsOriginalTotalR":6.6,"liftVsOriginalExpectancyR":0.05689655172413794,"approx90PctCIExpectancyR":[-0.0962316005064984,0.237610910851326]},
+    "BE_AFTER_1R": {"n":116,"wins":37,"losses":60,"breakeven":19,"totalR":6.6,"expectancyR":0.05689655172413794,"liftVsOriginalTotalR":5.0,"liftVsOriginalExpectancyR":0.04310344827586208},
+    "TRAIL_1R_AFTER_1.5R": {"n":116,"wins":45,"losses":71,"breakeven":0,"totalR":-1.389399948511708,"expectancyR":-0.011977585763031966}
+  },
+  "timeframe": {
+    "1m": {"n":40,"wins":11,"losses":29,"totalR":-9.2,"expectancyR":-0.23},
+    "5m": {"n":45,"wins":19,"losses":26,"totalR":8.2,"expectancyR":0.18222222222222223},
+    "15m": {"n":31,"wins":12,"losses":19,"totalR":2.6,"expectancyR":0.08387096774193549},
+    "non15mCombined": {"n":85,"wins":30,"losses":55,"totalR":-1.0,"expectancyR":-0.011764705882352941}
+  },
+  "side": {
+    "SELL": {"n":60,"wins":21,"losses":39,"totalR":-1.2,"expectancyR":-0.02},
+    "BUY": {"n":56,"wins":21,"losses":35,"totalR":2.8,"expectancyR":0.05},
+    "expectancyDifferenceSellMinusBuyR": -0.07,
+    "approx90PctCIDifferenceR": [-0.4849445049784165,0.3449445049784165]
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":30,"wins":12,"losses":18,"totalR":3.6,"expectancyR":0.12,"approx90PctCIExpectancyR":[-0.298978666366033,0.5389786663660331]},
+    "1.00-1.05": {"n":54,"wins":20,"losses":34,"totalR":2.0,"expectancyR":0.037037037037037035},
+    "0.95-1.00": {"n":27,"wins":9,"losses":18,"totalR":-1.8,"expectancyR":-0.06666666666666667},
+    "0.85-0.90": {"n":4,"wins":1,"losses":3,"totalR":-1.2,"expectancyR":-0.3},
+    "0.80-0.85": {"n":1,"wins":0,"losses":1,"totalR":-1.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":30,"wins":11,"losses":19,"totalR":0.8,"expectancyR":0.02666666666666667,"approx90PctCIExpectancyR":[-0.3854670802765405,0.4388004136098738]},
+    "2-4bps": {"n":59,"wins":20,"losses":39,"totalR":-3.0,"expectancyR":-0.05084745762711865},
+    "0.5-1bps": {"n":13,"wins":4,"losses":9,"totalR":-1.8,"expectancyR":-0.13846153846153847},
+    "<0.5bps": {"n":13,"wins":7,"losses":6,"totalR":6.6,"expectancyR":0.5076923076923077},
+    "4bps+": {"n":1,"wins":0,"losses":1,"totalR":-1.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":94,"wins":37,"losses":57,"totalR":9.6,"expectancyR":0.10212765957446808},
+    "MIXED": {"n":17,"wins":4,"losses":13,"totalR":-5.8,"expectancyR":-0.3411764705882353},
+    "BREAKOUT": {"n":4,"wins":1,"losses":3,"totalR":-1.2,"expectancyR":-0.3},
+    "TREND": {"n":1,"wins":0,"losses":1,"totalR":-1.0,"expectancyR":-1.0}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":59,"wins":18,"losses":41,"totalR":-8.6,"expectancyR":-0.14576271186440678},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":59,"wins":18,"losses":41,"totalR":-8.6,"expectancyR":-0.14576271186440678},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":17,"wins":4,"losses":13,"totalR":-5.8,"expectancyR":-0.3411764705882353},
+    "SPREAD_LT_1BPS": {"n":26,"wins":11,"losses":15,"totalR":4.8,"expectancyR":0.18461538461538463},
+    "NO_15M": {"n":85,"wins":30,"losses":55,"totalR":-1.0,"expectancyR":-0.011764705882352941},
+    "TIMEFRAME_1M_ONLY": {"n":40,"wins":11,"losses":29,"totalR":-9.2,"expectancyR":-0.23}
+  },
+  "hypothesisStatus": {
+    "H1_SPREAD_1_2_BPS": {"holdoutN":30,"minimumN":30,"status":"POSITIVE_SIGN_NOT_ROBUST","observedExpectancyR":0.02666666666666667,"trainingExpectancyR":0.2571428571428572,"interpretation":"Positive sign survived at the exact checkpoint but most of the training effect decayed and the uncertainty interval crosses zero."},
+    "H2_SCORE_090_095": {"holdoutN":30,"minimumN":20,"status":"POSITIVE_SIGN_NOT_ROBUST","observedExpectancyR":0.12,"trainingExpectancyR":0.2,"interpretation":"Positive at N250, but the path was unstable during the holdout and the uncertainty interval remains wide."},
+    "H3_BE_AFTER_05R": {"holdoutN":116,"minimumN":80,"status":"STRONGEST_CANDIDATE_NOT_PROVEN","observedExpectancyR":0.0706896551724138,"originalExpectancyR":0.013793103448275862,"liftVsOriginalTotalR":6.6,"liftVsOriginalExpectancyR":0.05689655172413794,"interpretation":"Most persistent prospective improvement, but aggregate shadow evidence is not sufficient for a live exit change; paired execution-safe validation is still required."},
+    "H4_SIDE_ASYMMETRY": {"sellN":60,"buyN":56,"minimumNPerSide":25,"status":"NOT_CONFIRMED_DIRECTION_REVERSED","sellExpectancyR":-0.02,"buyExpectancyR":0.05,"interpretation":"The earlier SELL advantage reversed by N250, arguing against a permanent side filter."},
+    "H5_15M_WEAKNESS": {"holdoutN15m":31,"minimumN15m":15,"status":"NOT_CONFIRMED_DIRECTION_REVERSED","expectancy15mR":0.08387096774193549,"expectancyNon15mR":-0.011764705882352941,"interpretation":"15m recovered and outperformed the combined 1m+5m holdout at N250, arguing against a permanent 15m ban."}
+  },
+  "checkpointConclusion": {
+    "staticHardGatesSupported": false,
+    "bestProspectiveExitCandidate": "BE_AFTER_0.5R",
+    "dynamicExpectedRDirectionSupported": true,
+    "reason": "Side, timeframe and bucket effects changed materially through the holdout. Static bans are unstable. A shrinkage-based, regime-aware Expected-R shadow model is the appropriate next research stage.",
+    "liveDecision": "NO_LIVE_CHANGE_AT_N250"
+  }
+}
