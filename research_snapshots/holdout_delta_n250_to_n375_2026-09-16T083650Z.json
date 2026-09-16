@@ -1,0 +1,61 @@
+{
+  "kind": "HUNTER_PROSPECTIVE_HOLDOUT_DELTA",
+  "researchOnly": true,
+  "anchorClosedN": 250,
+  "latestClosedN": 375,
+  "holdoutN": 125,
+  "sourceDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T08:36:50.368050781Z",
+  "baseline": {"wins":45,"losses":80,"totalR":1.0,"expectancyR":0.008},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":125,"wins":45,"losses":80,"breakeven":0,"totalR":1.0,"expectancyR":0.008},
+    "BE_AFTER_0.5R": {"n":125,"wins":28,"losses":48,"breakeven":49,"totalR":2.4,"expectancyR":0.0192,"liftVsOriginalRPerTrade":0.0112},
+    "BE_AFTER_1R": {"n":125,"totalR":-1.2,"expectancyR":-0.0096},
+    "TRAIL_1R_AFTER_1.5R": {"n":125,"totalR":1.596094810920702,"expectancyR":0.012768758487365616}
+  },
+  "timeframe": {
+    "1m": {"n":35,"wins":15,"losses":20,"totalR":7.0,"expectancyR":0.2},
+    "5m": {"n":46,"wins":14,"losses":32,"totalR":-6.8,"expectancyR":-0.14782608695652175},
+    "15m": {"n":44,"wins":16,"losses":28,"totalR":0.8,"expectancyR":0.018181818181818184}
+  },
+  "side": {
+    "SELL": {"n":63,"wins":35,"losses":28,"totalR":35.0,"expectancyR":0.5555555555555556},
+    "BUY": {"n":62,"wins":10,"losses":52,"totalR":-34.0,"expectancyR":-0.5483870967741935}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":22,"wins":8,"losses":14,"totalR":0.4,"expectancyR":0.018181818181818184},
+    "1.00-1.05": {"n":60,"wins":23,"losses":37,"totalR":4.4,"expectancyR":0.07333333333333333},
+    "0.95-1.00": {"n":34,"wins":11,"losses":23,"totalR":-3.2,"expectancyR":-0.09411764705882353},
+    "0.85-0.90": {"n":7,"wins":3,"losses":4,"totalR":1.4,"expectancyR":0.2},
+    "0.80-0.85": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":42,"wins":15,"losses":27,"totalR":0.0,"expectancyR":0.0},
+    "2-4bps": {"n":65,"wins":22,"losses":43,"totalR":-3.4,"expectancyR":-0.052307692307692305},
+    "0.5-1bps": {"n":12,"wins":7,"losses":5,"totalR":7.6,"expectancyR":0.6333333333333333},
+    "<0.5bps": {"n":4,"wins":1,"losses":3,"totalR":-1.2,"expectancyR":-0.3},
+    "4bps+": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":99,"wins":39,"losses":60,"totalR":10.2,"expectancyR":0.10303030303030303},
+    "MIXED": {"n":22,"wins":6,"losses":16,"totalR":-5.2,"expectancyR":-0.23636363636363636},
+    "BREAKOUT": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0},
+    "TREND": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0}
+  },
+  "shadowGateDelta": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":72,"wins":30,"losses":42,"totalR":12.0,"expectancyR":0.16666666666666666},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":22,"wins":6,"losses":16,"totalR":-5.2,"expectancyR":-0.23636363636363636},
+    "SPREAD_LT_1BPS": {"n":16,"wins":8,"losses":8,"totalR":6.4,"expectancyR":0.4},
+    "NO_15M": {"n":81,"wins":29,"losses":52,"totalR":0.2,"expectancyR":0.0024691358024691358},
+    "TIMEFRAME_1M_ONLY": {"n":35,"wins":15,"losses":20,"totalR":7.0,"expectancyR":0.2}
+  },
+  "interpretation": {
+    "overall": "The N250-to-N375 holdout is barely positive overall and remains far below the promotion target.",
+    "beAfterHalfR": "Still improves the holdout versus original exits, but the lift is small at this checkpoint.",
+    "side": "SELL versus BUY separation is currently very large, but prior reversals mean it remains a dynamic-regime observation rather than a permanent hard rule.",
+    "spread": "The old 1-2bps edge has not persisted in this holdout: exactly 0R across 42 observations.",
+    "score": "The old 0.90-0.95 bucket is only slightly positive out of sample and no longer special.",
+    "structure": "RANGE is the strongest large subgroup in this holdout; MIXED/BREAKOUT/TREND are weak, but the latter two have tiny samples.",
+    "decision": "Do not change live selection, exits, side filters, timeframe filters, risk, leverage, or max-open positions before N500."
+  }
+}
