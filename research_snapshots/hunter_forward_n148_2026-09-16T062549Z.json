@@ -1,0 +1,56 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T06:25:49.410352296Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 148,
+  "open": 122,
+  "baseline": {"wins":47,"losses":101,"totalR":-16.4,"winRate":0.31756756756756754,"expectancyR":-0.1108108108108107},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":148,"wins":47,"losses":101,"breakeven":0,"totalR":-16.4,"expectancyR":-0.1108108108108107},
+    "BE_AFTER_0.5R": {"n":148,"wins":40,"losses":69,"breakeven":39,"totalR":3.0,"expectancyR":0.02027027027027027},
+    "BE_AFTER_1R": {"n":148,"wins":43,"losses":89,"breakeven":16,"totalR":-11.6,"expectancyR":-0.07837837837837831},
+    "TRAIL_1R_AFTER_1.5R": {"n":148,"wins":52,"losses":96,"breakeven":0,"totalR":-13.401633614313853,"expectancyR":-0.09055157847509361}
+  },
+  "timeframe": {
+    "1m": {"n":56,"wins":18,"losses":38,"totalR":-5.6,"expectancyR":-0.1},
+    "5m": {"n":61,"wins":22,"losses":39,"totalR":0.6,"expectancyR":0.009836065573770442},
+    "15m": {"n":31,"wins":7,"losses":24,"totalR":-11.4,"expectancyR":-0.3677419354838709}
+  },
+  "side": {
+    "SELL": {"n":70,"wins":26,"losses":44,"totalR":2.8,"expectancyR":0.04},
+    "BUY": {"n":78,"wins":21,"losses":57,"totalR":-19.2,"expectancyR":-0.2461538461538461}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":26,"wins":10,"losses":16,"totalR":2.0,"expectancyR":0.0769230769230769},
+    "1.00-1.05": {"n":73,"wins":25,"losses":48,"totalR":-3.0,"expectancyR":-0.0410958904109589},
+    "0.95-1.00": {"n":34,"wins":9,"losses":25,"totalR":-8.8,"expectancyR":-0.2588235294117646},
+    "0.85-0.90": {"n":12,"wins":3,"losses":9,"totalR":-3.6,"expectancyR":-0.3},
+    "0.80-0.85": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":53,"wins":24,"losses":29,"totalR":14.2,"expectancyR":0.26792452830188684},
+    "2-4bps": {"n":70,"wins":17,"losses":53,"totalR":-22.4,"expectancyR":-0.32},
+    "0.5-1bps": {"n":15,"wins":4,"losses":11,"totalR":-3.8,"expectancyR":-0.25333333333333335},
+    "<0.5bps": {"n":10,"wins":2,"losses":8,"totalR":-4.4,"expectancyR":-0.44}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":106,"wins":35,"losses":71,"totalR":-8.0,"expectancyR":-0.07547169811320752},
+    "MIXED": {"n":29,"wins":9,"losses":20,"totalR":-3.8,"expectancyR":-0.1310344827586207},
+    "BREAKOUT": {"n":8,"wins":2,"losses":6,"totalR":-2.4,"expectancyR":-0.3},
+    "TREND": {"n":5,"wins":1,"losses":4,"totalR":-2.2,"expectancyR":-0.44}
+  },
+  "volatility": {
+    "EXTREME_VOL": {"n":147,"wins":46,"losses":101,"totalR":-18.2,"expectancyR":-0.1238095238095237},
+    "HIGH_VOL": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":86,"wins":22,"losses":64,"totalR":-24.4,"expectancyR":-0.28372093023255807},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":86,"wins":22,"losses":64,"totalR":-24.4,"expectancyR":-0.28372093023255807},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":29,"wins":9,"losses":20,"totalR":-3.8,"expectancyR":-0.1310344827586207},
+    "SPREAD_LT_1BPS": {"n":25,"wins":6,"losses":19,"totalR":-8.2,"expectancyR":-0.328},
+    "NO_15M": {"n":117,"wins":40,"losses":77,"totalR":-5.0,"expectancyR":-0.042735042735042736},
+    "TIMEFRAME_1M_ONLY": {"n":56,"wins":18,"losses":38,"totalR":-5.6,"expectancyR":-0.1}
+  }
+}
