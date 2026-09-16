@@ -1,0 +1,66 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "milestone": "N500_WATERSHED_CROSSING",
+  "exactN500Available": false,
+  "checkpointRule": "Use the first emitted cumulative diagnostic with closed >= 500 because the ledger jumped from N499 to N504 between emissions.",
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T10:06:50.965407083Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 504,
+  "open": 115,
+  "baseline": {"wins":176,"losses":328,"totalR":-11.2,"winRate":0.3492063492063492,"expectancyR":-0.022222222222222095},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":504,"wins":176,"losses":328,"breakeven":0,"totalR":-11.2,"expectancyR":-0.022222222222222095},
+    "BE_AFTER_0.5R": {"n":504,"wins":128,"losses":215,"breakeven":161,"totalR":15.4,"expectancyR":0.03055555555555563},
+    "BE_AFTER_1R": {"n":504,"wins":154,"losses":275,"breakeven":75,"totalR":2.2,"expectancyR":0.004365079365079438},
+    "TRAIL_1R_AFTER_1.5R": {"n":504,"wins":191,"losses":313,"breakeven":0,"totalR":-11.403743722100687,"expectancyR":-0.022626475639088664}
+  },
+  "timeframe": {
+    "5m": {"n":200,"wins":72,"losses":128,"totalR":1.6,"expectancyR":0.008},
+    "15m": {"n":145,"wins":50,"losses":95,"totalR":-5.0,"expectancyR":-0.034482758620689606},
+    "1m": {"n":159,"wins":54,"losses":105,"totalR":-7.8,"expectancyR":-0.04905660377358483}
+  },
+  "side": {
+    "SELL": {"n":237,"wins":88,"losses":149,"totalR":9.4,"expectancyR":0.03966244725738391},
+    "BUY": {"n":267,"wins":88,"losses":179,"totalR":-20.6,"expectancyR":-0.0771535580524346}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":93,"wins":36,"losses":57,"totalR":7.8,"expectancyR":0.08387096774193549},
+    "1.00-1.05": {"n":255,"wins":92,"losses":163,"totalR":2.6,"expectancyR":0.010196078431372565},
+    "0.95-1.00": {"n":122,"wins":40,"losses":82,"totalR":-10.0,"expectancyR":-0.08196721311475393},
+    "0.85-0.90": {"n":28,"wins":8,"losses":20,"totalR":-5.6,"expectancyR":-0.2},
+    "0.80-0.85": {"n":6,"wins":0,"losses":6,"totalR":-6.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":165,"wins":65,"losses":100,"totalR":17.0,"expectancyR":0.10303030303030318},
+    "<0.5bps": {"n":32,"wins":12,"losses":20,"totalR":1.6,"expectancyR":0.05},
+    "0.5-1bps": {"n":52,"wins":18,"losses":34,"totalR":-1.6,"expectancyR":-0.03076923076923079},
+    "2-4bps": {"n":252,"wins":81,"losses":171,"totalR":-25.2,"expectancyR":-0.1},
+    "4bps+": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":373,"wins":141,"losses":232,"totalR":21.8,"expectancyR":0.05844504021447728},
+    "MIXED": {"n":95,"wins":24,"losses":71,"totalR":-27.8,"expectancyR":-0.2926315789473683},
+    "BREAKOUT": {"n":21,"wins":6,"losses":15,"totalR":-4.2,"expectancyR":-0.2},
+    "TREND": {"n":15,"wins":5,"losses":10,"totalR":-1.0,"expectancyR":-0.06666666666666671}
+  },
+  "volatility": {
+    "EXTREME_VOL": {"n":503,"wins":175,"losses":328,"totalR":-13.0,"expectancyR":-0.025844930417494916},
+    "HIGH_VOL": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":301,"wins":94,"losses":207,"totalR":-37.8,"expectancyR":-0.1255813953488373},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":301,"wins":94,"losses":207,"totalR":-37.8,"expectancyR":-0.1255813953488373},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":95,"wins":24,"losses":71,"totalR":-27.8,"expectancyR":-0.2926315789473683},
+    "SPREAD_LT_1BPS": {"n":84,"wins":30,"losses":54,"totalR":0.0,"expectancyR":0.0},
+    "NO_15M": {"n":359,"wins":126,"losses":233,"totalR":-6.2,"expectancyR":-0.01727019498607235},
+    "TIMEFRAME_1M_ONLY": {"n":159,"wins":54,"losses":105,"totalR":-7.8,"expectancyR":-0.04905660377358483}
+  },
+  "pathProfile": {
+    "winners": {"n":176,"avgMfeR":2.0309069413053678,"avgMaeR":-0.3280683727659508,"avgHoldMin":65.56748806818182},
+    "losers": {"n":328,"avgMfeR":0.43492537287504296,"avgMaeR":-1.2449444608758027,"avgHoldMin":43.80284115853656},
+    "nearTpReversal": {"count":35,"shareOfLosers":0.10670731707317073,"avgMfeR":1.4723640390398853,"avgTpProgress":0.817980021688825}
+  },
+  "note": "First diagnostic after crossing the frozen N500 watershed. Observational only; no live selection, exit, risk, leverage, max-open, or execution settings were changed."
+}
