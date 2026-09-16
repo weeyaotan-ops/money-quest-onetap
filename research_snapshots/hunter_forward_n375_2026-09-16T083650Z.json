@@ -1,0 +1,46 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T08:36:50.368050781Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 375,
+  "open": 117,
+  "baseline": {"wins":129,"losses":246,"totalR":-13.8,"winRate":0.344,"expectancyR":-0.0368},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":375,"wins":129,"losses":246,"breakeven":0,"totalR":-13.8,"expectancyR":-0.0368},
+    "BE_AFTER_0.5R": {"n":375,"wins":94,"losses":157,"breakeven":124,"totalR":12.2,"expectancyR":0.03253333333333337},
+    "BE_AFTER_1R": {"n":375,"wins":112,"losses":208,"breakeven":55,"totalR":-6.4,"expectancyR":-0.017066666666666574},
+    "TRAIL_1R_AFTER_1.5R": {"n":375,"wins":142,"losses":233,"breakeven":0,"totalR":-11.983933460899566,"expectancyR":-0.03195715589573218}
+  },
+  "timeframe": {
+    "1m": {"n":125,"wins":42,"losses":83,"totalR":-7.4,"expectancyR":-0.0592},
+    "5m": {"n":149,"wins":53,"losses":96,"totalR":-0.6,"expectancyR":-0.004026845637583929},
+    "15m": {"n":101,"wins":34,"losses":67,"totalR":-5.8,"expectancyR":-0.05742574257425738}
+  },
+  "side": {
+    "SELL": {"n":185,"wins":79,"losses":106,"totalR":36.2,"expectancyR":0.19567567567567562},
+    "BUY": {"n":190,"wins":50,"losses":140,"totalR":-50.0,"expectancyR":-0.2631578947368421}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":73,"wins":29,"losses":44,"totalR":8.2,"expectancyR":0.11232876712328764},
+    "1.00-1.05": {"n":180,"wins":65,"losses":115,"totalR":2.0,"expectancyR":0.011111111111111155},
+    "0.95-1.00": {"n":93,"wins":28,"losses":65,"totalR":-14.6,"expectancyR":-0.1569892473118278},
+    "0.85-0.90": {"n":23,"wins":7,"losses":16,"totalR":-3.4,"expectancyR":-0.14782608695652175},
+    "0.80-0.85": {"n":6,"wins":0,"losses":6,"totalR":-6.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":121,"wins":48,"losses":73,"totalR":13.4,"expectancyR":0.11074380165289267},
+    "0.5-1bps": {"n":38,"wins":14,"losses":24,"totalR":1.2,"expectancyR":0.03157894736842103},
+    "<0.5bps": {"n":25,"wins":9,"losses":16,"totalR":0.2,"expectancyR":0.008},
+    "2-4bps": {"n":188,"wins":58,"losses":130,"totalR":-25.6,"expectancyR":-0.13617021276595725},
+    "4bps+": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":286,"wins":107,"losses":179,"totalR":13.6,"expectancyR":0.047552447552447565},
+    "MIXED": {"n":67,"wins":18,"losses":49,"totalR":-16.6,"expectancyR":-0.24776119402985067},
+    "BREAKOUT": {"n":14,"wins":3,"losses":11,"totalR":-5.6,"expectancyR":-0.4},
+    "TREND": {"n":8,"wins":1,"losses":7,"totalR":-5.2,"expectancyR":-0.65}
+  },
+  "note": "N375 midpoint checkpoint toward the frozen N500 watershed. Research only; no live Entry/SL/TP/ranking/risk/leverage/execution settings changed."
+}
