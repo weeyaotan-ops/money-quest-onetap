@@ -1,0 +1,24 @@
+{
+  "kind": "PREREGISTERED_HYPOTHESIS_CHECKPOINT",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T06:44:47.314287150Z",
+  "trainingCutoffN": 134,
+  "currentClosedN": 184,
+  "hypothesis": "H4_SIDE_ASYMMETRY",
+  "preregisteredMinimumNPerSide": 25,
+  "holdout": {
+    "SELL": {"n":25,"wins":13,"losses":12,"totalR":11.4,"expectancyR":0.456,"winRate":0.52},
+    "BUY": {"n":25,"wins":8,"losses":17,"totalR":-2.6,"expectancyR":-0.104,"winRate":0.32},
+    "expectancyDifferenceSellMinusBuyR": 0.56
+  },
+  "uncertaintyCheck": {
+    "fisherExactTwoSidedP": 0.2515903932253738,
+    "approxDifferenceStandardErrorR": 0.38277136779022536,
+    "approx90PctCIDifferenceR": [-0.06960287260292808,1.1896028726029282],
+    "approx95PctCIDifferenceR": [-0.19021809518197652,1.3102180951819766],
+    "note": "Minimum sample threshold is met, but the side difference is not yet statistically robust; both 90% and 95% approximate intervals include zero."
+  },
+  "status": "MINIMUM_REACHED_NOT_PROVEN",
+  "decision": "Do not change live side filtering or risk. Continue frozen prospective collection toward the N250 checkpoint and stronger uncertainty bounds."
+}
