@@ -1,0 +1,76 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T06:08:49.476962865Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 134,
+  "open": 120,
+  "baseline": {
+    "wins": 42,
+    "losses": 92,
+    "totalR": -16.4,
+    "winRate": 0.31343283582089554,
+    "expectancyR": -0.12238805970149244
+  },
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":134,"wins":42,"losses":92,"breakeven":0,"totalR":-16.4,"expectancyR":-0.12238805970149244},
+    "BE_AFTER_0.5R": {"n":134,"wins":37,"losses":65,"breakeven":32,"totalR":1.6,"expectancyR":0.01194029850746269},
+    "BE_AFTER_1R": {"n":134,"wins":39,"losses":82,"breakeven":13,"totalR":-11.8,"expectancyR":-0.08805970149253727},
+    "TRAIL_1R_AFTER_1.5R": {"n":134,"wins":47,"losses":87,"breakeven":0,"totalR":-12.19062832330856,"expectancyR":-0.09097483823364598}
+  },
+  "timeframe": {
+    "1m": {"n":50,"wins":16,"losses":34,"totalR":-5.2,"expectancyR":-0.104},
+    "5m": {"n":58,"wins":20,"losses":38,"totalR":-2.0,"expectancyR":-0.03448275862068971},
+    "15m": {"n":26,"wins":6,"losses":20,"totalR":-9.2,"expectancyR":-0.3538461538461538}
+  },
+  "side": {
+    "SELL": {"n":62,"wins":23,"losses":39,"totalR":2.4,"expectancyR":0.0387096774193548},
+    "BUY": {"n":72,"wins":19,"losses":53,"totalR":-18.8,"expectancyR":-0.26111111111111107}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":21,"wins":9,"losses":12,"totalR":4.2,"expectancyR":0.2},
+    "1.00-1.05": {"n":66,"wins":22,"losses":44,"totalR":-4.4,"expectancyR":-0.06666666666666665},
+    "0.95-1.00": {"n":32,"wins":8,"losses":24,"totalR":-9.6,"expectancyR":-0.3},
+    "0.85-0.90": {"n":12,"wins":3,"losses":9,"totalR":-3.6,"expectancyR":-0.3},
+    "0.80-0.85": {"n":3,"wins":0,"losses":3,"totalR":-3.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":49,"wins":22,"losses":27,"totalR":12.6,"expectancyR":0.2571428571428572},
+    "2-4bps": {"n":64,"wins":16,"losses":48,"totalR":-19.2,"expectancyR":-0.3},
+    "0.5-1bps": {"n":13,"wins":3,"losses":10,"totalR":-4.6,"expectancyR":-0.35384615384615387},
+    "<0.5bps": {"n":8,"wins":1,"losses":7,"totalR":-5.2,"expectancyR":-0.65}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":93,"wins":31,"losses":62,"totalR":-6.2,"expectancyR":-0.06666666666666661},
+    "MIXED": {"n":28,"wins":8,"losses":20,"totalR":-5.6,"expectancyR":-0.2},
+    "BREAKOUT": {"n":8,"wins":2,"losses":6,"totalR":-2.4,"expectancyR":-0.3},
+    "TREND": {"n":5,"wins":1,"losses":4,"totalR":-2.2,"expectancyR":-0.44}
+  },
+  "volatility": {
+    "EXTREME_VOL": {"n":133,"wins":41,"losses":92,"totalR":-18.2,"expectancyR":-0.13684210526315782},
+    "HIGH_VOL": {"n":1,"wins":1,"losses":0,"totalR":1.8,"expectancyR":1.8}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":82,"wins":21,"losses":61,"totalR":-23.2,"expectancyR":-0.28292682926829266},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":82,"wins":21,"losses":61,"totalR":-23.2,"expectancyR":-0.28292682926829266},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":28,"wins":8,"losses":20,"totalR":-5.6,"expectancyR":-0.2},
+    "SPREAD_LT_1BPS": {"n":21,"wins":4,"losses":17,"totalR":-9.8,"expectancyR":-0.4666666666666667},
+    "NO_15M": {"n":108,"wins":36,"losses":72,"totalR":-7.2,"expectancyR":-0.06666666666666667},
+    "TIMEFRAME_1M_ONLY": {"n":50,"wins":16,"losses":34,"totalR":-5.2,"expectancyR":-0.104}
+  },
+  "pathProfile": {
+    "winners": {"n":42,"avgMfeR":2.0569777488120264,"avgMaeR":-0.28922538889941,"avgHoldMin":26.03665},
+    "losers": {"n":92,"avgMfeR":0.3605559786865522,"avgMaeR":-1.2501414376603774,"avgHoldMin":22.22788478260869}
+  },
+  "nearTpReversal": {"thresholdProgress":0.7,"count":7,"shareOfLosers":0.07608695652173914,"totalFinalR":-7,"avgMfeR":1.5148159701233972,"avgTpProgress":0.8415644278463318},
+  "researchInterpretation": {
+    "baselineStillNegative": true,
+    "be05OnlyExitShadowNearFlatPositive": true,
+    "strongestObservedSpreadBand": "1-2bps",
+    "highestHunterScoreNotMonotonicWithExpectancy": true,
+    "simpleMomentumGateFailed": true,
+    "simpleSpreadUnder1bpsGateFailed": true,
+    "notes": "Do not promote any single subgroup directly to live. Use shrinkage and forward validation because feature groups are correlated and market regime is concentrated in EXTREME_VOL."
+  }
+}
