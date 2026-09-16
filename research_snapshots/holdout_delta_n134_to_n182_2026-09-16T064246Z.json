@@ -1,0 +1,60 @@
+{
+  "kind": "EXPECTED_R_PROSPECTIVE_HOLDOUT_DELTA",
+  "mode": "PROSPECTIVE_SHADOW_ONLY",
+  "deployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "trainingSnapshot": "research_snapshots/hunter_forward_n134_2026-09-16T060849Z.json",
+  "laterSnapshot": "research_snapshots/hunter_forward_n182_2026-09-16T064246Z.json",
+  "trainClosed": 134,
+  "laterClosed": 182,
+  "holdout": {"n":48,"wins":20,"losses":28,"totalR":8.0,"expectancyR":0.16666666666666666},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":48,"wins":20,"losses":28,"breakeven":0,"totalR":8.0,"expectancyR":0.16666666666666666},
+    "BE_AFTER_0.5R": {"n":48,"wins":12,"losses":11,"breakeven":25,"totalR":10.6,"expectancyR":0.22083333333333333,"liftVsOriginalR":0.05416666666666667},
+    "BE_AFTER_1R": {"n":48,"wins":17,"losses":20,"breakeven":11,"totalR":10.6,"expectancyR":0.22083333333333333,"liftVsOriginalR":0.05416666666666667},
+    "TRAIL_1R_AFTER_1.5R": {"n":48,"wins":21,"losses":27,"breakeven":0,"totalR":5.134190269310513,"expectancyR":0.10696229727730235,"liftVsOriginalR":-0.05970436938936431}
+  },
+  "timeframe": {
+    "1m": {"n":16,"wins":6,"losses":10,"totalR":0.8,"expectancyR":0.05},
+    "5m": {"n":19,"wins":9,"losses":10,"totalR":6.2,"expectancyR":0.3263157894736842},
+    "15m": {"n":13,"wins":5,"losses":8,"totalR":1.0,"expectancyR":0.07692307692307693}
+  },
+  "side": {
+    "SELL": {"n":24,"wins":13,"losses":11,"totalR":12.4,"expectancyR":0.5166666666666667},
+    "BUY": {"n":24,"wins":7,"losses":17,"totalR":-4.4,"expectancyR":-0.18333333333333332}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":11,"wins":4,"losses":7,"totalR":0.2,"expectancyR":0.018181818181818184},
+    "1.00-1.05": {"n":24,"wins":11,"losses":13,"totalR":6.8,"expectancyR":0.2833333333333333},
+    "0.95-1.00": {"n":13,"wins":5,"losses":8,"totalR":1.0,"expectancyR":0.07692307692307693},
+    "0.85-0.90": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null},
+    "0.80-0.85": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":18,"wins":7,"losses":11,"totalR":1.6,"expectancyR":0.08888888888888889},
+    "2-4bps": {"n":21,"wins":8,"losses":13,"totalR":1.4,"expectancyR":0.06666666666666667},
+    "0.5-1bps": {"n":4,"wins":2,"losses":2,"totalR":1.6,"expectancyR":0.4},
+    "<0.5bps": {"n":5,"wins":3,"losses":2,"totalR":3.4,"expectancyR":0.68}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":40,"wins":18,"losses":22,"totalR":10.4,"expectancyR":0.26},
+    "MIXED": {"n":6,"wins":2,"losses":4,"totalR":-0.4,"expectancyR":-0.06666666666666667},
+    "BREAKOUT": {"n":2,"wins":0,"losses":2,"totalR":-2.0,"expectancyR":-1.0},
+    "TREND": {"n":0,"wins":0,"losses":0,"totalR":0.0,"expectancyR":null}
+  },
+  "shadowGates": {
+    "MOMENTUM_ALIGNED_ONLY": {"n":22,"wins":8,"losses":14,"totalR":0.4,"expectancyR":0.018181818181818184},
+    "NO_COUNTERTREND_EXTREME_VOL": {"n":22,"wins":8,"losses":14,"totalR":0.4,"expectancyR":0.018181818181818184},
+    "STRUCTURE_EDGE_CONSISTENT": {"n":6,"wins":2,"losses":4,"totalR":-0.4,"expectancyR":-0.06666666666666667},
+    "SPREAD_LT_1BPS": {"n":9,"wins":5,"losses":4,"totalR":5.0,"expectancyR":0.5555555555555556},
+    "NO_15M": {"n":35,"wins":15,"losses":20,"totalR":7.0,"expectancyR":0.2},
+    "TIMEFRAME_1M_ONLY": {"n":16,"wins":6,"losses":10,"totalR":0.8,"expectancyR":0.05}
+  },
+  "hypothesisStatus": {
+    "H1_SPREAD_1_2_BPS": {"holdoutN":18,"minimumN":30,"status":"TOO_EARLY","observedExpectancyR":0.08888888888888889},
+    "H2_SCORE_090_095": {"holdoutN":11,"minimumN":20,"status":"TOO_EARLY","observedExpectancyR":0.018181818181818184},
+    "H3_BE_AFTER_05R": {"holdoutN":48,"minimumN":80,"status":"TOO_EARLY","observedExpectancyR":0.22083333333333333,"liftVsOriginalR":0.05416666666666667},
+    "H4_SIDE_ASYMMETRY": {"sellN":24,"buyN":24,"minimumNPerSide":25,"status":"TOO_EARLY","sellExpectancyR":0.5166666666666667,"buyExpectancyR":-0.18333333333333332},
+    "H5_15M_WEAKNESS": {"holdoutN15m":13,"minimumN15m":15,"status":"TOO_EARLY","expectancy15mR":0.07692307692307693,"expectancy1mR":0.05,"expectancy5mR":0.3263157894736842}
+  },
+  "conclusion": "All preregistered hypotheses remain below their required prospective sample thresholds. H4 is one observation per side short; H5 is two 15m observations short. Keep live logic unchanged and continue the frozen holdout."
+}
