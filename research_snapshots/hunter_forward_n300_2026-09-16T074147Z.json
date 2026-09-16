@@ -1,0 +1,46 @@
+{
+  "kind": "HUNTER_FORWARD_RESEARCH_SNAPSHOT",
+  "observationalOnly": true,
+  "capturedFromDeployment": "fa89695f-dffc-47e7-91ce-40f97fd9106d",
+  "sourceTimestampUtc": "2026-09-16T07:41:47.706514765Z",
+  "samplingMode": "ONE_OPEN_LIFECYCLE_PER_SYMBOL_SIDE_TIMEFRAME",
+  "closed": 300,
+  "open": 111,
+  "baseline": {"wins":95,"losses":205,"totalR":-34.0,"winRate":0.31666666666666665,"expectancyR":-0.11333333333333316},
+  "exitPolicyShadow": {
+    "ORIGINAL_TP_SL": {"n":300,"wins":95,"losses":205,"breakeven":0,"totalR":-34.0,"expectancyR":-0.11333333333333316},
+    "BE_AFTER_0.5R": {"n":300,"wins":74,"losses":134,"breakeven":92,"totalR":-0.8,"expectancyR":-0.0026666666666666215},
+    "BE_AFTER_1R": {"n":300,"wins":85,"losses":176,"breakeven":39,"totalR":-23.0,"expectancyR":-0.0766666666666666},
+    "TRAIL_1R_AFTER_1.5R": {"n":300,"wins":106,"losses":194,"breakeven":0,"totalR":-29.457918258976378,"expectancyR":-0.09819306086325459}
+  },
+  "timeframe": {
+    "5m": {"n":123,"wins":43,"losses":80,"totalR":-2.6,"expectancyR":-0.021138211382113855},
+    "15m": {"n":73,"wins":22,"losses":51,"totalR":-11.4,"expectancyR":-0.1561643835616438},
+    "1m": {"n":104,"wins":30,"losses":74,"totalR":-20.0,"expectancyR":-0.19230769230769226}
+  },
+  "side": {
+    "SELL": {"n":143,"wins":53,"losses":90,"totalR":5.4,"expectancyR":0.03776223776223777},
+    "BUY": {"n":157,"wins":42,"losses":115,"totalR":-39.4,"expectancyR":-0.2509554140127387}
+  },
+  "scoreBucket": {
+    "0.90-0.95": {"n":62,"wins":23,"losses":39,"totalR":2.4,"expectancyR":0.03870967741935481},
+    "1.00-1.05": {"n":140,"wins":45,"losses":95,"totalR":-14.0,"expectancyR":-0.1},
+    "0.95-1.00": {"n":74,"wins":21,"losses":53,"totalR":-15.2,"expectancyR":-0.2054054054054053},
+    "0.85-0.90": {"n":20,"wins":6,"losses":14,"totalR":-3.2,"expectancyR":-0.16},
+    "0.80-0.85": {"n":4,"wins":0,"losses":4,"totalR":-4.0,"expectancyR":-1.0}
+  },
+  "spreadBucket": {
+    "1-2bps": {"n":91,"wins":34,"losses":57,"totalR":4.2,"expectancyR":0.046153846153846254},
+    "2-4bps": {"n":156,"wins":45,"losses":111,"totalR":-30.0,"expectancyR":-0.19230769230769215},
+    "0.5-1bps": {"n":28,"wins":8,"losses":20,"totalR":-5.6,"expectancyR":-0.2},
+    "<0.5bps": {"n":24,"wins":8,"losses":16,"totalR":-1.6,"expectancyR":-0.0666666666666667},
+    "4bps+": {"n":1,"wins":0,"losses":1,"totalR":-1.0,"expectancyR":-1.0}
+  },
+  "shadowStructure": {
+    "RANGE": {"n":225,"wins":78,"losses":147,"totalR":-6.6,"expectancyR":-0.029333333333333322},
+    "MIXED": {"n":53,"wins":13,"losses":40,"totalR":-16.6,"expectancyR":-0.3132075471698113},
+    "BREAKOUT": {"n":14,"wins":3,"losses":11,"totalR":-5.6,"expectancyR":-0.4},
+    "TREND": {"n":8,"wins":1,"losses":7,"totalR":-5.2,"expectancyR":-0.65}
+  },
+  "note": "Intermediate N300 drift checkpoint after the frozen N250 anchor. Observational only; no live selection, exit, risk, leverage, max-open, or execution settings were changed."
+}
