@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test:v4": "node test/recovery_router_v4_capture_signal_only.test.js"
+    "test:v4": "node test/recovery_router_v4_capture_signal_only.test.js",
+    "test:hunter-live-gate": "node test/hunter_live_gate_v1.test.js"
   },
   "engines": {
     "node": ">=20"
