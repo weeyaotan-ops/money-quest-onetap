@@ -1,14 +1,15 @@
 'use strict';
 
 // Safety-only preload for Binance live execution.
-// 1) Hard STOP_MARKET orders default to priceProtect=false so a mark/contract
-//    dislocation cannot suppress a stop trigger. Set BINANCE_STOP_PRICE_PROTECT=1
-//    to restore the old behavior.
-// 2) Recompute closed-trade Actual-R from the actual sized risk emitted at entry.
+// IMPORTANT: never rewrite Binance request URLs here. Requests are already signed
+// before global.fetch() is called; changing any signed query parameter after that
+// invalidates the Binance signature.
+//
+// This preload only corrects closed-trade Actual-R from the actual sized risk
+// emitted at live execution. STOP/TP request parameters must be chosen inside the
+// gateway before signature generation.
 
-const STOP_PRICE_PROTECT=process.env.BINANCE_STOP_PRICE_PROTECT==='1';
 const actualRiskById=new Map();
-const originalFetch=global.fetch.bind(global);
 const originalLog=console.log.bind(console);
 
 function parse(prefix,args){
@@ -17,21 +18,6 @@ function parse(prefix,args){
     return i<0?null:JSON.parse(s.slice(i+prefix.length).trim());
   }catch{return null}
 }
-
-function rewriteStopProtect(input){
-  try{
-    const raw=typeof input==='string'?input:input instanceof URL?input.toString():null;
-    if(!raw||!raw.includes('/fapi/v1/algoOrder'))return input;
-    const u=new URL(raw);
-    if(String(u.searchParams.get('type')||'').toUpperCase()!=='STOP_MARKET')return input;
-    u.searchParams.set('priceProtect',STOP_PRICE_PROTECT?'TRUE':'FALSE');
-    return typeof input==='string'?u.toString():u;
-  }catch{return input}
-}
-
-global.fetch=function(input,init){
-  return originalFetch(rewriteStopProtect(input),init);
-};
 
 console.log=(...args)=>{
   try{
@@ -58,6 +44,6 @@ console.log=(...args)=>{
   return originalLog(...args);
 };
 
-originalLog('BINANCE_SAFETY_PRELOAD_READY',JSON.stringify({stopMarketPriceProtect:STOP_PRICE_PROTECT,actualRUsesActualSizedRisk:true}));
+originalLog('BINANCE_SAFETY_PRELOAD_READY',JSON.stringify({signedUrlMutation:false,actualRUsesActualSizedRisk:true}));
 
-module.exports={rewriteStopProtect};
+module.exports={signedUrlMutation:false};
