@@ -1,0 +1,19 @@
+name: Binance rate-limit safety v1
+on:
+  push:
+    branches: [binance-rate-limit-fix-v1]
+  pull_request:
+    branches: [exact-mirror-resting-v2]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node --check binance_rate_guard_preload_v1.js
+      - run: node --check real_money_ledger_preload.js
+      - run: node --check hunter_confirm_live_boot.js
+      - run: node test/binance_rate_guard_v1.test.js
+      - run: node test/resting_v2_policy.test.js
