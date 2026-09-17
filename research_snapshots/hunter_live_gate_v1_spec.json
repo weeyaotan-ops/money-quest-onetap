@@ -1,0 +1,16 @@
+{
+  "name": "HUNTER_LIVE_GATE_V1",
+  "mode": "OBSERVATIONAL_ONLY",
+  "goal": "Learn which live candidates should be avoided using realized live Actual-R evidence without changing execution.",
+  "proofGate": {
+    "minimumForwardSamples": 100,
+    "targetForwardSamples": 150,
+    "expectancyRGreaterThan": 0.10,
+    "profitFactorGreaterThan": 1.20,
+    "winRateMustBeStable": true,
+    "drawdownMustBeControlled": true
+  },
+  "features": ["recent", "symbol", "side", "regime", "symbol+side"],
+  "liveExecutionChanged": false,
+  "promotionRule": "No live filtering until a new forward live-matched holdout passes the proof gate."
+}
