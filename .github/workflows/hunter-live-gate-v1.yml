@@ -1,0 +1,25 @@
+name: Hunter Live Gate v1 CI
+
+on:
+  push:
+    branches: [hunter-live-gate-v1]
+  pull_request:
+    branches: [exact-mirror-resting-v2]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: |
+          node --check hunter_live_gate_v1.js
+          node --check hunter_live_gate_preload_v1.js
+          node --check hunter_confirm_live_boot.js
+      - name: Hunter Live Gate unit test
+        run: npm run test:hunter-live-gate
+      - name: Existing v4 regression test
+        run: npm run test:v4
