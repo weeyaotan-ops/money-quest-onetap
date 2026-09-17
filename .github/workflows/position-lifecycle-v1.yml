@@ -1,0 +1,20 @@
+name: Position lifecycle safety v1
+on:
+  push:
+    branches: [position-monitor-fix-v1]
+  pull_request:
+    paths:
+      - 'position_lifecycle_preload_v1.js'
+      - 'test/position_lifecycle_preload_v1.test.js'
+      - '.github/workflows/position-lifecycle-v1.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --check position_lifecycle_preload_v1.js
+      - run: node test/position_lifecycle_preload_v1.test.js
+      - run: node test/resting_v2_policy.test.js
