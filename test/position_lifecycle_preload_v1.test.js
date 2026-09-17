@@ -1,0 +1,12 @@
+'use strict';
+const fs=require('node:fs');
+const assert=require('node:assert');
+const src=fs.readFileSync(require.resolve('../position_lifecycle_preload_v1.js'),'utf8');
+assert(src.includes("path.basename(process.argv[1]||'')!=='binance_onetap_gateway.js'"),'must be inert outside gateway');
+assert(src.includes("method:'GET'"),'Binance access must be GET-only');
+assert(!src.includes("signed('POST'"),'must not contain signed Binance POST helper');
+assert(!src.includes("signed('DELETE'"),'must not contain signed Binance DELETE helper');
+assert(src.includes('autoExit:false'),'must declare no auto-exit');
+assert(src.includes('CONFIRMED_EXECUTION_SEED'),'must migrate historical seed rows');
+assert(src.includes('MIGRATED_GATE_CONFIRMED_CLOSED'),'must mark proven historical seed rows closed');
+console.log('POSITION_LIFECYCLE_PRELOAD_V1_TEST_PASS');
