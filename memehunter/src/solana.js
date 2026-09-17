@@ -1,6 +1,7 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { C, USDC_MINT } from './config.js';
+import { rugcheckSafety } from './rugcheck.js';
 
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const connection = new Connection(C.SOLANA_RPC_URL, { commitment: 'confirmed' });
@@ -83,6 +84,11 @@ export async function tokenSafety(mint) {
     return { ok: false, reason: 'HOLDER_CHECK_FAILED', error: e.message };
   }
 
+  const rugcheck = await rugcheckSafety(mint);
+  if (!rugcheck.ok) {
+    return { ok: false, reason: rugcheck.reason || 'RUGCHECK_BLOCK', rugcheck };
+  }
+
   return {
     ok: true,
     decimals,
@@ -91,5 +97,6 @@ export async function tokenSafety(mint) {
     top1Pct,
     top5Pct,
     ownerProgram,
+    rugcheck,
   };
 }
