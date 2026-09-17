@@ -7,6 +7,8 @@ const bool = (name, fallback = false) => {
   if (v == null || v === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
 };
+const csv = (name, fallback) => String(process.env[name] || fallback)
+  .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 
 export const C = Object.freeze({
   PORT: num('PORT', 3000),
@@ -46,6 +48,10 @@ export const C = Object.freeze({
   ALLOW_TOKEN_2022: bool('ALLOW_TOKEN_2022', false),
   MAX_TOP1_HOLDER_PCT: Math.min(100, Math.max(0, num('MAX_TOP1_HOLDER_PCT', 95))),
   MAX_TOP5_HOLDER_PCT: Math.min(100, Math.max(0, num('MAX_TOP5_HOLDER_PCT', 99.5))),
+
+  RUGCHECK_REQUIRED: bool('RUGCHECK_REQUIRED', true),
+  RUGCHECK_ALLOWED_LEVELS: csv('RUGCHECK_ALLOWED_LEVELS', 'good,warning'),
+  RUGCHECK_TIMEOUT_MS: Math.max(1_000, num('RUGCHECK_TIMEOUT_MS', 6_000)),
 
   MAX_ROUNDTRIP_LOSS_PCT: Math.max(0.5, num('MAX_ROUNDTRIP_LOSS_PCT', 5)),
   MAX_ENTRY_QUOTE_DETERIORATION_PCT: Math.max(0.5, num('MAX_ENTRY_QUOTE_DETERIORATION_PCT', 3)),
