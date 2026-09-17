@@ -1,6 +1,23 @@
 'use strict';
 const assert=require('node:assert');
-const {HunterLiveGateV1}=require('../hunter_live_gate_v1');
+const {HunterLiveGateV1,finiteNumber}=require('../hunter_live_gate_v1');
+
+// Regression: missing Actual-R must never be coerced into a fake 0R sample.
+assert.equal(finiteNumber(null),null);
+assert.equal(finiteNumber(undefined),null);
+assert.equal(finiteNumber(''),null);
+assert.equal(finiteNumber(0),0);
+assert.equal(finiteNumber('0'),0);
+
+const quality=new HunterLiveGateV1();
+assert.equal(quality.ingestClosedTrade({id:'missing-null',symbol:'XUSDT',actualR:null}),false);
+assert.equal(quality.ingestClosedTrade({id:'missing-undefined',symbol:'XUSDT'}),false);
+assert.equal(quality.ingestClosedTrade({id:'missing-empty',symbol:'XUSDT',actualR:''}),false);
+assert.equal(quality.history.length,0);
+assert.equal(quality.report().dataQuality.ignoredMissingActualR,3);
+assert.equal(quality.ingestClosedTrade({id:'real-zero',symbol:'XUSDT',actualR:0}),true);
+assert.equal(quality.history.length,1);
+assert.equal(quality.report().historicalBackfill.n,1);
 
 const g=new HunterLiveGateV1({minSamples:2,recentWindow:4,symbolWindow:6,sideWindow:6,minProfitFactor:.9,maxRecentDrawdownR:3});
 [
@@ -32,4 +49,4 @@ assert.equal(report.forward.rejected.totalR,-1.2);
 assert.equal(report.forward.pass.n,1);
 assert.equal(report.forward.pass.totalR,1.4);
 assert.ok(Number.isFinite(report.forward.baseline.expectancyR));
-console.log('hunter_live_gate_v1.test.js PASS',JSON.stringify({bad:bad.verdict,good:good.verdict,forward:report.forward}));
+console.log('hunter_live_gate_v1.test.js PASS',JSON.stringify({nullRegression:true,bad:bad.verdict,good:good.verdict,forward:report.forward}));

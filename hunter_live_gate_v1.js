@@ -6,6 +6,7 @@
 
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
 const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
+const finiteNumber=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null;
 
 class HunterLiveGateV1 {
   constructor(opts={}) {
@@ -20,12 +21,16 @@ class HunterLiveGateV1 {
     this.seenClosed=new Set();
     this.decisions=[];
     this.decisionById=new Map();
+    this.ignoredMissingActualR=0;
   }
 
   ingestClosedTrade(t){
     const id=String(t?.id||'');
-    const r=Number(t?.actualR);
-    if(!id||!Number.isFinite(r)||this.seenClosed.has(id)) return false;
+    const r=finiteNumber(t?.actualR);
+    if(!id||r===null||this.seenClosed.has(id)) {
+      if(id&&r===null&&!this.seenClosed.has(id)) this.ignoredMissingActualR++;
+      return false;
+    }
     const d=this.decisionById.get(id)||null;
     this.seenClosed.add(id);
     this.history.push({
@@ -36,7 +41,7 @@ class HunterLiveGateV1 {
       timeframe:String(t.timeframe||d?.timeframe||'UNKNOWN'),
       edge:String(t.edge||d?.edge||'UNKNOWN'),
       actualR:r,
-      netPnl:Number(t.netPnl),
+      netPnl:finiteNumber(t.netPnl),
       closedAt:t.closedAt||new Date().toISOString(),
       gateVerdict:d?.verdict||null,
       gateScore:Number.isFinite(Number(d?.score))?Number(d.score):null,
@@ -51,7 +56,7 @@ class HunterLiveGateV1 {
   }
 
   stats(xs){
-    const rs=xs.map(x=>Number(x.actualR)).filter(Number.isFinite);
+    const rs=xs.map(x=>finiteNumber(x.actualR)).filter(x=>x!==null);
     const wins=rs.filter(x=>x>0),losses=rs.filter(x=>x<0);
     const grossWin=wins.reduce((a,b)=>a+b,0),grossLoss=Math.abs(losses.reduce((a,b)=>a+b,0));
     let eq=0,peak=0,maxDD=0;
@@ -144,6 +149,7 @@ class HunterLiveGateV1 {
     const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected);
     return {
       name:'HUNTER_LIVE_GATE_V1',mode:'OBSERVATIONAL_ONLY',
+      dataQuality:{ignoredMissingActualR:this.ignoredMissingActualR,validClosedTrades:this.history.length},
       thresholds:{minSamples:this.minSamples,recentWindow:this.recentWindow,symbolWindow:this.symbolWindow,sideWindow:this.sideWindow,minExpectancyR:this.minExpectancyR,minProfitFactor:this.minProfitFactor,maxRecentDrawdownR:this.maxRecentDrawdownR},
       historicalBackfill:all,
       recent,
@@ -165,4 +171,4 @@ class HunterLiveGateV1 {
   }
 }
 
-module.exports={HunterLiveGateV1};
+module.exports={HunterLiveGateV1,finiteNumber};

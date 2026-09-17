@@ -9,6 +9,7 @@ const gate=new HunterLiveGateV1();
 const liveById=new Map();
 const PORT=String(process.env.PORT||process.env.BINANCE_ONETAP_PORT||8000);
 
+const hasFiniteActualR=t=>t&&t.actualR!==null&&t.actualR!==undefined&&t.actualR!==''&&Number.isFinite(Number(t.actualR));
 const originalLog=console.log.bind(console);
 function parse(prefix,args){
   try{
@@ -78,13 +79,14 @@ async function backfill(){
     const r=await fetch(`http://127.0.0.1:${PORT}/real-money/positions`,{cache:'no-store',signal:AbortSignal.timeout(5000)});
     if(!r.ok)throw Error('REAL_MONEY_'+r.status);
     const j=await r.json(),xs=Array.isArray(j.trades)?j.trades:[];
-    let added=0;
+    let added=0,ignoredMissingActualR=0;
     for(const t of xs){
-      if(t.status!=='CLOSED'||!Number.isFinite(Number(t.actualR)))continue;
+      if(t.status!=='CLOSED')continue;
+      if(!hasFiniteActualR(t)){ignoredMissingActualR++;continue}
       if(gate.ingestClosedTrade(t))added++;
     }
     lastBackfill=new Date().toISOString();
-    originalLog('HUNTER_LIVE_GATE_BACKFILL',JSON.stringify({source:'REAL_MONEY_LEDGER',seen:xs.length,added,totalClosed:gate.history.length,lastBackfill}));
+    originalLog('HUNTER_LIVE_GATE_BACKFILL',JSON.stringify({source:'REAL_MONEY_LEDGER',seen:xs.length,added,ignoredMissingActualR,totalClosed:gate.history.length,lastBackfill}));
   }catch(e){originalLog('HUNTER_LIVE_GATE_BACKFILL_ERR',String(e?.message||e))}
   finally{backfilling=false}
 }
@@ -93,4 +95,4 @@ setTimeout(backfill,10000).unref();
 setInterval(backfill,60000).unref();
 originalLog('HUNTER_LIVE_GATE_V1_READY',JSON.stringify({mode:'OBSERVATIONAL_ONLY',report:'/hunter-live-gate/report',observe:'/hunter-live-gate/observe-candidate',backfill:'/real-money/positions',liveExecutionChanged:false}));
 
-module.exports={gate,backfill};
+module.exports={gate,backfill,hasFiniteActualR};
