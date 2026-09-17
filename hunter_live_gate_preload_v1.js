@@ -6,12 +6,14 @@
 
 const http=require('node:http');
 const crypto=require('node:crypto');
+const fs=require('node:fs');
+const fsp=require('node:fs/promises');
+const pathMod=require('node:path');
 const {HunterLiveGateV1}=require('./hunter_live_gate_v1');
 const gate=new HunterLiveGateV1();
 const liveById=new Map();
 const PORT=String(process.env.PORT||process.env.BINANCE_ONETAP_PORT||8000);
-const STORE_URL=String(process.env.HUNTER_GATE_STATE_URL||'http://signal-analytics-engine.railway.internal:9011/state');
-const STORE_TOKEN=String(process.env.HUNTER_GATE_STATE_TOKEN||'');
+const STATE_FILE=String(process.env.HUNTER_GATE_STATE_FILE||'/data/hunter_live_gate_v1.json');
 const REST=String(process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com').replace(/\/$/,'');
 const API_KEY=String(process.env.BINANCE_API_KEY||'');
 const PRIV=String(process.env.BINANCE_ED25519_PRIVATE_KEY_PEM||'');
@@ -72,53 +74,39 @@ function restoreState(x){
   liveById.clear();
   if(Array.isArray(x?.live))for(const t of x.live)if(t&&t.id)liveById.set(String(t.id),t);
 }
-function snapshot(){
-  return {version:1,history:gate.history.slice(-5000),decisions:gate.decisions.slice(-5000),live:[...liveById.values()].slice(-5000),ignoredMissingActualR:gate.ignoredMissingActualR};
-}
-function addBootstrapDecisions(){
-  let added=0;
-  for(const d of bootstrapDecisions){
-    if(gate.decisionById.has(d.id))continue;
-    gate.decisions.push(d);gate.decisionById.set(d.id,d);added++;
-  }
-  return added;
-}
+function snapshot(){return {version:1,history:gate.history.slice(-5000),decisions:gate.decisions.slice(-5000),live:[...liveById.values()].slice(-5000),ignoredMissingActualR:gate.ignoredMissingActualR}}
+function addBootstrapDecisions(){let added=0;for(const d of bootstrapDecisions){if(gate.decisionById.has(d.id))continue;gate.decisions.push(d);gate.decisionById.set(d.id,d);added++}return added}
 async function loadPersistent(force=false){
   if(persistentLoaded&&!force)return true;
   if(loadInFlight)return loadInFlight;
-  if(!STORE_TOKEN){lastPersistError='STATE_TOKEN_MISSING';return false}
   loadAttempted=true;
   loadInFlight=(async()=>{
     try{
-      const r=await fetch(STORE_URL,{headers:{authorization:`Bearer ${STORE_TOKEN}`},cache:'no-store',signal:AbortSignal.timeout(3500)});
-      if(!r.ok)throw Error('STATE_GET_'+r.status);
-      const x=await r.json();
+      let x={version:1,history:[],decisions:[],live:[],ignoredMissingActualR:0};
+      if(fs.existsSync(STATE_FILE))x=JSON.parse(await fsp.readFile(STATE_FILE,'utf8'));
       restoreState(x);
       const bootstrapAdded=addBootstrapDecisions();
       persistentLoaded=true;lastLoad=new Date().toISOString();lastPersistError=null;
-      originalLog('HUNTER_GATE_STATE_LOADED',JSON.stringify({history:gate.history.length,decisions:gate.decisions.length,live:liveById.size,bootstrapAdded,lastLoad}));
-      if(bootstrapAdded)scheduleSave();
+      originalLog('HUNTER_GATE_STATE_LOADED',JSON.stringify({history:gate.history.length,decisions:gate.decisions.length,live:liveById.size,bootstrapAdded,lastLoad,file:STATE_FILE}));
+      if(bootstrapAdded||!fs.existsSync(STATE_FILE))scheduleSave();
       return true;
     }catch(e){lastPersistError=String(e?.message||e);originalWarn('HUNTER_GATE_STATE_LOAD_ERR',lastPersistError);return false}
   })();
   try{return await loadInFlight}finally{loadInFlight=null}
 }
 async function persistNow(){
-  if(!persistentLoaded||!STORE_TOKEN)return false;
+  if(!persistentLoaded)return false;
   if(saving){saveAgain=true;return false}
   saving=true;
   try{
-    const r=await fetch(STORE_URL,{method:'PUT',headers:{authorization:`Bearer ${STORE_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(snapshot()),signal:AbortSignal.timeout(5000)});
-    if(!r.ok)throw Error('STATE_PUT_'+r.status);
+    await fsp.mkdir(pathMod.dirname(STATE_FILE),{recursive:true});
+    const tmp=STATE_FILE+'.tmp',body=JSON.stringify({...snapshot(),savedAt:new Date().toISOString()});
+    await fsp.writeFile(tmp,body);await fsp.rename(tmp,STATE_FILE);
     lastSave=new Date().toISOString();lastPersistError=null;return true;
   }catch(e){lastPersistError=String(e?.message||e);originalWarn('HUNTER_GATE_STATE_SAVE_ERR',lastPersistError);return false}
   finally{saving=false;if(saveAgain){saveAgain=false;scheduleSave(250)}}
 }
-function scheduleSave(ms=1000){
-  if(!persistentLoaded)return;
-  if(saveTimer)clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{saveTimer=null;persistNow().catch(()=>{})},ms);saveTimer.unref?.();
-}
+function scheduleSave(ms=1000){if(!persistentLoaded)return;if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveTimer=null;persistNow().catch(()=>{})},ms);saveTimer.unref?.()}
 addBootstrapDecisions();
 const loadPromise=loadPersistent(false);
 setInterval(()=>{if(!persistentLoaded)loadPersistent(false).catch(()=>{})},30000).unref();
@@ -221,7 +209,7 @@ http.createServer=function(...args){
       const path=String(req.url||'').split('?')[0];
       if(req.method==='GET'&&path==='/hunter-live-gate/report'){
         await loadPersistent(false);
-        return json(res,200,{ok:true,...gate.report(),persistence:{configured:Boolean(STORE_TOKEN),loaded:persistentLoaded,loadAttempted,lastLoad,lastSave,lastError:lastPersistError,store:'INTERNAL_PERSISTENT_VOLUME'},riskRecovery:{source:'BINANCE_ALGO_SL',batch:MAX_RISK_RECOVER_PER_BACKFILL}});
+        return json(res,200,{ok:true,...gate.report(),persistence:{configured:true,loaded:persistentLoaded,loadAttempted,lastLoad,lastSave,lastError:lastPersistError,store:'RAILWAY_VOLUME',file:STATE_FILE},riskRecovery:{source:'BINANCE_ALGO_SL',batch:MAX_RISK_RECOVER_PER_BACKFILL}});
       }
       if(req.method==='POST'&&path==='/hunter-live-gate/observe-candidate'){
         try{
@@ -268,6 +256,6 @@ async function backfill(){
 
 setTimeout(backfill,10000).unref();
 setInterval(backfill,60000).unref();
-originalLog('HUNTER_LIVE_GATE_V1_READY',JSON.stringify({mode:'OBSERVATIONAL_ONLY',report:'/hunter-live-gate/report',observe:'/hunter-live-gate/observe-candidate',backfill:'/real-money/positions',persistence:'INTERNAL_PERSISTENT_VOLUME',riskRecovery:'BINANCE_ALGO_SL',liveExecutionChanged:false}));
+originalLog('HUNTER_LIVE_GATE_V1_READY',JSON.stringify({mode:'OBSERVATIONAL_ONLY',report:'/hunter-live-gate/report',observe:'/hunter-live-gate/observe-candidate',backfill:'/real-money/positions',persistence:'RAILWAY_VOLUME',riskRecovery:'BINANCE_ALGO_SL',liveExecutionChanged:false}));
 
 module.exports={gate,backfill,hasFiniteActualR,loadPersistent,persistNow,recoverActualR,canonicalTrade,safeId};
