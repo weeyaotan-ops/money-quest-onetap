@@ -1,8 +1,8 @@
 'use strict';
 
 // Observational-only live selection gate for Money Hunter.
-// This module MUST NOT change live order placement. It only scores/reports
-// whether a live candidate would have been accepted or rejected.
+// It NEVER changes order placement. It only records a counterfactual PASS/WATCH/REJECT
+// decision, then joins that decision to the realized live Actual-R after the trade closes.
 
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
 const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
@@ -17,29 +17,49 @@ class HunterLiveGateV1 {
     this.minProfitFactor=Number(opts.minProfitFactor??0.9);
     this.maxRecentDrawdownR=Number(opts.maxRecentDrawdownR??6);
     this.history=[];
+    this.seenClosed=new Set();
     this.decisions=[];
+    this.decisionById=new Map();
   }
 
   ingestClosedTrade(t){
+    const id=String(t?.id||'');
     const r=Number(t?.actualR);
-    if(!Number.isFinite(r)) return false;
+    if(!id||!Number.isFinite(r)||this.seenClosed.has(id)) return false;
+    const d=this.decisionById.get(id)||null;
+    this.seenClosed.add(id);
     this.history.push({
-      id:String(t.id||''),symbol:String(t.symbol||'UNKNOWN'),side:String(t.side||'UNKNOWN'),
-      regime:String(t.regime||t.shadowStructureRegime||'UNKNOWN'),actualR:r,
-      netPnl:Number(t.netPnl),closedAt:t.closedAt||new Date().toISOString()
+      id,
+      symbol:String(t.symbol||d?.symbol||'UNKNOWN'),
+      side:String(t.side||d?.side||'UNKNOWN'),
+      regime:String(t.regime||t.shadowStructureRegime||d?.regime||'UNKNOWN'),
+      timeframe:String(t.timeframe||d?.timeframe||'UNKNOWN'),
+      edge:String(t.edge||d?.edge||'UNKNOWN'),
+      actualR:r,
+      netPnl:Number(t.netPnl),
+      closedAt:t.closedAt||new Date().toISOString(),
+      gateVerdict:d?.verdict||null,
+      gateScore:Number.isFinite(Number(d?.score))?Number(d.score):null,
+      gateReasons:Array.isArray(d?.reasons)?d.reasons:[],
+      forwardMatched:Boolean(d)
     });
-    if(this.history.length>5000)this.history.splice(0,this.history.length-5000);
+    if(this.history.length>5000){
+      const removed=this.history.splice(0,this.history.length-5000);
+      for(const x of removed)this.seenClosed.delete(x.id);
+    }
     return true;
   }
 
   stats(xs){
     const rs=xs.map(x=>Number(x.actualR)).filter(Number.isFinite);
-    const wins=rs.filter(x=>x>0), losses=rs.filter(x=>x<0);
-    const grossWin=wins.reduce((a,b)=>a+b,0), grossLoss=Math.abs(losses.reduce((a,b)=>a+b,0));
+    const wins=rs.filter(x=>x>0),losses=rs.filter(x=>x<0);
+    const grossWin=wins.reduce((a,b)=>a+b,0),grossLoss=Math.abs(losses.reduce((a,b)=>a+b,0));
     let eq=0,peak=0,maxDD=0;
     for(const r of rs){eq+=r;peak=Math.max(peak,eq);maxDD=Math.max(maxDD,peak-eq)}
     return {
       n:rs.length,
+      wins:wins.length,
+      losses:losses.length,
       winRate:rs.length?wins.length/rs.length:0,
       expectancyR:mean(rs),
       profitFactor:grossLoss?grossWin/grossLoss:(grossWin>0?Infinity:0),
@@ -49,11 +69,17 @@ class HunterLiveGateV1 {
   }
 
   scoreCandidate(c){
-    const symbol=String(c?.symbol||'UNKNOWN'), side=String(c?.side||'UNKNOWN'), regime=String(c?.regime||c?.shadowStructureRegime||'UNKNOWN');
+    const id=String(c?.id||'');
+    if(id&&this.decisionById.has(id))return this.decisionById.get(id);
+    const symbol=String(c?.symbol||'UNKNOWN');
+    const side=String(c?.side||'UNKNOWN');
+    const regime=String(c?.regime||c?.shadowStructureRegime||'UNKNOWN');
+    const timeframe=String(c?.timeframe||'UNKNOWN');
+    const edge=String(c?.edge||c?.setup||'UNKNOWN');
     const recent=this.history.slice(-this.recentWindow);
     const sym=this.history.filter(x=>x.symbol===symbol).slice(-this.symbolWindow);
     const sd=this.history.filter(x=>x.side===side).slice(-this.sideWindow);
-    const rg=this.history.filter(x=>x.regime===regime).slice(-this.sideWindow);
+    const rg=this.history.filter(x=>x.regime===regime&&regime!=='UNKNOWN').slice(-this.sideWindow);
     const sr=this.history.filter(x=>x.symbol===symbol&&x.side===side).slice(-this.symbolWindow);
     const scopes={recent:this.stats(recent),symbol:this.stats(sym),side:this.stats(sd),regime:this.stats(rg),symbolSide:this.stats(sr)};
 
@@ -62,29 +88,29 @@ class HunterLiveGateV1 {
     const add=(delta,reason)=>{score+=delta;reasons.push(reason)};
 
     if(scopes.recent.n>=this.minSamples){
-      if(scopes.recent.expectancyR<0)add(-0.18,'RECENT_NEGATIVE_EXPECTANCY');
+      if(scopes.recent.expectancyR<this.minExpectancyR)add(-0.18,'RECENT_NEGATIVE_EXPECTANCY');
       else add(+0.10,'RECENT_POSITIVE_EXPECTANCY');
       if(scopes.recent.profitFactor<this.minProfitFactor)add(-0.10,'RECENT_LOW_PF');
       if(scopes.recent.maxDrawdownR>this.maxRecentDrawdownR)add(-0.12,'RECENT_HIGH_DRAWDOWN');
-    } else reasons.push('RECENT_SAMPLE_SMALL');
+    }else reasons.push('RECENT_SAMPLE_SMALL');
 
     if(scopes.symbol.n>=this.minSamples){
-      if(scopes.symbol.expectancyR<0)add(-0.15,'SYMBOL_NEGATIVE_EXPECTANCY');
+      if(scopes.symbol.expectancyR<this.minExpectancyR)add(-0.15,'SYMBOL_NEGATIVE_EXPECTANCY');
       else add(+0.08,'SYMBOL_POSITIVE_EXPECTANCY');
-    } else reasons.push('SYMBOL_SAMPLE_SMALL');
+    }else reasons.push('SYMBOL_SAMPLE_SMALL');
 
     if(scopes.symbolSide.n>=Math.max(6,Math.floor(this.minSamples/2))){
-      if(scopes.symbolSide.expectancyR<0)add(-0.18,'SYMBOL_SIDE_NEGATIVE_EXPECTANCY');
+      if(scopes.symbolSide.expectancyR<this.minExpectancyR)add(-0.18,'SYMBOL_SIDE_NEGATIVE_EXPECTANCY');
       else add(+0.10,'SYMBOL_SIDE_POSITIVE_EXPECTANCY');
     }
 
     if(scopes.side.n>=this.minSamples){
-      if(scopes.side.expectancyR<0)add(-0.08,'SIDE_NEGATIVE_EXPECTANCY');
+      if(scopes.side.expectancyR<this.minExpectancyR)add(-0.08,'SIDE_NEGATIVE_EXPECTANCY');
       else add(+0.04,'SIDE_POSITIVE_EXPECTANCY');
     }
 
     if(scopes.regime.n>=this.minSamples){
-      if(scopes.regime.expectancyR<0)add(-0.12,'REGIME_NEGATIVE_EXPECTANCY');
+      if(scopes.regime.expectancyR<this.minExpectancyR)add(-0.12,'REGIME_NEGATIVE_EXPECTANCY');
       else add(+0.06,'REGIME_POSITIVE_EXPECTANCY');
     }
 
@@ -93,28 +119,48 @@ class HunterLiveGateV1 {
     if(score>=0.62)verdict='PASS';
     else if(score<=0.38)verdict='REJECT';
 
-    // Fail-safe: observational only. Never mutate or block candidate execution.
     const decision={
-      at:new Date().toISOString(),symbol,side,regime,score,verdict,reasons,scopes,
+      id,at:new Date().toISOString(),symbol,side,regime,timeframe,edge,
+      score,verdict,reasons,scopes,
       observationalOnly:true,liveExecutionChanged:false
     };
     this.decisions.push(decision);
-    if(this.decisions.length>2000)this.decisions.splice(0,this.decisions.length-2000);
+    if(id)this.decisionById.set(id,decision);
+    if(this.decisions.length>5000){
+      const removed=this.decisions.splice(0,this.decisions.length-5000);
+      for(const x of removed)if(x.id&&this.decisionById.get(x.id)===x)this.decisionById.delete(x.id);
+    }
     return decision;
   }
 
   report(){
     const all=this.stats(this.history);
     const recent=this.stats(this.history.slice(-this.recentWindow));
-    const rejected=this.decisions.filter(x=>x.verdict==='REJECT');
-    const passed=this.decisions.filter(x=>x.verdict==='PASS');
+    const matched=this.history.filter(x=>x.forwardMatched);
+    const rejected=matched.filter(x=>x.gateVerdict==='REJECT');
+    const kept=matched.filter(x=>x.gateVerdict!=='REJECT');
+    const passed=matched.filter(x=>x.gateVerdict==='PASS');
+    const watched=matched.filter(x=>x.gateVerdict==='WATCH');
+    const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected);
     return {
       name:'HUNTER_LIVE_GATE_V1',mode:'OBSERVATIONAL_ONLY',
       thresholds:{minSamples:this.minSamples,recentWindow:this.recentWindow,symbolWindow:this.symbolWindow,sideWindow:this.sideWindow,minExpectancyR:this.minExpectancyR,minProfitFactor:this.minProfitFactor,maxRecentDrawdownR:this.maxRecentDrawdownR},
-      all,recent,
-      decisions:this.decisions.length,
-      pass:passed.length,reject:rejected.length,watch:this.decisions.length-passed.length-rejected.length,
-      latest:this.decisions.slice(-50).reverse()
+      historicalBackfill:all,
+      recent,
+      forward:{
+        decisions:this.decisions.length,
+        matched:matched.length,
+        baseline,
+        kept:keptStats,
+        rejected:rejectedStats,
+        pass:this.stats(passed),
+        watch:this.stats(watched),
+        expectancyUpliftR:baseline.n&&keptStats.n?keptStats.expectancyR-baseline.expectancyR:null,
+        rejectedTotalR:rejectedStats.totalR,
+        proofProgress:{minimum:100,target:150,current:matched.length}
+      },
+      latest:this.decisions.slice(-50).reverse(),
+      liveExecutionChanged:false
     };
   }
 }
