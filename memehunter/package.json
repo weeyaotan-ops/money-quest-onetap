@@ -1,0 +1,19 @@
+{
+  "name": "solana-memehunter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/engine.js && node --check src/jupiter.js && node --check src/solana.js && node --check src/discovery.js && node --check src/db.js",
+    "wallet:new": "node scripts/create-wallet.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@solana/web3.js": "1.99.0",
+    "bs58": "6.0.0",
+    "pg": "8.23.0"
+  }
+}
