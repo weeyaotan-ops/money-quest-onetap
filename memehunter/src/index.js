@@ -12,6 +12,7 @@ function json(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
   });
   res.end(JSON.stringify(body));
 }
@@ -24,22 +25,23 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (req.method === 'GET' && url.pathname === '/health') {
-      return json(res, ready ? 200 : 503, { ok: ready, fatal: fatal || undefined });
+      return json(res, ready ? 200 : 503, { ok: ready });
     }
     if (req.method === 'GET' && url.pathname === '/status') {
-      if (!ready) return json(res, 503, { ok: false, fatal });
+      if (!authorized(req)) return json(res, 403, { ok: false });
+      if (!ready) return json(res, 503, { ok: false });
       return json(res, 200, await hunter.status());
     }
     if (req.method === 'POST' && url.pathname === '/pause') {
       if (!authorized(req)) return json(res, 403, { ok: false });
       await hunter.pause('ADMIN_HTTP');
-      await notify('🛑 MEMEHUNTER PAUSED BY ADMIN');
+      await notify('MEMEHUNTER PAUSED BY ADMIN');
       return json(res, 200, { ok: true, paused: true });
     }
     if (req.method === 'POST' && url.pathname === '/resume') {
       if (!authorized(req)) return json(res, 403, { ok: false });
       await hunter.resume('ADMIN_HTTP');
-      await notify('▶️ MEMEHUNTER RESUMED BY ADMIN');
+      await notify('MEMEHUNTER RESUMED BY ADMIN');
       return json(res, 200, { ok: true, paused: false });
     }
     return json(res, 404, { ok: false, error: 'not_found' });
