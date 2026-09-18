@@ -156,6 +156,8 @@ async function backfill(){
     if(added>0)saveState();
     lastBackfill=new Date().toISOString();
     originalLog('HUNTER_LIVE_GATE_BACKFILL',JSON.stringify({source:'REAL_MONEY_LEDGER',seen:xs.length,added,ignoredMissingActualR,totalClosed:gate.history.length,lastBackfill,persistent:true}));
+    const snapshot=gate.report();
+    originalLog('HUNTER_LIVE_GATE_EVIDENCE_SNAPSHOT',JSON.stringify({validClosed:snapshot.dataQuality.validClosedTrades,recent:snapshot.recent,evidence:snapshot.evidence,forward:snapshot.forward}));
   }catch(e){originalLog('HUNTER_LIVE_GATE_BACKFILL_ERR',String(e?.message||e))}
   finally{backfilling=false}
 }
