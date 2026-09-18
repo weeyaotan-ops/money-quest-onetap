@@ -96,7 +96,7 @@ async function reconcile(){
           const endTime=next?Number(next.time||next.updateTime)-1:Date.now();
           const z=calcFills(fills,entryTime-5000,endTime);
           if(!z.xs.length)continue;
-          const closedAt=new Date(Math.max(...z.xs.map(f=>Number(f.time)||0)).toISOString();
+          const closedAt=new Date(Math.max(...z.xs.map(f=>Number(f.time)||0))).toISOString();
           const patch={
             status:'CLOSED',
             openedAt:new Date(entryTime).toISOString(),
