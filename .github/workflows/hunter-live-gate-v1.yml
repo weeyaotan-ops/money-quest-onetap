@@ -21,5 +21,7 @@ jobs:
           node --check hunter_confirm_live_boot.js
       - name: Hunter Live Gate unit test
         run: npm run test:hunter-live-gate
+      - name: Live metadata continuity test
+        run: node test/live_metadata_continuity_v1.test.js
       - name: Existing v4 regression test
         run: npm run test:v4
