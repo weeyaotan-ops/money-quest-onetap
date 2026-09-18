@@ -17,4 +17,7 @@ jobs:
           node-version: 20
       - run: node --check position_lifecycle_preload_v1.js
       - run: node test/position_lifecycle_preload_v1.test.js
+      - run: node --check real_money_ledger_preload.js
+      - run: node --check real_money_exit_evidence_v1.js
+      - run: node test/real_money_exit_evidence_v1.test.js
       - run: node test/resting_v2_policy.test.js
