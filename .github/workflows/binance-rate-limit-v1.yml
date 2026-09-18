@@ -14,6 +14,8 @@ jobs:
           node-version: '20'
       - run: node --check binance_rate_guard_preload_v1.js
       - run: node --check real_money_ledger_preload.js
+      - run: node --check exit_excursion_sampler_v1.js
+      - run: node test/exit_excursion_sampler_v1.test.js
       - run: node --check hunter_confirm_live_boot.js
       - run: node test/binance_rate_guard_v1.test.js
       - run: node test/binance_preview_burst_v1.test.js
