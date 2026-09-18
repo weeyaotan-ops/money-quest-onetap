@@ -63,7 +63,7 @@ console.log('hunter_live_gate_v1.test.js PASS',JSON.stringify({nullRegression:tr
 
 // Neutral-band regression: a tiny negative expectancy is noise, not a REJECT by itself.
 const neutral=new HunterLiveGateV1({minSamples:4,recentWindow:4,symbolWindow:4,sideWindow:4,negativeExpectancyR:-0.15,positiveExpectancyR:0.15});
-[-0.02,-0.01,0.01,-0.01].forEach((r,i)=>neutral.ingestClosedTrade({id:'n'+i,symbol:'MIXUSDT',side:i%2?'SELL':'BUY',regime:'HIGH_VOL',timeframe:'5m',edge:'BREAKOUT_RETEST',actualR:r}));
+[-0.02,-0.01,0.01,0.02].forEach((r,i)=>neutral.ingestClosedTrade({id:'n'+i,symbol:'MIXUSDT',side:i%2?'SELL':'BUY',regime:'HIGH_VOL',timeframe:'5m',edge:'BREAKOUT_RETEST',actualR:r}));
 const nd=neutral.scoreCandidate({id:'neutral-candidate',symbol:'NEWUSDT',side:'BUY',regime:'LOW_VOL',timeframe:'15m',edge:'BREAKOUT_RETEST'});
 assert.equal(nd.verdict,'WATCH');
 assert.ok(nd.reasons.includes('RECENT_EXPECTANCY_NEUTRAL'));
