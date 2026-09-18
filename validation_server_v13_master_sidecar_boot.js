@@ -78,4 +78,4 @@ function stop(){
   try{server.close(()=>process.exit(0))}catch{process.exit(0)}
 }
 process.on('SIGTERM',stop);process.on('SIGINT',stop);
-server.listen(PUBLIC_PORT,()=>console.log('V13_MASTER_SIDECAR_READY',JSON.stringify({port:PUBLIC_PORT,prodPort:PROD_PORT,shadowPort:SHADOW_PORT,shadowEvolutionPort:SHADOW_EVO_PORT,hunterPort:HUNTER_PORT,relayPort:relay?RELAY_PORT:null,productionBehavior:'PROXIED_V13_SELF_HEALING',masterBrain:'SHADOW_ONLY',opportunityHunter:'BINANCE_FUTURES_MULTI_EDGE',realMoney:false,prodRestart:'EXPONENTIAL_BACKOFF'})));
+server.listen(PUBLIC_PORT,()=>console.log('V13_MASTER_SIDECAR_READY',JSON.stringify({port:PUBLIC_PORT,prodPort:PROD_PORT,shadowPort:SHADOW_PORT,shadowEvolutionPort:SHADOW_EVO_PORT,hunterPort:HUNTER_PORT,relayPort:relay?RELAY_PORT:null,relayWrites:process.env.BINANCE_PRIVATE_RELAY_WRITES==='1',productionBehavior:'PROXIED_V13_SELF_HEALING',masterBrain:'SHADOW_ONLY',opportunityHunter:'BINANCE_FUTURES_MULTI_EDGE',realMoney:false,prodRestart:'EXPONENTIAL_BACKOFF'})));
