@@ -17,6 +17,7 @@ const path=require('node:path');
   process.env.EST_FEE_BPS_PER_SIDE='5';
   process.env.BINANCE_BRACKET_FALLBACK_LEVERAGE='5';
   process.env.BINANCE_RATE_GUARD_STATE_FILE=stateFile;
+  process.env.BINANCE_RATE_GUARD_STARTUP_GRACE_MS='0';
   require('../binance_rate_guard_preload_v1.js');
 
   const commission=await fetch('https://fapi.binance.com/fapi/v1/commissionRate?symbol=BTCUSDT');
