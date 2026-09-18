@@ -4,6 +4,7 @@
 // It NEVER changes order placement. It only records a counterfactual PASS/WATCH/REJECT
 // decision, then joins that decision to the realized live Actual-R after the trade closes.
 
+const winQuality=require('./hunter_win_quality_v1');
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
 const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const finiteNumber=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null;
@@ -49,8 +50,10 @@ class HunterLiveGateV1 {
       challengerVerdict:d?.challenger?.verdict||null,
       challengerScore:Number.isFinite(Number(d?.challenger?.score))?Number(d.challenger.score):null,
       challengerReasons:Array.isArray(d?.challenger?.reasons)?d.challenger.reasons:[],
-      forwardMatched:Boolean(d)
+      forwardMatched:Boolean(d)&&Date.parse(d.at)<=Date.parse(t.closedAt||new Date().toISOString()),
+      winQuality:d?.winQuality||null
     });
+    this.history.sort((a,b)=>Date.parse(a.closedAt)-Date.parse(b.closedAt));
     if(this.history.length>5000){
       const removed=this.history.splice(0,this.history.length-5000);
       for(const x of removed)this.seenClosed.delete(x.id);
@@ -172,9 +175,10 @@ class HunterLiveGateV1 {
     else if(challengerScore<=0.38)challengerVerdict='REJECT';
     const challenger={score:challengerScore,verdict:challengerVerdict,reasons:challengerReasons,observationalOnly:true,liveExecutionChanged:false};
 
+    const prediction=winQuality.estimate(c,this.history);
     const decision={
       id,at:new Date().toISOString(),symbol,side,regime,timeframe,edge,
-      score,verdict,reasons,scopes,challenger,
+      score,verdict,reasons,scopes,challenger,winQuality:prediction,
       observationalOnly:true,liveExecutionChanged:false
     };
     this.decisions.push(decision);
@@ -215,6 +219,7 @@ class HunterLiveGateV1 {
       dataQuality:{ignoredMissingActualR:this.ignoredMissingActualR,validClosedTrades:this.history.length},
       thresholds:{minSamples:this.minSamples,recentWindow:this.recentWindow,symbolWindow:this.symbolWindow,sideWindow:this.sideWindow,minExpectancyR:this.minExpectancyR,minProfitFactor:this.minProfitFactor,maxRecentDrawdownR:this.maxRecentDrawdownR},
       historicalBackfill:all,
+      winQuality:winQuality.evaluate(this.history),
       recent,
       evidence,
       forward:{

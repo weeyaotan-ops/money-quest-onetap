@@ -1,0 +1,28 @@
+name: Hunter signal quality
+on:
+  push:
+    branches: [exact-mirror-resting-v2]
+  pull_request:
+    branches: [exact-mirror-resting-v2]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate signal integrity and forward predictions
+        run: |
+          node --check opportunity_hunter_server_v1.js
+          node --check hunter_confirm_live_boot.js
+          node test/hunter_signal_quality_v1.test.js
+          node test/hunter_quality_integration_v1.test.js
+          node test/hunter_win_quality_v1.test.js
+          node test/hunter_live_gate_v1.test.js
+          node test/live_metadata_continuity_v1.test.js
+          node test/telegram_assisted_ticket_v1.test.js
+          node test/binance_preview_burst_v1.test.js
+          node test/binance_stop_priceprotect_signing_v1.test.js
+          node test/opportunity_hunter_rate_governor_v1.test.js
+          node test/resting_v2_policy.test.js

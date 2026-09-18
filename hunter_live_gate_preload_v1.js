@@ -68,7 +68,7 @@ function restoreState(){
     const s=JSON.parse(fs.readFileSync(STATE_FILE,'utf8'));
     const h=Array.isArray(s?.gate?.history)?s.gate.history.slice(-5000):[];
     const d=Array.isArray(s?.gate?.decisions)?s.gate.decisions.slice(-5000):[];
-    gate.history=h;
+    gate.history=h.sort((a,b)=>Date.parse(a.closedAt)-Date.parse(b.closedAt));
     gate.seenClosed=new Set(h.map(x=>String(x?.id||'')).filter(Boolean));
     gate.decisions=d;
     gate.decisionById=new Map(d.filter(x=>x&&x.id).map(x=>[String(x.id),x]));
@@ -157,7 +157,7 @@ async function backfill(){
     lastBackfill=new Date().toISOString();
     originalLog('HUNTER_LIVE_GATE_BACKFILL',JSON.stringify({source:'REAL_MONEY_LEDGER',seen:xs.length,added,ignoredMissingActualR,totalClosed:gate.history.length,lastBackfill,persistent:true}));
     const snapshot=gate.report();
-    originalLog('HUNTER_LIVE_GATE_EVIDENCE_SNAPSHOT',JSON.stringify({validClosed:snapshot.dataQuality.validClosedTrades,recent:snapshot.recent,evidence:snapshot.evidence,forward:snapshot.forward}));
+    originalLog('HUNTER_LIVE_GATE_EVIDENCE_SNAPSHOT',JSON.stringify({validClosed:snapshot.dataQuality.validClosedTrades,recent:snapshot.recent,evidence:snapshot.evidence,forward:snapshot.forward,winQuality:snapshot.winQuality}));
   }catch(e){originalLog('HUNTER_LIVE_GATE_BACKFILL_ERR',String(e?.message||e))}
   finally{backfilling=false}
 }
@@ -165,6 +165,6 @@ async function backfill(){
 setTimeout(backfill,10000).unref();
 setInterval(backfill,60000).unref();
 setInterval(()=>{if(gate.history.length||gate.decisions.length||liveById.size)saveState()},30000).unref();
-originalLog('HUNTER_LIVE_GATE_V1_READY',JSON.stringify({mode:'OBSERVATIONAL_ONLY',report:'/hunter-live-gate/report',observe:'/hunter-live-gate/observe-candidate',backfill:'/real-money/positions',stateFile:STATE_FILE,persistent:true,liveExecutionChanged:false}));
+originalLog('HUNTER_LIVE_GATE_V1_READY',JSON.stringify({mode:'OBSERVATIONAL_ONLY',report:'/hunter-live-gate/report',observe:'/hunter-live-gate/observe-candidate',backfill:'/real-money/positions',stateFile:STATE_FILE,persistent:true,winQualityModel:'WIN_QUALITY_V1',winQualityMode:'SHADOW_ONLY',liveExecutionChanged:false}));
 
 module.exports={gate,backfill,hasFiniteActualR,saveState,restoreState,STATE_FILE};
