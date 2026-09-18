@@ -32,8 +32,8 @@ const server=http.createServer(async(req,res)=>{
   if(!safeEqual(req.headers['x-relay-token'],TOKEN))return send(res,401,{ok:false,error:'unauthorized'});
   try{
     let raw='';for await(const ch of req){raw+=ch;if(raw.length>65536){res.destroy();return}}
-    const j=JSON.parse(raw||'{}'),method=String(j.method||'GET').toUpperCase();
-    const u=new URL(String(j.url||''));
+    const j=JSON.parse(raw||'{}'),method=String(j.method||'GET').toUpperCase(),target=String(j.url||'');
+    const u=new URL(target);
     if(u.protocol!=='https:'||u.host!==HOST)return send(res,400,{ok:false,error:'target_not_allowed'});
     const isGet=method==='GET',writeKey=method+' '+u.pathname;
     if(isGet&&!ALLOWED_GET.has(u.pathname))return send(res,400,{ok:false,error:'target_not_allowed'});
@@ -44,7 +44,7 @@ const server=http.createServer(async(req,res)=>{
     }
     const headers={};
     if(j.apiKey)headers['X-MBX-APIKEY']=String(j.apiKey);
-    const r=await fetch(u.toString(),{method,headers,signal:AbortSignal.timeout(10000)});
+    const r=await fetch(target,{method,headers,signal:AbortSignal.timeout(10000)});
     const body=await r.text();
     const outHeaders={
       'content-type':r.headers.get('content-type')||'application/json',
