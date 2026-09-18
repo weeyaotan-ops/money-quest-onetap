@@ -19,7 +19,7 @@ assert.equal(quality.ingestClosedTrade({id:'real-zero',symbol:'XUSDT',actualR:0}
 assert.equal(quality.history.length,1);
 assert.equal(quality.report().historicalBackfill.n,1);
 
-const g=new HunterLiveGateV1({minSamples:2,recentWindow:4,symbolWindow:6,sideWindow:6,minProfitFactor:.9,maxRecentDrawdownR:3});
+const g=new HunterLiveGateV1({minSamples:2,recentWindow:4,symbolWindow:6,sideWindow:6,minProfitFactor:.9,maxRecentDrawdownR:3,negativeExpectancyR:-0.15,positiveExpectancyR:0.15});
 [
  {id:'h1',symbol:'BADUSDT',side:'BUY',regime:'RANGE',actualR:-1},
  {id:'h2',symbol:'BADUSDT',side:'BUY',regime:'RANGE',actualR:-1},
@@ -58,4 +58,20 @@ assert.ok(Array.isArray(report.evidence.sideRegime));
 assert.ok(Array.isArray(report.evidence.edgeTimeframe));
 assert.ok(bad.scopes.timeframe);
 assert.ok(bad.scopes.edge);
+assert.equal(bad.policyVersion,'V1_1_NEUTRAL_BAND');
 console.log('hunter_live_gate_v1.test.js PASS',JSON.stringify({nullRegression:true,bad:bad.verdict,good:good.verdict,forward:report.forward}));
+
+// Neutral-band regression: a tiny negative expectancy is noise, not a REJECT by itself.
+const neutral=new HunterLiveGateV1({minSamples:4,recentWindow:4,symbolWindow:4,sideWindow:4,negativeExpectancyR:-0.15,positiveExpectancyR:0.15});
+[-0.02,-0.01,0.01,-0.01].forEach((r,i)=>neutral.ingestClosedTrade({id:'n'+i,symbol:'MIXUSDT',side:i%2?'SELL':'BUY',regime:'HIGH_VOL',timeframe:'5m',edge:'BREAKOUT_RETEST',actualR:r}));
+const nd=neutral.scoreCandidate({id:'neutral-candidate',symbol:'NEWUSDT',side:'BUY',regime:'LOW_VOL',timeframe:'15m',edge:'BREAKOUT_RETEST'});
+assert.equal(nd.verdict,'WATCH');
+assert.ok(nd.reasons.includes('RECENT_EXPECTANCY_NEUTRAL'));
+assert.equal(nd.negativeSignals,0);
+
+// Strong REJECT requires at least two independent negative signals.
+const strong=new HunterLiveGateV1({minSamples:4,recentWindow:8,symbolWindow:8,sideWindow:8,negativeExpectancyR:-0.15,positiveExpectancyR:0.15});
+for(let i=0;i<8;i++)strong.ingestClosedTrade({id:'s'+i,symbol:'BAD2USDT',side:'SELL',regime:'HIGH_VOL',timeframe:'5m',edge:'BREAKOUT_RETEST',actualR:-1});
+const sd=strong.scoreCandidate({id:'strong-candidate',symbol:'BAD2USDT',side:'SELL',regime:'HIGH_VOL',timeframe:'5m',edge:'BREAKOUT_RETEST'});
+assert.equal(sd.verdict,'REJECT');
+assert.ok(sd.negativeSignals>=2);
