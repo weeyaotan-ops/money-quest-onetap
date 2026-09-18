@@ -46,6 +46,9 @@ class HunterLiveGateV1 {
       gateVerdict:d?.verdict||null,
       gateScore:Number.isFinite(Number(d?.score))?Number(d.score):null,
       gateReasons:Array.isArray(d?.reasons)?d.reasons:[],
+      challengerVerdict:d?.challenger?.verdict||null,
+      challengerScore:Number.isFinite(Number(d?.challenger?.score))?Number(d.challenger.score):null,
+      challengerReasons:Array.isArray(d?.challenger?.reasons)?d.challenger.reasons:[],
       forwardMatched:Boolean(d)
     });
     if(this.history.length>5000){
@@ -141,9 +144,37 @@ class HunterLiveGateV1 {
     if(score>=0.62)verdict='PASS';
     else if(score<=0.38)verdict='REJECT';
 
+    // V2 challenger is observational-only. It starts from the proven V1 score and
+    // uses additional cohort evidence only after each cohort has enough samples.
+    let challengerScore=score;
+    const challengerReasons=[];
+    const tune=(delta,reason)=>{challengerScore+=delta;challengerReasons.push(reason)};
+    const halfMin=Math.max(6,Math.floor(this.minSamples/2));
+    if(scopes.timeframe.n>=this.minSamples){
+      if(scopes.timeframe.expectancyR<this.minExpectancyR)tune(-0.08,'V2_TIMEFRAME_NEGATIVE_EXPECTANCY');
+      else tune(+0.04,'V2_TIMEFRAME_POSITIVE_EXPECTANCY');
+    }
+    if(scopes.edge.n>=this.minSamples){
+      if(scopes.edge.expectancyR<this.minExpectancyR)tune(-0.08,'V2_EDGE_NEGATIVE_EXPECTANCY');
+      else tune(+0.04,'V2_EDGE_POSITIVE_EXPECTANCY');
+    }
+    if(scopes.sideRegime.n>=halfMin){
+      if(scopes.sideRegime.expectancyR<this.minExpectancyR)tune(-0.12,'V2_SIDE_REGIME_NEGATIVE_EXPECTANCY');
+      else tune(+0.06,'V2_SIDE_REGIME_POSITIVE_EXPECTANCY');
+    }
+    if(scopes.edgeTimeframe.n>=halfMin){
+      if(scopes.edgeTimeframe.expectancyR<this.minExpectancyR)tune(-0.10,'V2_EDGE_TIMEFRAME_NEGATIVE_EXPECTANCY');
+      else tune(+0.05,'V2_EDGE_TIMEFRAME_POSITIVE_EXPECTANCY');
+    }
+    challengerScore=clamp(challengerScore,0,1);
+    let challengerVerdict='WATCH';
+    if(challengerScore>=0.62)challengerVerdict='PASS';
+    else if(challengerScore<=0.38)challengerVerdict='REJECT';
+    const challenger={score:challengerScore,verdict:challengerVerdict,reasons:challengerReasons,observationalOnly:true,liveExecutionChanged:false};
+
     const decision={
       id,at:new Date().toISOString(),symbol,side,regime,timeframe,edge,
-      score,verdict,reasons,scopes,
+      score,verdict,reasons,scopes,challenger,
       observationalOnly:true,liveExecutionChanged:false
     };
     this.decisions.push(decision);
@@ -163,7 +194,12 @@ class HunterLiveGateV1 {
     const kept=matched.filter(x=>x.gateVerdict!=='REJECT');
     const passed=matched.filter(x=>x.gateVerdict==='PASS');
     const watched=matched.filter(x=>x.gateVerdict==='WATCH');
-    const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected);
+    const challengerRejected=matched.filter(x=>x.challengerVerdict==='REJECT');
+    const challengerKept=matched.filter(x=>x.challengerVerdict!=='REJECT');
+    const challengerPassed=matched.filter(x=>x.challengerVerdict==='PASS');
+    const challengerWatched=matched.filter(x=>x.challengerVerdict==='WATCH');
+    const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected),
+      challengerKeptStats=this.stats(challengerKept),challengerRejectedStats=this.stats(challengerRejected);
     const evidenceWindow=this.history.slice(-Math.max(100,this.recentWindow));
     const evidence={
       window:evidenceWindow.length,
@@ -191,7 +227,18 @@ class HunterLiveGateV1 {
         watch:this.stats(watched),
         expectancyUpliftR:baseline.n&&keptStats.n?keptStats.expectancyR-baseline.expectancyR:null,
         rejectedTotalR:rejectedStats.totalR,
-        proofProgress:{minimum:100,target:150,current:matched.length}
+        proofProgress:{minimum:100,target:150,current:matched.length},
+        challengerV2:{
+          mode:'OBSERVATIONAL_ONLY',
+          kept:challengerKeptStats,
+          rejected:challengerRejectedStats,
+          pass:this.stats(challengerPassed),
+          watch:this.stats(challengerWatched),
+          expectancyUpliftR:baseline.n&&challengerKeptStats.n?challengerKeptStats.expectancyR-baseline.expectancyR:null,
+          rejectedTotalR:challengerRejectedStats.totalR,
+          proofProgress:{minimum:100,target:150,current:matched.filter(x=>x.challengerVerdict).length},
+          liveExecutionChanged:false
+        }
       },
       latest:this.decisions.slice(-50).reverse(),
       liveExecutionChanged:false
