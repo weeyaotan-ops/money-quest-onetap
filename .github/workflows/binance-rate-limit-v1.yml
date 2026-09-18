@@ -25,6 +25,8 @@ jobs:
       - run: node test/binance_private_egress_client_v1.test.js
       - run: node test/binance_private_egress_write_v1.test.js
       - run: node test/binance_stop_priceprotect_signing_v1.test.js
+      - run: node --check binance_onetap_gateway.js
+      - run: node test/telegram_assisted_ticket_v1.test.js
       - run: node --check opportunity_hunter_server_v1.js
       - run: node test/opportunity_hunter_rate_governor_v1.test.js
       - run: node test/resting_v2_policy.test.js
