@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),pathMod=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
+const {updateExcursion,finalizeHold}=require('./real_money_exit_evidence_v1');
 const REST=(process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com').replace(/\/$/,''),API_KEY=process.env.BINANCE_API_KEY||'',PRIV=process.env.BINANCE_ED25519_PRIVATE_KEY_PEM||'';
 const STATE_FILE=String(process.env.REAL_MONEY_LEDGER_STATE_FILE||'/data/real-money-ledger-v2.json');
 const RECONCILE_MS=Math.max(30000,Number(process.env.REAL_MONEY_RECONCILE_MS||60000));
@@ -22,33 +23,141 @@ function posSide(p){if(String(p.positionSide||'BOTH')==='LONG')return'BUY';if(St
 function calcFills(rows,start,end){const xs=(rows||[]).filter(f=>Number(f.time)>=start&&Number(f.time)<=end);const realized=xs.reduce((s,f)=>s+(Number(f.realizedPnl)||0),0),commission=xs.reduce((s,f)=>s+Math.abs(Number(f.commission)||0),0),net=realized-commission;return{xs,realized,commission,net}}
 function upsert(id,patch){const old=trades.get(String(id))||{id:String(id)};trades.set(String(id),{...old,...patch,id:String(id)})}
 function parse(prefix,args){try{const s=args.map(String).join(' '),i=s.indexOf(prefix);return i<0?null:JSON.parse(s.slice(i+prefix.length).trim())}catch{return null}}
-console.log=(...args)=>{try{let x=parse('ONETAP_LIVE_EXECUTED',args);if(x){upsert(x.id,{status:'OPEN',symbol:x.symbol,side:x.side,setup:x.setup||null,edge:x.edge||x.setup||null,timeframe:x.timeframe||null,regime:x.regime||null,qty:x.qty,avgPrice:x.avgPrice,leverage:x.lev,actualRisk:x.actualRisk,netRR:x.netRR,openedAt:new Date().toISOString(),source:'LIVE'});save()}x=parse('ONETAP_POSITION_CLOSED',args);if(x){const id=String(x.id);upsert(id,{status:'CLOSED',symbol:x.symbol||trades.get(id)?.symbol,side:x.side||trades.get(id)?.side,setup:x.setup||trades.get(id)?.setup||null,edge:x.edge||x.setup||trades.get(id)?.edge||null,timeframe:x.timeframe||trades.get(id)?.timeframe||null,regime:x.regime||trades.get(id)?.regime||null,closedAt:new Date().toISOString(),realizedPnl:x.stats?.realized??null,commission:x.stats?.commission??null,netPnl:x.stats?.net??null,actualR:x.stats?.actualR??null,source:'LIVE_CLOSED'});save()}}catch(e){originalLog('REAL_MONEY_LEDGER_LOG_ERR',String(e?.message||e))}return originalLog(...args)};
+console.log=(...args)=>{try{let x=parse('ONETAP_LIVE_EXECUTED',args);if(x){upsert(x.id,{status:'OPEN',symbol:x.symbol,side:x.side,setup:x.setup||null,edge:x.edge||x.setup||null,timeframe:x.timeframe||null,regime:x.regime||null,qty:x.qty,avgPrice:x.avgPrice,leverage:x.lev,actualRisk:x.actualRisk,netRR:x.netRR,openedAt:new Date().toISOString(),source:'LIVE'});save()}x=parse('ONETAP_POSITION_CLOSED',args);if(x){const id=String(x.id),old=trades.get(id)||{},closedAt=new Date().toISOString();upsert(id,{status:'CLOSED',symbol:x.symbol||old.symbol,side:x.side||old.side,setup:x.setup||old.setup||null,edge:x.edge||x.setup||old.edge||null,timeframe:x.timeframe||old.timeframe||null,regime:x.regime||old.regime||null,closedAt,realizedPnl:x.stats?.realized??null,commission:x.stats?.commission??null,netPnl:x.stats?.net??null,actualR:x.stats?.actualR??null,...finalizeHold(old,closedAt),source:'LIVE_CLOSED'});save()}}catch(e){originalLog('REAL_MONEY_LEDGER_LOG_ERR',String(e?.message||e))}return originalLog(...args)};
 async function reconcile(){
-  if(reconciling||!API_KEY||!PRIV)return;if(Date.now()<cooldownUntil){originalLog('REAL_MONEY_LEDGER_RATE_LIMIT_PAUSE',JSON.stringify({remainingMs:cooldownUntil-Date.now()}));return}
-  reconciling=true;const beforeReq=requestCount;let checkedSymbols=0,updated=0,discovered=0;
+  if(reconciling||!API_KEY||!PRIV)return;
+  if(Date.now()<cooldownUntil){originalLog('REAL_MONEY_LEDGER_RATE_LIMIT_PAUSE',JSON.stringify({remainingMs:cooldownUntil-Date.now()}));return}
+  reconciling=true;
+  const beforeReq=requestCount;
+  let checkedSymbols=0,updated=0,discovered=0,historyQueries=0;
   try{
-    const acc=await signed('/fapi/v3/account'),positions=(acc.positions||[]).filter(p=>Math.abs(Number(p.positionAmt||0))>0),openBySymbol=new Map();
-    for(const p of positions){if(!openBySymbol.has(p.symbol))openBySymbol.set(p.symbol,[]);openBySymbol.get(p.symbol).push(p)}
-    const now=Date.now(),all=[...trades.values()],active=all.filter(t=>t.symbol&&(t.status==='OPEN'||(t.status==='UNKNOWN'&&Number.isFinite(Date.parse(t.openedAt||0))&&now-Date.parse(t.openedAt||0)<=UNKNOWN_RETRY_MS))),staleUnknown=all.filter(t=>t.status==='UNKNOWN'&&t.symbol&&!active.includes(t)).length,symbols=new Set([...active.map(t=>t.symbol),...openBySymbol.keys()]);
-    for(const symbol of symbols){
-      if(Date.now()<cooldownUntil)break;checkedSymbols++;
-      const related=active.filter(t=>t.symbol===symbol),openRows=openBySymbol.get(symbol)||[];
-      let earliest=Math.min(...related.map(t=>Date.parse(t.openedAt||0)).filter(Number.isFinite));if(!Number.isFinite(earliest))earliest=Date.now()-LOOKBACK_MS;earliest=Math.max(Date.now()-LOOKBACK_MS,earliest-15000);
-      try{
-        const orders=await signed('/fapi/v1/allOrders',{symbol,startTime:earliest,limit:1000}),fills=await signed('/fapi/v1/userTrades',{symbol,startTime:earliest,limit:1000}),entries=(orders||[]).filter(o=>isEntryClientId(o.clientOrderId)).sort((a,b)=>Number(a.time||a.updateTime)-Number(b.time||b.updateTime));
-        for(const t of related){
-          const entry=t.binanceEntryOrderId?entries.find(o=>String(o.orderId)===String(t.binanceEntryOrderId)):entries.find(o=>String(o.clientOrderId||'')===cid(t.id));
-          const isOpen=openRows.some(p=>posSide(p)===String(t.side||posSide(p)))||(!t.side&&openRows.length>0);
-          if(!entry){if(isOpen){upsert(t.id,{status:'OPEN',source:t.source||'ACTIVE_UNMATCHED'});updated++}continue}
-          const entryTime=Number(entry.updateTime||entry.time||Date.parse(t.openedAt||0)||Date.now()),next=entries.find(o=>Number(o.time||o.updateTime)>entryTime),end=next?Number(next.time||next.updateTime)-1:Date.now(),z=calcFills(fills,entryTime-5000,end);
-          const status=isOpen?'OPEN':'CLOSED',patch={status,openedAt:new Date(entryTime).toISOString(),binanceEntryOrderId:entry.orderId,realizedPnl:z.realized,commission:z.commission,netPnl:status==='CLOSED'?z.net:null,actualR:status==='CLOSED'&&Number(t.actualRisk)>0?z.net/Number(t.actualRisk):t.actualR??null,closedAt:status==='CLOSED'&&z.xs.length?new Date(Math.max(...z.xs.map(f=>Number(f.time)||0))).toISOString():t.closedAt,source:'BINANCE_RECONCILED_ACTIVE'};upsert(t.id,patch);updated++;
-        }
-        for(const p of openRows){const side=posSide(p),hasTracked=[...trades.values()].some(t=>t.symbol===symbol&&t.status==='OPEN'&&String(t.side||'')===side);if(hasTracked)continue;const latest=[...entries].reverse().find(o=>String(o.side||'')===side&&Number(o.executedQty||0)>0);const id=latest?`binance_${latest.orderId}`:`position_${symbol}_${side}`;const entryTime=latest?Number(latest.updateTime||latest.time||Date.now()):Date.now();const z=latest?calcFills(fills,entryTime-5000,Date.now()):{xs:[],realized:0,commission:0,net:0};const qty=Math.abs(Number(p.positionAmt||latest?.executedQty||0)),avgPrice=Number(p.entryPrice||latest?.avgPrice||0);upsert(id,{status:'OPEN',symbol,side,qty,avgPrice,leverage:Number(p.leverage||0)||null,actualRisk:null,netRR:null,openedAt:new Date(entryTime).toISOString(),binanceEntryOrderId:latest?.orderId||null,clientOrderId:latest?.clientOrderId||null,entryCommission:z.commission,source:latest?'BINANCE_OPEN_DISCOVERED':'BINANCE_POSITION_DISCOVERED'});discovered++}
-      }catch(e){lastError=String(e?.message||e);originalLog('REAL_MONEY_LEDGER_ACTIVE_RECONCILE_ERR',JSON.stringify({symbol,error:lastError}));if(lastError.includes('418')||lastError.includes('-1003')||lastError.includes('RATE_LIMIT_COOLDOWN'))break}
+    const acc=await signed('/fapi/v3/account');
+    const positions=(acc.positions||[]).filter(p=>Math.abs(Number(p.positionAmt||0))>0);
+    const openBySymbol=new Map();
+    for(const p of positions){
+      if(!openBySymbol.has(p.symbol))openBySymbol.set(p.symbol,[]);
+      openBySymbol.get(p.symbol).push(p);
     }
-    lastReconcile=new Date().toISOString();save();const a=[...trades.values()];originalLog('REAL_MONEY_LEDGER_RECOVERED',JSON.stringify({checkedSymbols,activeBefore:active.length,staleUnknownSkipped:staleUnknown,open:a.filter(t=>t.status==='OPEN').length,closed:a.filter(t=>t.status==='CLOSED').length,unknown:a.filter(t=>t.status==='UNKNOWN').length,updated,discovered,total:a.length,requests:requestCount-beforeReq,persisted:true,at:lastReconcile}))
-  }catch(e){lastError=String(e?.message||e);originalLog('REAL_MONEY_LEDGER_RECONCILE_ERR',lastError)}finally{reconciling=false}
+
+    const now=Date.now(),all=[...trades.values()];
+    const active=all.filter(t=>t.symbol&&(t.status==='OPEN'||(t.status==='UNKNOWN'&&Number.isFinite(Date.parse(t.openedAt||0))&&now-Date.parse(t.openedAt||0)<=UNKNOWN_RETRY_MS)));
+    const staleUnknown=all.filter(t=>t.status==='UNKNOWN'&&t.symbol&&!active.includes(t)).length;
+    const symbols=new Set([...active.map(t=>t.symbol),...openBySymbol.keys()]);
+
+    for(const symbol of symbols){
+      if(Date.now()<cooldownUntil)break;
+      checkedSymbols++;
+      const related=active.filter(t=>t.symbol===symbol);
+      const openRows=openBySymbol.get(symbol)||[];
+      const needsHistory=[];
+
+      // Fast path: if a tracked trade is still open, the account snapshot is enough.
+      // No allOrders/userTrades request is needed. We also collect MFE/MAE here.
+      for(const t of related){
+        const p=openRows.find(row=>!t.side||posSide(row)===String(t.side));
+        if(p){
+          upsert(t.id,{
+            status:'OPEN',
+            ...updateExcursion(t,p,now),
+            source:t.source||'BINANCE_ACCOUNT_OPEN'
+          });
+          updated++;
+        }else{
+          needsHistory.push(t);
+        }
+      }
+
+      const untrackedOpen=openRows.filter(p=>{
+        const side=posSide(p);
+        return ![...trades.values()].some(t=>t.symbol===symbol&&t.status==='OPEN'&&String(t.side||'')===side);
+      });
+
+      // Historical order/trade calls are only needed on a state transition
+      // (tracked position disappeared) or to discover an untracked live position.
+      if(!needsHistory.length&&!untrackedOpen.length)continue;
+
+      let earliest=Math.min(...needsHistory.map(t=>Date.parse(t.openedAt||0)).filter(Number.isFinite));
+      if(!Number.isFinite(earliest))earliest=Date.now()-LOOKBACK_MS;
+      earliest=Math.max(Date.now()-LOOKBACK_MS,earliest-15000);
+
+      try{
+        historyQueries++;
+        const orders=await signed('/fapi/v1/allOrders',{symbol,startTime:earliest,limit:1000});
+        const fills=await signed('/fapi/v1/userTrades',{symbol,startTime:earliest,limit:1000});
+        const entries=(orders||[]).filter(o=>isEntryClientId(o.clientOrderId)).sort((a,b)=>Number(a.time||a.updateTime)-Number(b.time||b.updateTime));
+
+        for(const t of needsHistory){
+          const entry=t.binanceEntryOrderId
+            ? entries.find(o=>String(o.orderId)===String(t.binanceEntryOrderId))
+            : entries.find(o=>String(o.clientOrderId||'')===cid(t.id));
+          if(!entry)continue;
+          const entryTime=Number(entry.updateTime||entry.time||Date.parse(t.openedAt||0)||Date.now());
+          const next=entries.find(o=>Number(o.time||o.updateTime)>entryTime);
+          const endTime=next?Number(next.time||next.updateTime)-1:Date.now();
+          const z=calcFills(fills,entryTime-5000,endTime);
+          if(!z.xs.length)continue;
+          const closedAt=new Date(Math.max(...z.xs.map(f=>Number(f.time)||0))).toISOString();
+          const patch={
+            status:'CLOSED',
+            openedAt:new Date(entryTime).toISOString(),
+            binanceEntryOrderId:entry.orderId,
+            realizedPnl:z.realized,
+            commission:z.commission,
+            netPnl:z.net,
+            actualR:Number(t.actualRisk)>0?z.net/Number(t.actualRisk):t.actualR??null,
+            closedAt,
+            ...finalizeHold({...t,openedAt:new Date(entryTime).toISOString()},closedAt),
+            source:'BINANCE_RECONCILED_CLOSED'
+          };
+          upsert(t.id,patch);
+          updated++;
+        }
+
+        for(const p of untrackedOpen){
+          const side=posSide(p);
+          const latest=[...entries].reverse().find(o=>String(o.side||'')===side&&Number(o.executedQty||0)>0);
+          const id=latest?`binance_${latest.orderId}`:`position_${symbol}_${side}`;
+          const entryTime=latest?Number(latest.updateTime||latest.time||Date.now()):Date.now();
+          const z=latest?calcFills(fills,entryTime-5000,Date.now()):{xs:[],realized:0,commission:0,net:0};
+          const qty=Math.abs(Number(p.positionAmt||latest?.executedQty||0));
+          const avgPrice=Number(p.entryPrice||latest?.avgPrice||0);
+          const base={status:'OPEN',symbol,side,qty,avgPrice,leverage:Number(p.leverage||0)||null,actualRisk:null,netRR:null,openedAt:new Date(entryTime).toISOString(),binanceEntryOrderId:latest?.orderId||null,clientOrderId:latest?.clientOrderId||null,entryCommission:z.commission,source:latest?'BINANCE_OPEN_DISCOVERED':'BINANCE_POSITION_DISCOVERED'};
+          upsert(id,{...base,...updateExcursion(base,p,now)});
+          discovered++;
+        }
+      }catch(e){
+        lastError=String(e?.message||e);
+        originalLog('REAL_MONEY_LEDGER_ACTIVE_RECONCILE_ERR',JSON.stringify({symbol,error:lastError}));
+        if(lastError.includes('418')||lastError.includes('429')||lastError.includes('-1003')||lastError.includes('RATE_LIMIT_COOLDOWN'))break;
+      }
+    }
+
+    lastReconcile=new Date().toISOString();
+    save();
+    const a=[...trades.values()];
+    originalLog('REAL_MONEY_LEDGER_RECOVERED',JSON.stringify({
+      checkedSymbols,
+      activeBefore:active.length,
+      staleUnknownSkipped:staleUnknown,
+      open:a.filter(t=>t.status==='OPEN').length,
+      closed:a.filter(t=>t.status==='CLOSED').length,
+      unknown:a.filter(t=>t.status==='UNKNOWN').length,
+      updated,
+      discovered,
+      historyQueries,
+      total:a.length,
+      requests:requestCount-beforeReq,
+      persisted:true,
+      exitEvidence:true,
+      at:lastReconcile
+    }));
+  }catch(e){
+    lastError=String(e?.message||e);
+    originalLog('REAL_MONEY_LEDGER_RECONCILE_ERR',lastError);
+  }finally{
+    reconciling=false;
+  }
 }
 const page=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Real Money Positions</title><style>body{margin:0;background:#080b10;color:#eef2f7;font:14px system-ui}.w{max-width:1100px;margin:auto;padding:18px}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.c,.p{background:#111720;border:1px solid #222c39;border-radius:12px;padding:12px}.v{font-size:20px;font-weight:700}.p{margin-top:10px;overflow:auto}table{border-collapse:collapse;width:100%;min-width:800px}td,th{padding:8px;border-bottom:1px solid #222c39;text-align:left}small,th{color:#8e9aaa}@media(max-width:700px){.cards{grid-template-columns:repeat(2,1fr)}}</style></head><body><div class=w><h1>REAL MONEY POSITIONS</h1><small>Persistent ledger · active-only Binance reconciliation</small><div class=cards><div class=c>Trades<div class=v id=n>0</div></div><div class=c>Open<div class=v id=o>0</div></div><div class=c>Closed<div class=v id=c>0</div></div><div class=c>Win rate<div class=v id=w>—</div></div><div class=c>Net P&L<div class=v id=p>—</div></div></div><div class=p><table><thead><tr><th>Status</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Qty</th><th>Lev</th><th>Risk</th><th>Net P&L</th><th>Actual R</th><th>Opened</th></tr></thead><tbody id=r></tbody></table></div><small id=u></small></div><script>const f=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toFixed(d):'—',dt=v=>v?new Date(v).toLocaleString():'—';async function go(){try{const j=await(await fetch('/real-money/positions',{cache:'no-store'})).json(),a=j.trades||[],cl=a.filter(x=>x.status==='CLOSED'),op=a.filter(x=>x.status==='OPEN'),wins=cl.filter(x=>Number(x.netPnl)>0).length,pnl=cl.reduce((s,x)=>s+(Number(x.netPnl)||0),0);n.textContent=a.length;o.textContent=op.length;c.textContent=cl.length;w.textContent=cl.length?f(wins/cl.length*100,1)+'%':'—';p.textContent=(pnl>=0?'+':'')+f(pnl)+' U';r.innerHTML=a.slice().sort((x,y)=>Date.parse(y.openedAt||0)-Date.parse(x.openedAt||0)).map(x=>'<tr><td>'+x.status+'</td><td><b>'+x.symbol+'</b></td><td>'+x.side+'</td><td>'+f(x.avgPrice,8)+'</td><td>'+f(x.qty,4)+'</td><td>'+(x.leverage||'—')+'</td><td>'+f(x.actualRisk)+'</td><td>'+f(x.netPnl,4)+'</td><td>'+f(x.actualR)+'</td><td>'+dt(x.openedAt)+'</td></tr>').join('');u.textContent='Last reconcile: '+dt(j.lastReconcile)+' · REST requests: '+j.requestCount+' · persistent: '+j.persistent}catch{u.textContent='Refresh error'}}go();setInterval(go,5000)</script></body></html>`;
 const orig=http.createServer;http.createServer=function(...args){const listener=args[0];if(typeof listener==='function')args[0]=function(req,res){const p=String(req.url||'').split('?')[0];if(req.method==='GET'&&p==='/real-money/positions'){const a=[...trades.values()];res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({ok:true,trades:a,open:a.filter(x=>x.status==='OPEN').length,closed:a.filter(x=>x.status==='CLOSED').length,lastReconcile,persistent:true,stateFile:STATE_FILE,requestCount,cooldownRemainingMs:Math.max(0,cooldownUntil-Date.now()),lastError}))}if(req.method==='GET'&&(p==='/real-money'||p==='/real-money/')){res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end(page)}return listener(req,res)};return orig.apply(this,args)};
-setTimeout(reconcile,8000).unref();setInterval(reconcile,RECONCILE_MS).unref();originalLog('REAL_MONEY_LEDGER_PRELOAD_READY',JSON.stringify({route:'/real-money',api:'/real-money/positions',seeded:trades.size,persistent:true,stateFile:STATE_FILE,reconcileMode:'OPEN_PLUS_RECENT_UNKNOWN_GROUPED_BY_SYMBOL',reconcileMs:RECONCILE_MS,unknownRetryMs:UNKNOWN_RETRY_MS,closedTradesRepolled:false}));
+setTimeout(reconcile,8000).unref();setInterval(reconcile,RECONCILE_MS).unref();originalLog('REAL_MONEY_LEDGER_PRELOAD_READY',JSON.stringify({route:'/real-money',api:'/real-money/positions',seeded:trades.size,persistent:true,stateFile:STATE_FILE,reconcileMode:'ACCOUNT_FAST_PATH_HISTORY_ON_TRANSITION',reconcileMs:RECONCILE_MS,unknownRetryMs:UNKNOWN_RETRY_MS,closedTradesRepolled:false}));

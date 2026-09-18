@@ -9,14 +9,10 @@
 
 const fs=require('node:fs');
 const path=require('node:path');
-const crypto=require('node:crypto');
 
 if(path.basename(process.argv[1]||'')!=='binance_onetap_gateway.js'){
   module.exports={active:false};
 }else{
-  const REST=(process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com').replace(/\/$/,'');
-  const API_KEY=process.env.BINANCE_API_KEY||'';
-  const PRIV=process.env.BINANCE_ED25519_PRIVATE_KEY_PEM||'';
   const TG_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
   const TG_CHAT=String(process.env.TELEGRAM_CHAT_ID||'');
   const LEDGER_FILE=String(process.env.REAL_MONEY_LEDGER_STATE_FILE||'/data/real-money-ledger-v2.json');
@@ -92,42 +88,51 @@ if(path.basename(process.argv[1]||'')!=='binance_onetap_gateway.js'){
     }
     return previousLog(...args);
   };
-  function qs(p){return Object.entries(p).filter(([,v])=>v!==undefined&&v!==null).map(([k,v])=>`${k}=${encodeURIComponent(String(v))}`).join('&')}
-  function sign(s){return crypto.sign(null,Buffer.from(s),crypto.createPrivateKey(PRIV)).toString('base64')}
-  async function signedGet(pathname,params={}){
-    const p={...params,recvWindow:5000,timestamp:Date.now()},base=qs(p);
-    const r=await fetch(`${REST}${pathname}?${base}&signature=${encodeURIComponent(sign(base))}`,{method:'GET',headers:{'X-MBX-APIKEY':API_KEY}}),txt=await r.text();let j;try{j=JSON.parse(txt)}catch{j=txt}
-    if(!r.ok)throw Error(`BINANCE_${r.status}_${j?.code??''}_${j?.msg??txt}`);return j;
-  }
   async function tg(text){
     if(!TG_TOKEN||!TG_CHAT)return;
     try{await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:TG_CHAT,text,disable_web_page_preview:true})})}catch{}
   }
   async function checkLate(){
-    if(checking||!API_KEY||!PRIV||!tracked.size)return;const now=Date.now(),late=[...tracked.values()].filter(t=>now-Number(t.startedAt||now)>=LATE_AFTER_MS);if(!late.length)return;
+    if(checking||!tracked.size)return;
+    const now=Date.now(),late=[...tracked.values()].filter(t=>now-Number(t.startedAt||now)>=LATE_AFTER_MS);
+    if(!late.length)return;
     checking=true;
     try{
-      const acc=await signedGet('/fapi/v3/account'),openSymbols=new Set((acc.positions||[]).filter(p=>Math.abs(Number(p.positionAmt||0))>0).map(p=>String(p.symbol)));
+      if(!fs.existsSync(LEDGER_FILE))return;
+      const ledger=JSON.parse(fs.readFileSync(LEDGER_FILE,'utf8'));
+      const rows=Array.isArray(ledger?.trades)?ledger.trades:[];
       let changed=false;
       for(const t of late){
         const age=now-Number(t.startedAt||now);
-        if(openSymbols.has(t.symbol)){
-          if(age>=ALERT_AFTER_MS&&!t.alerted){t.alerted=true;t.alertedAt=new Date().toISOString();changed=true;const mins=Math.round(age/60000);baseLog('ONETAP_POSITION_AGE_ALERT',JSON.stringify({id:t.id,symbol:t.symbol,ageMin:mins,autoExit:false}));await tg(`⚠️ LONG-HOLD WATCH\n${t.symbol} ${t.side||''}\nStill open after ~${mins} min.\nNo automatic close was submitted.`)}
+        const row=rows.find(x=>String(x.id||'')===String(t.id))
+          ||rows.find(x=>x.status==='OPEN'&&String(x.symbol||'')===t.symbol&&String(x.side||'')===String(t.side||''));
+        if(row?.status==='OPEN'){
+          if(age>=ALERT_AFTER_MS&&!t.alerted){
+            t.alerted=true;t.alertedAt=new Date().toISOString();changed=true;
+            const mins=Math.round(age/60000);
+            baseLog('ONETAP_POSITION_AGE_ALERT',JSON.stringify({id:t.id,symbol:t.symbol,ageMin:mins,autoExit:false,dataSource:'LEDGER'}));
+            await tg(`⚠️ LONG-HOLD WATCH\n${t.symbol} ${t.side||''}\nStill open after ~${mins} min.\nNo automatic close was submitted.`);
+          }
           continue;
         }
-        tracked.delete(t.id);changed=true;baseLog('ONETAP_LATE_POSITION_NO_LONGER_OPEN',JSON.stringify({id:t.id,symbol:t.symbol,ageMin:Math.round(age/60000)}));
-        // P&L is intentionally left to the persistent real-money ledger reconciliation.
-        await tg(`✅ POSITION NO LONGER OPEN\n${t.symbol} ${t.side||''}\nLong-hold watcher confirmed Binance position is closed.\nP&L will be read from the real-money ledger.`);
+        if(row?.status==='CLOSED'){
+          tracked.delete(t.id);changed=true;
+          baseLog('ONETAP_LATE_POSITION_NO_LONGER_OPEN',JSON.stringify({id:t.id,symbol:t.symbol,ageMin:Math.round(age/60000),dataSource:'LEDGER'}));
+          await tg(`✅ POSITION NO LONGER OPEN\n${t.symbol} ${t.side||''}\nPersistent ledger confirmed the position is closed.\nP&L is recorded in the real-money ledger.`);
+        }
       }
       if(changed)saveState();
-    }catch(e){baseLog('POSITION_LIFECYCLE_CHECK_ERR',String(e?.message||e))}
-    finally{checking=false}
+    }catch(e){
+      baseLog('POSITION_LIFECYCLE_CHECK_ERR',String(e?.message||e));
+    }finally{
+      checking=false;
+    }
   }
 
   migrateClosedSeeds();
   loadState();
   setTimeout(seedFromLedger,4000).unref();
   setInterval(checkLate,POLL_MS).unref();
-  baseLog('POSITION_LIFECYCLE_READY',JSON.stringify({readOnlyBinance:true,autoExit:false,lateAfterMs:LATE_AFTER_MS,alertAfterMs:ALERT_AFTER_MS,pollMs:POLL_MS,stateFile:STATE_FILE}));
+  baseLog('POSITION_LIFECYCLE_READY',JSON.stringify({binanceRequests:false,dataSource:'PERSISTENT_LEDGER',autoExit:false,lateAfterMs:LATE_AFTER_MS,alertAfterMs:ALERT_AFTER_MS,pollMs:POLL_MS,stateFile:STATE_FILE}));
   module.exports={active:true};
 }
