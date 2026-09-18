@@ -61,4 +61,14 @@ function isFresh(ticket, maxAge, now = Date.now()) {
   return Number.isFinite(at) && at <= now && now - at <= maxAge;
 }
 
-module.exports = {timestamp, intervalMs, closedMetrics, signalTime, isFresh};
+function selectFreshCandidates(tickets,maxAge,now=Date.now()) {
+  const best=new Map();let stale=0;
+  for(const t of tickets){
+    if(!isFresh(t,maxAge,now)){stale++;continue}
+    const old=best.get(t.symbol);
+    if(!old||t.score>old.score)best.set(t.symbol,t);
+  }
+  return{candidates:[...best.values()].sort((a,b)=>b.score-a.score).slice(0,30),deduped:best.size,stale};
+}
+
+module.exports = {timestamp, intervalMs, closedMetrics, signalTime, isFresh, selectFreshCandidates};

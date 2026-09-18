@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {closedMetrics,isFresh,intervalMs}=require('../opportunity_hunter_quality_v1');
+const {closedMetrics,isFresh,intervalMs,selectFreshCandidates}=require('../opportunity_hunter_quality_v1');
 const {normalizeTickets,idFor}=require('../hunter_onetap_adapter');
 const now=Date.UTC(2026,8,18,12,0,0),minute=60000;
 function candles(){return Array.from({length:61},(_,i)=>{
@@ -38,4 +38,13 @@ assert.notEqual(idFor(ticket),idFor({...ticket,signalAt:new Date(now).toISOStrin
 assert.equal(isFresh({openedAt:new Date(now-120000).toISOString()},120000,now),true);
 assert.equal(isFresh({openedAt:new Date(now-120001).toISOString()},120000,now),false);
 assert.equal(isFresh({},120000,now),false);
+// A stale high-scoring timeframe must not suppress a fresh alternative for the symbol.
+const selection=selectFreshCandidates([
+  {...ticket,timeframe:'15m',score:1,signalAt:new Date(now-600000).toISOString()},
+  {...ticket,timeframe:'1m',score:.8},
+  {...ticket,symbol:'ETHUSDT',score:.9},
+  {...ticket,symbol:'ETHUSDT',score:.7}
+],120000,now);
+assert.equal(selection.stale,1);assert.equal(selection.deduped,2);
+assert.deepEqual(selection.candidates.map(x=>[x.symbol,x.timeframe]),[['ETHUSDT','5m'],['BTCUSDT','1m']]);
 console.log('HUNTER_SIGNAL_QUALITY_V1_PASS');
