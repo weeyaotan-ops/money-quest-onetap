@@ -73,6 +73,19 @@ class HunterLiveGateV1 {
     };
   }
 
+  breakdown(xs,keyFn){
+    const groups=new Map();
+    for(const x of xs){
+      const key=String(keyFn(x)||'UNKNOWN');
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(x);
+    }
+    return [...groups.entries()]
+      .map(([key,rows])=>({key,...this.stats(rows)}))
+      .sort((a,b)=>b.n-a.n||Math.abs(b.totalR)-Math.abs(a.totalR)||a.key.localeCompare(b.key));
+  }
+
+
   scoreCandidate(c){
     const id=String(c?.id||'');
     if(id&&this.decisionById.has(id))return this.decisionById.get(id);
@@ -86,7 +99,11 @@ class HunterLiveGateV1 {
     const sd=this.history.filter(x=>x.side===side).slice(-this.sideWindow);
     const rg=this.history.filter(x=>x.regime===regime&&regime!=='UNKNOWN').slice(-this.sideWindow);
     const sr=this.history.filter(x=>x.symbol===symbol&&x.side===side).slice(-this.symbolWindow);
-    const scopes={recent:this.stats(recent),symbol:this.stats(sym),side:this.stats(sd),regime:this.stats(rg),symbolSide:this.stats(sr)};
+    const tf=this.history.filter(x=>x.timeframe===timeframe&&timeframe!=='UNKNOWN').slice(-this.sideWindow);
+    const ed=this.history.filter(x=>x.edge===edge&&edge!=='UNKNOWN').slice(-this.sideWindow);
+    const srg=this.history.filter(x=>x.side===side&&x.regime===regime&&regime!=='UNKNOWN').slice(-this.sideWindow);
+    const etf=this.history.filter(x=>x.edge===edge&&x.timeframe===timeframe&&edge!=='UNKNOWN'&&timeframe!=='UNKNOWN').slice(-this.sideWindow);
+    const scopes={recent:this.stats(recent),symbol:this.stats(sym),side:this.stats(sd),regime:this.stats(rg),symbolSide:this.stats(sr),timeframe:this.stats(tf),edge:this.stats(ed),sideRegime:this.stats(srg),edgeTimeframe:this.stats(etf)};
 
     let score=0.5;
     const reasons=[];
@@ -147,12 +164,23 @@ class HunterLiveGateV1 {
     const passed=matched.filter(x=>x.gateVerdict==='PASS');
     const watched=matched.filter(x=>x.gateVerdict==='WATCH');
     const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected);
+    const evidenceWindow=this.history.slice(-Math.max(100,this.recentWindow));
+    const evidence={
+      window:evidenceWindow.length,
+      side:this.breakdown(evidenceWindow,x=>x.side),
+      regime:this.breakdown(evidenceWindow,x=>x.regime),
+      timeframe:this.breakdown(evidenceWindow,x=>x.timeframe),
+      edge:this.breakdown(evidenceWindow,x=>x.edge),
+      sideRegime:this.breakdown(evidenceWindow,x=>`${x.side}|${x.regime}`),
+      edgeTimeframe:this.breakdown(evidenceWindow,x=>`${x.edge}|${x.timeframe}`)
+    };
     return {
       name:'HUNTER_LIVE_GATE_V1',mode:'OBSERVATIONAL_ONLY',
       dataQuality:{ignoredMissingActualR:this.ignoredMissingActualR,validClosedTrades:this.history.length},
       thresholds:{minSamples:this.minSamples,recentWindow:this.recentWindow,symbolWindow:this.symbolWindow,sideWindow:this.sideWindow,minExpectancyR:this.minExpectancyR,minProfitFactor:this.minProfitFactor,maxRecentDrawdownR:this.maxRecentDrawdownR},
       historicalBackfill:all,
       recent,
+      evidence,
       forward:{
         decisions:this.decisions.length,
         matched:matched.length,
