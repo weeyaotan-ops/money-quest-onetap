@@ -7,6 +7,7 @@ const PROD_PORT=Number(process.env.V13_INNER_PORT||19000);
 const SHADOW_PORT=Number(process.env.MASTER_BRAIN_SHADOW_PORT||19100);
 const SHADOW_EVO_PORT=Number(process.env.MASTER_BRAIN_EVO_PORT||19200);
 const HUNTER_PORT=Number(process.env.OPPORTUNITY_HUNTER_PORT||19300);
+const RELAY_PORT=Number(process.env.BINANCE_PRIVATE_RELAY_PORT||19400);
 const HOST='127.0.0.1';
 let stopping=false;
 const children=new Set();
@@ -41,6 +42,7 @@ function startProd(){
 startProd();
 const shadow=launch('validation_server_master_brain_self_discovery_v1.js',{PORT:String(SHADOW_PORT),SELF_DISCOVERY_EVO_PORT:String(SHADOW_EVO_PORT),MASTER_BRAIN_SHADOW:'1'},'MASTER_BRAIN_SHADOW');
 const hunter=launch('opportunity_hunter_server_v1.js',{OPPORTUNITY_HUNTER_PORT:String(HUNTER_PORT)},'OPPORTUNITY_HUNTER');
+const relay=process.env.BINANCE_PRIVATE_RELAY_TOKEN?launch('binance_private_egress_relay.js',{BINANCE_PRIVATE_RELAY_PORT:String(RELAY_PORT)},'BINANCE_PRIVATE_RELAY'):null;
 
 function proxy(req,res,targetPort,path,rewriteMasterHtml=false){
   const headers={...req.headers,host:HOST+':'+targetPort};
@@ -63,7 +65,7 @@ const server=http.createServer((req,res)=>{
   const u=req.url||'/';
   if(u==='/health'){
     res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
-    return res.end(JSON.stringify({ok:true,supervisor:true,prodRunning:!!(prod&&!prod.killed&&prod.exitCode===null),hunterRunning:!!(hunter&&!hunter.killed&&hunter.exitCode===null),shadowRunning:!!(shadow&&!shadow.killed&&shadow.exitCode===null),prodRestartPending:!!prodRestartTimer}))
+    return res.end(JSON.stringify({ok:true,supervisor:true,prodRunning:!!(prod&&!prod.killed&&prod.exitCode===null),hunterRunning:!!(hunter&&!hunter.killed&&hunter.exitCode===null),shadowRunning:!!(shadow&&!shadow.killed&&shadow.exitCode===null),relayRunning:!!(relay&&!relay.killed&&relay.exitCode===null),prodRestartPending:!!prodRestartTimer}))
   }
   if(u==='/master-brain'||u.startsWith('/master-brain/')){const path=u==='/master-brain'?'/':u.slice('/master-brain'.length)||'/';return proxy(req,res,SHADOW_PORT,path,true)}
   if(u==='/hunter'||u.startsWith('/hunter/')){const path=u==='/hunter'?'/':u.slice('/hunter'.length)||'/';return proxy(req,res,HUNTER_PORT,path,false)}
@@ -76,4 +78,4 @@ function stop(){
   try{server.close(()=>process.exit(0))}catch{process.exit(0)}
 }
 process.on('SIGTERM',stop);process.on('SIGINT',stop);
-server.listen(PUBLIC_PORT,()=>console.log('V13_MASTER_SIDECAR_READY',JSON.stringify({port:PUBLIC_PORT,prodPort:PROD_PORT,shadowPort:SHADOW_PORT,shadowEvolutionPort:SHADOW_EVO_PORT,hunterPort:HUNTER_PORT,productionBehavior:'PROXIED_V13_SELF_HEALING',masterBrain:'SHADOW_ONLY',opportunityHunter:'BINANCE_FUTURES_MULTI_EDGE',realMoney:false,prodRestart:'EXPONENTIAL_BACKOFF'})));
+server.listen(PUBLIC_PORT,()=>console.log('V13_MASTER_SIDECAR_READY',JSON.stringify({port:PUBLIC_PORT,prodPort:PROD_PORT,shadowPort:SHADOW_PORT,shadowEvolutionPort:SHADOW_EVO_PORT,hunterPort:HUNTER_PORT,relayPort:relay?RELAY_PORT:null,productionBehavior:'PROXIED_V13_SELF_HEALING',masterBrain:'SHADOW_ONLY',opportunityHunter:'BINANCE_FUTURES_MULTI_EDGE',realMoney:false,prodRestart:'EXPONENTIAL_BACKOFF'})));
