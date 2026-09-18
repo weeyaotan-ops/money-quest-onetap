@@ -16,4 +16,7 @@ jobs:
       - run: node --check real_money_ledger_preload.js
       - run: node --check hunter_confirm_live_boot.js
       - run: node test/binance_rate_guard_v1.test.js
+      - run: node --check opportunity_hunter_rate_governor_v1.js
+      - run: node --check opportunity_hunter_server_v1.js
+      - run: node test/opportunity_hunter_rate_governor_v1.test.js
       - run: node test/resting_v2_policy.test.js
