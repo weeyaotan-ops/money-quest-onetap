@@ -15,18 +15,20 @@ function headerValue(headers,name){
 }
 global.fetch=async function binanceRelayFetch(input,init={}){
   if(!RELAY_URL||!TOKEN)return originalFetch(input,init);
-  let u;try{u=new URL(typeof input==='string'?input:input.url)}catch{return originalFetch(input,init)}
+  const target=typeof input==='string'?input:input.url;
+  let u;try{u=new URL(target)}catch{return originalFetch(input,init)}
   const method=String(init?.method||(typeof input!=='string'&&input?.method)||'GET').toUpperCase();
   if(u.host!==HOST)return originalFetch(input,init);
   const isGet=method==='GET',writeKey=method+' '+u.pathname;
-  if(!isGet&&(!WRITES||!WRITE_ALLOW.has(writeKey)))return originalFetch(input,init);
+  if(!isGet&&!WRITES)return originalFetch(input,init);
+  if(!isGet&&!WRITE_ALLOW.has(writeKey))return new Response(JSON.stringify({code:-1003,msg:'Private Binance egress write not allowlisted'}),{status:503,headers:{'content-type':'application/json','x-private-relay':'blocked'}});
   const sourceHeaders=init?.headers||(typeof input!=='string'?input.headers:null);
   const apiKey=headerValue(sourceHeaders,'X-MBX-APIKEY');
   try{
     const rr=await originalFetch(RELAY_URL,{
       method:'POST',
       headers:{'content-type':'application/json','x-relay-token':TOKEN},
-      body:JSON.stringify({method,url:u.toString(),apiKey}),
+      body:JSON.stringify({method,url:String(target),apiKey}),
       signal:AbortSignal.timeout(12000)
     });
     const j=await rr.json();
