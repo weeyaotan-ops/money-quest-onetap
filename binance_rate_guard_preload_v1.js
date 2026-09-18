@@ -17,6 +17,7 @@ const BRACKET_TTL=Math.max(300000,Number(process.env.BINANCE_BRACKET_CACHE_MS||2
 const BASE_BACKOFF_MS=Math.max(30000,Number(process.env.BINANCE_RATE_LIMIT_BASE_BACKOFF_MS||60000));
 const MAX_BACKOFF_MS=Math.max(BASE_BACKOFF_MS,Number(process.env.BINANCE_RATE_LIMIT_MAX_BACKOFF_MS||15*60*1000));
 const STATE_FILE=String(process.env.BINANCE_RATE_GUARD_STATE_FILE||'/data/binance-rate-guard-v1.json');
+const STARTUP_GRACE_MS=Math.max(0,Number(process.env.BINANCE_RATE_GUARD_STARTUP_GRACE_MS||0));
 const cache=new Map(),inflight=new Map();
 const stats={network:0,cacheHits:0,staleCacheHits:0,syntheticCommission:0,bracketFallbacks:0,rateLimited:0,localCooldownBlocks:0,lastRateLimit:null,persistRestores:0};
 let cooldownUntil=0,rateLimitStreak=0,lastLimitAt=0;
@@ -131,6 +132,10 @@ async function fetchAndCache(url,init,key,ttl,fallback){
   return cloneResponse(x.body,x.status,x.headers);
 }
 loadState();
+if(STARTUP_GRACE_MS>0&&cooldownUntil<=Date.now()){
+  cooldownUntil=Date.now()+STARTUP_GRACE_MS;
+  saveState();
+}
 
 global.fetch=async function rateGuardFetch(input,init={}){
   let u;try{u=new URL(typeof input==='string'?input:input.url)}catch{return originalFetch(input,init)}
@@ -157,4 +162,4 @@ global.fetch=async function rateGuardFetch(input,init={}){
   return r;
 };
 setInterval(()=>console.log('BINANCE_RATE_GUARD_STATS',JSON.stringify({...stats,cache:cache.size,cooldownRemainingMs:Math.max(0,cooldownUntil-Date.now()),rateLimitStreak,persistent:true,stateFile:STATE_FILE})),60000).unref();
-console.log('BINANCE_RATE_GUARD_READY',JSON.stringify({host:restHost,commissionMode:'CONSERVATIVE_FALLBACK',fallbackTakerBps:FALLBACK_TAKER*10000,metaCacheMs:META_TTL,bracketCacheMs:BRACKET_TTL,bracketFallbackLeverage:BRACKET_FALLBACK,writeRequestsUntouched:true,getCooldown:true,handles429:true,persistentCooldown:true,stateFile:STATE_FILE,cooldownRemainingMs:Math.max(0,cooldownUntil-Date.now())}));
+console.log('BINANCE_RATE_GUARD_READY',JSON.stringify({host:restHost,commissionMode:'CONSERVATIVE_FALLBACK',fallbackTakerBps:FALLBACK_TAKER*10000,metaCacheMs:META_TTL,bracketCacheMs:BRACKET_TTL,bracketFallbackLeverage:BRACKET_FALLBACK,writeRequestsUntouched:true,getCooldown:true,handles429:true,persistentCooldown:true,stateFile:STATE_FILE,cooldownRemainingMs:Math.max(0,cooldownUntil-Date.now()),startupGraceMs:STARTUP_GRACE_MS}));
