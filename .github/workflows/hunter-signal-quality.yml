@@ -17,6 +17,7 @@ jobs:
           node --check opportunity_hunter_server_v1.js
           node --check hunter_confirm_live_boot.js
           node test/hunter_signal_quality_v1.test.js
+          node test/hunter_setup_selection_v1.test.js
           node test/hunter_quality_integration_v1.test.js
           node test/hunter_win_quality_v1.test.js
           node test/hunter_live_gate_v1.test.js

@@ -95,7 +95,7 @@ console.log=(...args)=>{
     let x=parse('ONETAP_LIVE_EXECUTED',args);
     if(x){
       const id=String(x.id||''),old=liveById.get(id)||{};
-      const c={...old,id,symbol:x.symbol||old.symbol,side:x.side||old.side,openedAt:old.openedAt||new Date().toISOString()};
+      const c={...old,id,symbol:x.symbol||old.symbol,side:x.side||old.side,edge:x.edge||old.edge,timeframe:x.timeframe||old.timeframe,regime:x.regime||old.regime,selectionVersion:x.selectionVersion||old.selectionVersion||'LEGACY',openedAt:old.openedAt||new Date().toISOString()};
       liveById.set(id,c);
       const d=gate.scoreCandidate(c);
       saveState();
@@ -104,7 +104,7 @@ console.log=(...args)=>{
     x=parse('ONETAP_POSITION_CLOSED',args);
     if(x){
       const id=String(x.id||''),old=liveById.get(id)||{};
-      const t={...old,id,symbol:x.symbol||old.symbol,actualR:x.stats?.actualR,netPnl:x.stats?.net,closedAt:new Date().toISOString()};
+      const t={...old,id,symbol:x.symbol||old.symbol,selectionVersion:x.selectionVersion||old.selectionVersion||'LEGACY',actualR:x.stats?.actualR,netPnl:x.stats?.net,closedAt:new Date().toISOString()};
       if(gate.ingestClosedTrade(t)){
         liveById.delete(id);
         saveState();
@@ -157,7 +157,7 @@ async function backfill(){
     lastBackfill=new Date().toISOString();
     originalLog('HUNTER_LIVE_GATE_BACKFILL',JSON.stringify({source:'REAL_MONEY_LEDGER',seen:xs.length,added,ignoredMissingActualR,totalClosed:gate.history.length,lastBackfill,persistent:true}));
     const snapshot=gate.report();
-    originalLog('HUNTER_LIVE_GATE_EVIDENCE_SNAPSHOT',JSON.stringify({validClosed:snapshot.dataQuality.validClosedTrades,recent:snapshot.recent,evidence:snapshot.evidence,forward:snapshot.forward,winQuality:snapshot.winQuality}));
+    originalLog('HUNTER_LIVE_GATE_EVIDENCE_SNAPSHOT',JSON.stringify({validClosed:snapshot.dataQuality.validClosedTrades,recent:snapshot.recent,evidence:snapshot.evidence,forward:snapshot.forward,winQuality:snapshot.winQuality,selectionVersions:snapshot.selectionVersions}));
   }catch(e){originalLog('HUNTER_LIVE_GATE_BACKFILL_ERR',String(e?.message||e))}
   finally{backfilling=false}
 }

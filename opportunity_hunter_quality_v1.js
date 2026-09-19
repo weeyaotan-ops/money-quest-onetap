@@ -16,7 +16,7 @@ function closedMetrics(klines, tf, now = Date.now()) {
   const interval = intervalMs(tf);
   if (!Array.isArray(klines) || !Number.isFinite(interval)) return null;
   const bars = klines.filter(x => Array.isArray(x) && Number(x[6]) < now).slice(-60);
-  if (bars.length < 20) return null;
+  if (bars.length < 22) return null;
   for (let i = 0; i < bars.length; i++) {
     const [openTime, open, high, low, close, , closeTime] = bars[i].map(Number);
     if (![openTime, open, high, low, close, closeTime].every(Number.isFinite) ||
@@ -39,6 +39,10 @@ function closedMetrics(klines, tf, now = Date.now()) {
     const high = Number(bars[i][2]), low = Number(bars[i][3]), prev = c[i-1];
     tr += Math.max(high-low, Math.abs(high-prev), Math.abs(low-prev));
   }
+  const trueRange=i=>Math.max(Number(bars[i][2])-Number(bars[i][3]),Math.abs(Number(bars[i][2])-c[i-1]),Math.abs(Number(bars[i][3])-c[i-1]));
+  const ema=(xs,period)=>xs.slice(1).reduce((v,x)=>v+(x-v)*2/(period+1),xs[0]);
+  const candle=b=>({open:Number(b[1]),high:Number(b[2]),low:Number(b[3]),close:Number(b[4])});
+  const priorAtr14=Array.from({length:14},(_,i)=>trueRange(bars.length-15+i)).reduce((a,b)=>a+b,0)/14;
   return {
     mom:Math.log(c.at(-1)/c[0])*1e4,
     er:path ? Math.abs(c.at(-1)-c[0])/path : 0,
@@ -46,7 +50,12 @@ function closedMetrics(klines, tf, now = Date.now()) {
     close:c.at(-1), atr:tr/14,
     high20:Math.max(...bars.slice(-21,-1).map(x => Number(x[2]))),
     low20:Math.min(...bars.slice(-21,-1).map(x => Number(x[3]))),
-    closedAt, closedBars:bars.length
+    closedAt, closedBars:bars.length,
+    pattern:{last:candle(bars.at(-1)),previous:candle(bars.at(-2)),
+      priorHigh20:Math.max(...bars.slice(-22,-2).map(x=>Number(x[2]))),
+      priorLow20:Math.min(...bars.slice(-22,-2).map(x=>Number(x[3]))),
+      ema8:ema(c,8),ema20:ema(c,20),previousEma20:ema(c.slice(0,-1),20),
+      priorAtr14,lastTR:trueRange(bars.length-1)}
   };
 }
 

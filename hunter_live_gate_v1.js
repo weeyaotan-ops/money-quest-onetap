@@ -41,6 +41,7 @@ class HunterLiveGateV1 {
       regime:String(t.regime||t.shadowStructureRegime||d?.regime||'UNKNOWN'),
       timeframe:String(t.timeframe||d?.timeframe||'UNKNOWN'),
       edge:String(t.edge||d?.edge||'UNKNOWN'),
+      selectionVersion:String(d?.selectionVersion||t.selectionVersion||'LEGACY'),
       actualR:r,
       netPnl:finiteNumber(t.netPnl),
       closedAt:t.closedAt||new Date().toISOString(),
@@ -177,7 +178,7 @@ class HunterLiveGateV1 {
 
     const prediction=winQuality.estimate(c,this.history);
     const decision={
-      id,at:new Date().toISOString(),symbol,side,regime,timeframe,edge,
+      id,at:new Date().toISOString(),symbol,side,regime,timeframe,edge,selectionVersion:String(c.selectionVersion||'LEGACY'),
       score,verdict,reasons,scopes,challenger,winQuality:prediction,
       observationalOnly:true,liveExecutionChanged:false
     };
@@ -188,6 +189,19 @@ class HunterLiveGateV1 {
       for(const x of removed)if(x.id&&this.decisionById.get(x.id)===x)this.decisionById.delete(x.id);
     }
     return decision;
+  }
+
+  evidenceFor(history){
+    const evidenceWindow=history.slice(-Math.max(100,this.recentWindow));
+    return{
+      window:evidenceWindow.length,
+      side:this.breakdown(evidenceWindow,x=>x.side),
+      regime:this.breakdown(evidenceWindow,x=>x.regime),
+      timeframe:this.breakdown(evidenceWindow,x=>x.timeframe),
+      edge:this.breakdown(evidenceWindow,x=>x.edge),
+      sideRegime:this.breakdown(evidenceWindow,x=>`${x.side}|${x.regime}`),
+      edgeTimeframe:this.breakdown(evidenceWindow,x=>`${x.edge}|${x.timeframe}`)
+    };
   }
 
   report(){
@@ -204,16 +218,9 @@ class HunterLiveGateV1 {
     const challengerWatched=matched.filter(x=>x.challengerVerdict==='WATCH');
     const baseline=this.stats(matched),keptStats=this.stats(kept),rejectedStats=this.stats(rejected),
       challengerKeptStats=this.stats(challengerKept),challengerRejectedStats=this.stats(challengerRejected);
-    const evidenceWindow=this.history.slice(-Math.max(100,this.recentWindow));
-    const evidence={
-      window:evidenceWindow.length,
-      side:this.breakdown(evidenceWindow,x=>x.side),
-      regime:this.breakdown(evidenceWindow,x=>x.regime),
-      timeframe:this.breakdown(evidenceWindow,x=>x.timeframe),
-      edge:this.breakdown(evidenceWindow,x=>x.edge),
-      sideRegime:this.breakdown(evidenceWindow,x=>`${x.side}|${x.regime}`),
-      edgeTimeframe:this.breakdown(evidenceWindow,x=>`${x.edge}|${x.timeframe}`)
-    };
+    const evidence=this.evidenceFor(this.history);
+    const versions=[...new Set(this.history.map(x=>x.selectionVersion||'LEGACY'))];
+    const evidenceBySelectionVersion=Object.fromEntries(versions.map(v=>[v,this.evidenceFor(this.history.filter(x=>(x.selectionVersion||'LEGACY')===v))]));
     return {
       name:'HUNTER_LIVE_GATE_V1',mode:'OBSERVATIONAL_ONLY',
       dataQuality:{ignoredMissingActualR:this.ignoredMissingActualR,validClosedTrades:this.history.length},
@@ -222,6 +229,8 @@ class HunterLiveGateV1 {
       winQuality:winQuality.evaluate(this.history),
       recent,
       evidence,
+      evidenceBySelectionVersion,
+      selectionVersions:this.breakdown(this.history,x=>x.selectionVersion||'LEGACY'),
       forward:{
         decisions:this.decisions.length,
         matched:matched.length,

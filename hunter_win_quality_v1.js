@@ -18,7 +18,7 @@ function wilson(wins,n){
   return{low:Math.max(0,center-half),high:Math.min(1,center+half)};
 }
 function estimate(candidate,history,asOf=Date.now()){
-  const valid=history.filter(t=>number(t.actualR)!==null&&Number.isFinite(Date.parse(t.closedAt))&&Date.parse(t.closedAt)<asOf)
+  const valid=history.filter(t=>(t.selectionVersion||'LEGACY')===(candidate.selectionVersion||'LEGACY')&&number(t.actualR)!==null&&Number.isFinite(Date.parse(t.closedAt))&&Date.parse(t.closedAt)<asOf)
     .sort((a,b)=>Date.parse(a.closedAt)-Date.parse(b.closedAt)).slice(-100);
   const base=summarize(valid);
   const edge=key(candidate.edge||candidate.setup),tf=key(candidate.timeframe),side=key(candidate.side);
@@ -41,7 +41,7 @@ function estimate(candidate,history,asOf=Date.now()){
   const interval=wilson(sample.wins,sample.n),netRR=number(candidate._actualNetRR??candidate.netRR);
   const breakEven=netRR!==null&&netRR>0?1/(1+netRR):null;
   const supported=sample.n>=30&&expectedR>0&&breakEven!==null&&interval.low>breakEven;
-  return{version:VERSION,mode:'SHADOW_ONLY',asOf:new Date(asOf).toISOString(),scope,n:sample.n,baselineN:base.n,
+  return{version:VERSION,mode:'SHADOW_ONLY',selectionVersion:candidate.selectionVersion||'LEGACY',asOf:new Date(asOf).toISOString(),scope,n:sample.n,baselineN:base.n,
     winProbability:probability,expectedR,winRateInterval95:interval,breakEvenWinRate:breakEven,
     verdict:supported?'SUPPORTED':'UNPROVEN',priorN:PRIOR_N,calibrated:false,liveExecutionChanged:false};
 }

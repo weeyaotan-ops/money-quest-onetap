@@ -13,6 +13,8 @@ assert.equal(weak.verdict,'UNPROVEN');assert.ok(weak.expectedR<0);
 const strong=estimate(candidate,rows(80,i=>i%5===0?-1:1.5),now);
 assert.equal(strong.verdict,'SUPPORTED');assert.equal(strong.mode,'SHADOW_ONLY');
 assert.equal(strong.liveExecutionChanged,false);assert.equal(strong.calibrated,false);
+assert.equal(estimate({...candidate,selectionVersion:'CONFIRMED_STRUCTURE_V1'},rows(80,2),now).baselineN,0);
+assert.equal(estimate({...candidate,selectionVersion:'CONFIRMED_STRUCTURE_V1'},rows(80,2).map(t=>({...t,selectionVersion:'CONFIRMED_STRUCTURE_V1'})),now).baselineN,80);
 // A high win rate with rare catastrophic losses must not earn support.
 assert.equal(estimate(candidate,rows(80,i=>i%10===0?-20:1),now).verdict,'UNPROVEN');
 // Future results and missing labels cannot leak into the estimate.
@@ -39,4 +41,12 @@ ordered.ingestClosedTrade({id:'old',actualR:-1,closedAt:new Date(now-3000).toISO
 ordered.ingestClosedTrade({id:'middle',actualR:1,closedAt:new Date(now-2000).toISOString()});
 assert.deepEqual(ordered.history.map(x=>x.id),['old','middle','new']);
 assert.equal(ordered.report().recent.totalR,3);
+const versioned=new HunterLiveGateV1();
+versioned.ingestClosedTrade({id:'legacy',actualR:-1,closedAt:new Date(now).toISOString()});
+const vd=versioned.scoreCandidate({id:'confirmed',...candidate,selectionVersion:'CONFIRMED_STRUCTURE_V1'});
+versioned.ingestClosedTrade({id:'confirmed',actualR:2,closedAt:new Date(Date.parse(vd.at)+1000).toISOString()});
+assert.equal(versioned.history.at(-1).selectionVersion,'CONFIRMED_STRUCTURE_V1');
+assert.equal(versioned.report().evidenceBySelectionVersion.CONFIRMED_STRUCTURE_V1.side[0].totalR,2);
+assert.equal(versioned.report().evidenceBySelectionVersion.LEGACY.side[0].totalR,-1);
+assert.equal(versioned.report().selectionVersions.length,2);
 console.log('HUNTER_WIN_QUALITY_V1_PASS');
