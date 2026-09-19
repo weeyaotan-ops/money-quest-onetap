@@ -2,6 +2,15 @@
 
 Selection identifier: `CONFIRMED_STRUCTURE_V1`.
 
+Status: withdrawn from live selection. The detector and `huntConfirmed` scorer
+are retained for offline study only. The active scanner uses the previous
+`LEGACY` selection behavior, including its existing simulated feedback. Neither
+that simulated feedback nor passing unit tests establishes a profitable edge.
+Versioned real-trade history is retained so outcomes of this experiment remain
+visible. A future promotion requires prospective performance evidence, not just
+pattern correctness. The implementation description below records the withdrawn
+experiment, not the current live selection rules.
+
 This revision changes live signal eligibility. It does not establish an achieved
 win rate or positive net expectancy. No performance percentage is promised.
 

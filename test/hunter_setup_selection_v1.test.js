@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 const {confirmedSetups,stopSupportsSetup}=require('../opportunity_hunter_setup_v1');
-const {hunt}=require('../opportunity_hunter_v1');
+const {huntConfirmed:hunt}=require('../opportunity_hunter_v1');
 const {closedMetrics}=require('../opportunity_hunter_quality_v1');
 const base=()=>({mom:40,er:.2,vol:40,high20:110,low20:90,pattern:{
   last:{open:100,high:102,low:98,close:101},previous:{open:99,high:102,low:97,close:100},

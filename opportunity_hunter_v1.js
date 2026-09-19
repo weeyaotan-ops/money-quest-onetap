@@ -46,6 +46,21 @@ function adaptiveScore(edge,base,regime,learning={}){
 function hunt(input={},opts={}){
   const floor=finite(opts.minScore,.62),minRR=finite(opts.minRR,1.20),maxSpreadBps=finite(opts.maxSpreadBps,8),learning=opts.learning||{};
   const spread=finite(input.spreadBps,99),rr=finite(input.rr,0),regime=regimeOf(input.market||{});
+  const edges=edgeScores(input).map(x=>({...x,regimeFit:finite(FIT[regime]?.[x.edge],1),score:adaptiveScore(x.edge,x.baseScore,regime,learning)})).sort((a,b)=>b.score-a.score),best=edges[0];
+  // Dynamic hurdle: active regimes can hunt harder; mixed/uncertain regimes demand more evidence.
+  const regimeHurdle={TREND:.64,BREAKOUT:.65,RANGE:.63,HIGH_VOL:.66,MIXED:.70}[regime]||.70;
+  const hurdle=Math.max(floor,regimeHurdle),reasons=[];
+  if(spread>maxSpreadBps)reasons.push('SPREAD_TOO_WIDE');
+  if(rr<minRR)reasons.push('RR_TOO_LOW');
+  if(!best||best.score<hurdle)reasons.push('EDGE_VALUE_TOO_LOW');
+  if(reasons.length)return{action:'NO_TRADE',regime,hurdle,reasons,edges};
+  return{action:'ONE_TAP_CANDIDATE',regime,edge:best.edge,score:best.score,baseScore:best.baseScore,hurdle,side:input.sourceSide,symbol:input.symbol,entry:input.entry,sl:input.sl,tp:input.tp,rr,spreadBps:spread,edges};
+}
+
+// Experimental eligibility is retained for offline study, never the live entry point.
+function huntConfirmed(input={},opts={}){
+  const floor=finite(opts.minScore,.62),minRR=finite(opts.minRR,1.20),maxSpreadBps=finite(opts.maxSpreadBps,8),learning=opts.learning||{};
+  const spread=finite(input.spreadBps,99),rr=finite(input.rr,0),regime=regimeOf(input.market||{});
   // Rank only the detected pattern; unrelated high scores cannot relabel its side.
   const direction=input.sourceSide==='BUY'?1:input.sourceSide==='SELL'?-1:0;
   const edges=edgeScores(input).filter(x=>input.setupConfirmed===true&&direction&&x.edge===input.sourceSetup&&
@@ -62,4 +77,4 @@ function hunt(input={},opts={}){
   return{action:'ONE_TAP_CANDIDATE',regime,edge:best.edge,score:best.score,baseScore:best.baseScore,hurdle,side:input.sourceSide,symbol:input.symbol,entry:input.entry,sl:input.sl,tp:input.tp,rr,spreadBps:spread,edges};
 }
 
-module.exports={regimeOf,edgeScores,adaptiveScore,hunt};
+module.exports={regimeOf,edgeScores,adaptiveScore,hunt,huntConfirmed};

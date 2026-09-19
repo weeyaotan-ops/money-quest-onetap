@@ -16,11 +16,14 @@ function backoff(attempt){return Math.min(8000,500*Math.pow(2,attempt)) + Math.f
 async function governed(input,init,{paced=true}={}){
   let transient=0,rateRetries=0;
   while(true){
+    init?.signal?.throwIfAborted();
     const wait=Math.max(0,cooldownUntil-Date.now(),paced?lastCallAt+MIN_GAP-Date.now():0);
     if(wait>0)await sleep(wait);
+    init?.signal?.throwIfAborted();
     if(paced)lastCallAt=Date.now();
     let r;
     try{r=await originalFetch(input,init)}catch(e){
+      if(init?.signal?.aborted)throw e;
       if(transient>=MAX_TRANSIENT_RETRIES)throw e;
       const delay=backoff(transient++);
       console.warn('TELEGRAM_TRANSIENT_RETRY',JSON.stringify({method:methodOf(input),kind:'FETCH',attempt:transient,delayMs:delay,error:String(e?.message||e)}));
@@ -46,10 +49,10 @@ async function governed(input,init,{paced=true}={}){
 globalThis.fetch=function(input,init){
   if(!isTelegram(input))return originalFetch(input,init);
   const method=methodOf(input);
-  // Callback queries have a short validity window: do not queue them behind sends.
-  if(method==='answerCallbackQuery')return governed(input,init,{paced:false});
+  // Long polling must not occupy the outbound message queue. Callbacks also bypass it.
+  if(method==='answerCallbackQuery'||method==='getUpdates')return governed(input,init,{paced:false});
   const task=chain.then(()=>governed(input,init,{paced:true}));
   chain=task.catch(()=>{});
   return task
 };
-console.log('TELEGRAM_ADAPTIVE_GOVERNOR_READY',JSON.stringify({minGapMs:MIN_GAP,max429Retries:MAX_429_RETRIES,maxTransientRetries:MAX_TRANSIENT_RETRIES,callbackPriority:true,transientRecovery:true}));
+console.log('TELEGRAM_ADAPTIVE_GOVERNOR_READY',JSON.stringify({minGapMs:MIN_GAP,max429Retries:MAX_429_RETRIES,maxTransientRetries:MAX_TRANSIENT_RETRIES,callbackPriority:true,longPollIndependent:true,expiredRequestsCancelled:true,transientRecovery:true}));

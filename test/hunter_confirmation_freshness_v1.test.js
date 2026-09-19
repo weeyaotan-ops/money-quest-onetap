@@ -10,7 +10,7 @@ const epoch=Date.parse('2026-01-01T00:00:00Z');
 function harness(env={}){
   const clock={now:epoch};
   class Clock extends Date { static now(){return clock.now} }
-  const context=vm.createContext({clock,Date:Clock,Buffer,URL,
+  const context=vm.createContext({clock,Date:Clock,Buffer,URL,AbortSignal,
     require:name=>name==='node:http'?{createServer:()=>({listen(){}})}:gatewayRequire(name),
     process:{env:{BINANCE_ONETAP_LIVE:'1',TELEGRAM_CHAT_ID:'chat',TELEGRAM_AUTH_USER_ID:'user',...env}},
     console:{log(){},warn(){},error(){}},setInterval:()=>({unref(){}}),setTimeout,
@@ -23,7 +23,7 @@ function harness(env={}){
     const item={ticket,expiresAt:clock.now+90000,preview:p};
     const realPreview=preview;
     preview=async()=>{calls.push('preview');return p};
-    tg=async(method,payload)=>{calls.push({method,payload});return{message_id:1}};
+    tg=async(method,payload,options)=>{calls.push({method,payload,options});return{message_id:1}};
     changeLeverage=async()=>{calls.push('leverage')};
     dualMode=async()=>{calls.push('dual');return false};
     entryOrder=async()=>{calls.push('entry');return{executedQty:0}};
@@ -42,6 +42,8 @@ async function main(){
   await h.run('sendPending(ticket)');
   assert.equal(h.run('[...pending.values()][0].expiresAt'),epoch+10000);
   assert.match(h.run("calls.find(x=>x.method==='sendMessage').payload.text"),/VALID   10s/);
+  assert.equal(h.run("calls.find(x=>x.method==='sendMessage').options.signal.aborted"),false);
+  assert.equal(h.run("typeof calls.find(x=>x.method==='sendMessage').options.signal.addEventListener"),'function');
   h.clock.now=epoch+10000;
   await h.run("handleCallback({id:'q',data:'mh:'+pending.keys().next().value,message:{chat:{id:'chat'}},from:{id:'user'}})");
   assert.equal(h.run("calls.includes('entry')"),false);
