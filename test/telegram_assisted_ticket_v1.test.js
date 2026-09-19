@@ -5,7 +5,7 @@ const vm=require('node:vm');
 // Exercise UI and callbacks with isolated dependencies: zero exchange I/O.
 const src=fs.readFileSync(require.resolve('../binance_onetap_gateway.js'),'utf8');
 const messages=[];
-const fakeRequire=name=>name==='node:http'?{createServer:()=>({listen:()=>{}})}:require(name);
+const fakeRequire=name=>name==='node:http'?{createServer:()=>({listen:()=>{}})}:require(require.resolve(name,{paths:[require('node:path').resolve(__dirname,'..')]}));
 const context=vm.createContext({require:fakeRequire,Buffer,URL,process:{env:{TELEGRAM_CHAT_ID:'test-chat',TELEGRAM_AUTH_USER_ID:'test-user',BINANCE_ONETAP_LIVE:'1'}},console:{log(){},warn(){},error(){}},setInterval:()=>({unref(){}}),setTimeout,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},messages});
 vm.runInContext(src,context);
 vm.runInContext(`

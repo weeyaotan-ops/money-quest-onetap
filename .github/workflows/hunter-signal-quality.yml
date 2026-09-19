@@ -22,6 +22,7 @@ jobs:
           node test/hunter_live_gate_v1.test.js
           node test/live_metadata_continuity_v1.test.js
           node test/telegram_assisted_ticket_v1.test.js
+          node test/hunter_confirmation_freshness_v1.test.js
           node test/binance_preview_burst_v1.test.js
           node test/binance_stop_priceprotect_signing_v1.test.js
           node test/opportunity_hunter_rate_governor_v1.test.js
