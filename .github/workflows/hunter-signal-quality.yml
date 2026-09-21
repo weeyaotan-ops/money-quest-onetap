@@ -29,3 +29,6 @@ jobs:
           node test/binance_stop_priceprotect_signing_v1.test.js
           node test/opportunity_hunter_rate_governor_v1.test.js
           node test/resting_v2_policy.test.js
+          node test/settlement_attribution_v1.test.js
+          node test/hunter_protection_recovery_v1.test.js
+          node test/edge_replay_v1.test.js

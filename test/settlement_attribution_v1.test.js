@@ -1,0 +1,23 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {attributeSettlement}=require('../research/settlement_attribution_v1');
+const t={symbol:'TESTUSDT',side:'BUY',positionSide:'BOTH',entryOrderId:'20',executedQty:2,actualRisk:2,riskUsd:4};
+const evidence={flatBeforeEntry:true,completeFillHistory:true};
+const fill=(id,orderId,time,side,qty,realizedPnl,extra={})=>({id:String(id),orderId:String(orderId),time,side,qty,realizedPnl,commission:.1,commissionAsset:'USDT',symbol:'TESTUSDT',positionSide:'BOTH',...extra});
+const rows=[fill(1,10,999,'SELL',2,-4),fill(2,20,1000,'BUY',1,0),fill(3,20,1000,'BUY',1,0),fill(4,21,1001,'SELL',1,1),fill(5,22,1002,'SELL',1,1),fill(6,30,1003,'BUY',2,0),fill(7,31,1004,'SELL',2,-6)];
+let checks=0;
+function check(name,fn){fn();checks++;console.log('PASS',name);}
+check('Exclude prior and subsequent trades; include all partial entry/exit fills',()=>{const r=attributeSettlement(t,rows,evidence);assert.equal(r.status,'ATTRIBUTED');assert.deepEqual(r.fillIds,['2','3','4','5']);assert.equal(r.net,1.6);assert.equal(r.actualR,.8);assert.equal(r.fundingIncluded,false);});
+check('Old timestamp window reproducibly contaminates P&L',()=>{const oldNet=rows.reduce((s,f)=>s+f.realizedPnl-f.commission,0);assert.ok(oldNet<0);assert.ok(attributeSettlement(t,rows,evidence).net>0);});
+check('Deduplicate and sort fills',()=>assert.deepEqual(attributeSettlement(t,[...rows.slice().reverse(),rows[2]],evidence),attributeSettlement(t,rows,evidence)));
+check('Reject unproven complete history',()=>assert.equal(attributeSettlement(t,rows).status,'UNVERIFIED'));
+check('Reject missing exit',()=>assert.equal(attributeSettlement(t,rows.slice(0,4),evidence).reason,'POSITION_NOT_FLAT_OR_EXIT_FILLS_MISSING'));
+check('Reject truncated entry fills',()=>assert.equal(attributeSettlement(t,rows.filter(f=>f.id!=='3'),evidence).reason,'ENTRY_QUANTITY_MISMATCH'));
+check('Reject scale-in ambiguity',()=>assert.equal(attributeSettlement(t,rows.map(f=>f.id==='4'?{...f,side:'BUY'}:f),evidence).reason,'OVERLAPPING_ENTRY_OR_SCALE_IN'));
+check('Reject reversal',()=>assert.equal(attributeSettlement(t,rows.map(f=>f.id==='4'?{...f,qty:3}:f),evidence).reason,'REVERSAL_OR_MISSING_ENTRY'));
+check('Reject mixed commission currencies',()=>assert.equal(attributeSettlement(t,rows.map(f=>f.id==='4'?{...f,commissionAsset:'BNB'}:f),evidence).reason,'COMMISSION_CONVERSION_REQUIRED'));
+check('Reject conflicting duplicate',()=>assert.equal(attributeSettlement(t,[...rows,{...rows[2],qty:7}],evidence).reason,'CONFLICTING_DUPLICATE_FILL'));
+check('Isolate hedge sides',()=>{const hedge=rows.map(f=>({...f,positionSide:'LONG'}));hedge.push(fill(40,99,1001,'BUY',50,-100,{positionSide:'SHORT'}));assert.equal(attributeSettlement({...t,positionSide:'LONG'},hedge,evidence).net,1.6);});
+check('Reject missing risk instead of inventing R',()=>assert.equal(attributeSettlement({...t,actualRisk:null},rows,evidence).reason,'INVALID_TRADE_METADATA'));
+check('Handle a short trade and large string IDs',()=>{const rs=[fill('90071992547409930',20,1000,'SELL',2,0),fill('90071992547409931',21,1000,'BUY',2,3)];assert.equal(attributeSettlement({...t,side:'SELL'},rs.reverse(),evidence).net,2.8);});
+console.log(`${checks} accounting checks passed. Synthetic fixtures only; no trading-performance claim.`);
