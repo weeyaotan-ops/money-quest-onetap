@@ -56,6 +56,8 @@ assert.ok(Array.isArray(report.evidence.timeframe));
 assert.ok(Array.isArray(report.evidence.edge));
 assert.ok(Array.isArray(report.evidence.sideRegime));
 assert.ok(Array.isArray(report.evidence.edgeTimeframe));
+assert.ok(report.recentBySelectionVersion);
+assert.equal(report.recentBySelectionVersion.LEGACY.n,4);
 assert.ok(bad.scopes.timeframe);
 assert.ok(bad.scopes.edge);
 assert.ok(bad.challenger);

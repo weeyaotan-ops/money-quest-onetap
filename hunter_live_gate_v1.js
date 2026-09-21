@@ -221,6 +221,7 @@ class HunterLiveGateV1 {
     const evidence=this.evidenceFor(this.history);
     const versions=[...new Set(this.history.map(x=>x.selectionVersion||'LEGACY'))];
     const evidenceBySelectionVersion=Object.fromEntries(versions.map(v=>[v,this.evidenceFor(this.history.filter(x=>(x.selectionVersion||'LEGACY')===v))]));
+    const recentBySelectionVersion=Object.fromEntries(versions.map(v=>[v,this.stats(this.history.filter(x=>(x.selectionVersion||'LEGACY')===v).slice(-this.recentWindow))]));
     return {
       name:'HUNTER_LIVE_GATE_V1',mode:'OBSERVATIONAL_ONLY',
       dataQuality:{ignoredMissingActualR:this.ignoredMissingActualR,validClosedTrades:this.history.length},
@@ -230,6 +231,7 @@ class HunterLiveGateV1 {
       recent,
       evidence,
       evidenceBySelectionVersion,
+      recentBySelectionVersion,
       selectionVersions:this.breakdown(this.history,x=>x.selectionVersion||'LEGACY'),
       forward:{
         decisions:this.decisions.length,
