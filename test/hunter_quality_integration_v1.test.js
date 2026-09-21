@@ -38,9 +38,15 @@ async function run(){
   vm.runInContext('evidenceAt=Date.now()-1000000;',boot);
   assert.equal(vm.runInContext("evidenceAdjustment({side:'BUY'})",boot),0);
   assert.equal(vm.runInContext("fresh({openedAt:'invalid'})",boot),false);
-  assert.equal(vm.runInContext("liveEligible({selectionVersion:'LEGACY',timeframe:'5m',edge:'TREND_PULLBACK_RECLAIM'})",boot),false);
-  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'5m',edge:'TREND_PULLBACK_RECLAIM'})",boot),true);
-  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'1m',edge:'BREAKOUT_RETEST'})",boot),false);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'LEGACY',timeframe:'15m',edge:'VOLATILITY_EXPANSION'})",boot),false);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'15m',edge:'VOLATILITY_EXPANSION'})",boot),true);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'1m',edge:'MOMENTUM_CONTINUATION'})",boot),true);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'15m',edge:'MOMENTUM_CONTINUATION'})",boot),true);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'1m',edge:'VOLATILITY_EXPANSION'})",boot),false);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'5m',edge:'VOLATILITY_EXPANSION'})",boot),false);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'1m',edge:'RANGE_SWEEP_REVERSION'})",boot),false);
+  vm.runInContext("versionEvidence.set('CONFIRMED_STRUCTURE_V1',{side:new Map(),regime:new Map(),timeframe:new Map(),edge:new Map(),sideRegime:new Map(),edgeTimeframe:new Map([['VOLATILITY_EXPANSION|15m',{n:8,expectancyR:-0.01,profitFactor:.99}]])});evidenceAt=Date.now();",boot);
+  assert.equal(vm.runInContext("liveEligible({selectionVersion:'CONFIRMED_STRUCTURE_V1',timeframe:'15m',edge:'VOLATILITY_EXPANSION'})",boot),false);
   // Expiry during asynchronous recheck must not reach the order gateway.
   vm.runInContext("current=[{id:'stale-during-check',openedAt:new Date().toISOString()}];check=async(t)=>({...t,openedAt:new Date(Date.now()-MAX_AGE-1).toISOString()});",boot);
   await vm.runInContext('sendOne()',boot);
