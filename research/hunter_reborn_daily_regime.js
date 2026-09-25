@@ -321,11 +321,126 @@ function backtestVolatilityThrottle(seriesBySymbol, {
   };
 }
 
+
+function backtestPortfolioVolatilityTarget(seriesBySymbol, {
+  symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+  period = 200,
+  volatilityLookback = 60,
+  targetAnnualizedPortfolioVolatility = 0.20,
+  sleeveWeight = 1 / 3,
+  costBpsPerWeightChange = 30,
+  evaluationStartTs = -Infinity,
+  evaluationEndTs = Infinity
+} = {}) {
+  const prepared = {};
+  for (const symbol of symbols) prepared[symbol] = buildSmaSignal(seriesBySymbol[symbol], period);
+
+  const n = Math.min(...symbols.map(s => prepared[s].candles.length));
+  const baseReturns = Array(n).fill(0);
+
+  // Build the unthrottled core portfolio return history first. The volatility
+  // scalar for day i uses only baseReturns strictly before i.
+  for (let i = period + 1; i < n - 1; i += 1) {
+    let r = 0;
+    for (const symbol of symbols) {
+      const { candles, signal } = prepared[symbol];
+      const weight = signal[i - 1] ? sleeveWeight : 0;
+      r += weight * (candles[i + 1].open / candles[i].open - 1);
+    }
+    baseReturns[i] = r;
+  }
+
+  let equity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  let turnover = 0;
+  let scaleSum = 0;
+  let exposureSum = 0;
+  let days = 0;
+  const previousWeights = Object.fromEntries(symbols.map(s => [s, 0]));
+  const returns = [];
+
+  for (let i = period + 1; i < n - 1; i += 1) {
+    const tradeTs = prepared[symbols[0]].candles[i].ts;
+    if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
+
+    const history = [];
+    for (let j = i - volatilityLookback; j < i; j += 1) {
+      if (j >= period + 1) history.push(baseReturns[j]);
+    }
+
+    let scale = 1;
+    if (history.length >= Math.max(20, Math.floor(volatilityLookback * 0.8))) {
+      const avg = mean(history);
+      const variance = history.length > 1
+        ? history.reduce((sum, x) => sum + (x - avg) ** 2, 0) / (history.length - 1)
+        : 0;
+      const annualizedPortfolioVolatility = Math.sqrt(variance) * Math.sqrt(365.25);
+      if (annualizedPortfolioVolatility > 0) {
+        scale = Math.min(1, targetAnnualizedPortfolioVolatility / annualizedPortfolioVolatility);
+      }
+    }
+
+    let r = 0;
+    let dayExposure = 0;
+
+    for (const symbol of symbols) {
+      const { candles, signal } = prepared[symbol];
+      const baseWeight = signal[i - 1] ? sleeveWeight : 0;
+      const weight = baseWeight * scale;
+
+      r += weight * (candles[i + 1].open / candles[i].open - 1);
+
+      const change = Math.abs(weight - previousWeights[symbol]);
+      r -= change * costBpsPerWeightChange / 10000;
+      turnover += change;
+      previousWeights[symbol] = weight;
+      dayExposure += weight;
+    }
+
+    equity *= Math.max(1e-9, 1 + r);
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.min(maxDrawdown, equity / peak - 1);
+    returns.push(r);
+    scaleSum += scale;
+    exposureSum += dayExposure;
+    days += 1;
+  }
+
+  const years = returns.length / 365.25;
+  const avg = mean(returns);
+  const sd = Math.sqrt(mean(returns.map(x => (x - avg) ** 2)));
+  const cagr = years > 0 ? Math.pow(equity, 1 / years) - 1 : 0;
+
+  return {
+    mode: 'SHADOW_RESEARCH_ONLY',
+    liveExecution: false,
+    rule: 'OWN_SMA_LONG_CASH_WITH_PORTFOLIO_VOL_TARGET',
+    symbols,
+    period,
+    volatilityLookback,
+    targetAnnualizedPortfolioVolatility,
+    sleeveWeight,
+    costBpsPerWeightChange,
+    evaluationStartTs,
+    evaluationEndTs,
+    returnPct: (equity - 1) * 100,
+    cagrPct: cagr * 100,
+    maxDrawdownPct: maxDrawdown * 100,
+    sharpe: sd > 0 ? avg / sd * Math.sqrt(365.25) : 0,
+    calmar: maxDrawdown < 0 ? cagr / Math.abs(maxDrawdown) : 0,
+    turnover,
+    averageScale: days ? scaleSum / days : 1,
+    averageExposurePct: days ? exposureSum / days * 100 : 0
+  };
+}
+
 module.exports = {
   normalizeDaily,
   buildSmaSignal,
   backtestLongCash,
   backtestThreeSleeves,
   backtestBtcMarketGate,
-  backtestVolatilityThrottle
+  backtestVolatilityThrottle,
+  backtestPortfolioVolatilityTarget
 };
