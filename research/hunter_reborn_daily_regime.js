@@ -24,7 +24,9 @@ function buildSmaSignal(rows, period = 200) {
 
 function backtestLongCash(rows, {
   period = 200,
-  costBpsPerWeightChange = 30
+  costBpsPerWeightChange = 30,
+  evaluationStartTs = -Infinity,
+  evaluationEndTs = Infinity
 } = {}) {
   const { candles, signal } = buildSmaSignal(rows, period);
   let equity = 1;
@@ -36,6 +38,8 @@ function backtestLongCash(rows, {
   const returns = [];
 
   for (let i = period + 1; i < candles.length - 1; i += 1) {
+    const tradeTs = candles[i].ts;
+    if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
     // Previous daily close decides today's open position.
     // Return is today's open -> tomorrow's open. No same-bar lookahead.
     const position = signal[i - 1];
@@ -64,6 +68,8 @@ function backtestLongCash(rows, {
     liveExecution: false,
     period,
     costBpsPerWeightChange,
+    evaluationStartTs,
+    evaluationEndTs,
     returnPct: (equity - 1) * 100,
     cagrPct: cagr * 100,
     maxDrawdownPct: maxDrawdown * 100,
@@ -77,7 +83,9 @@ function backtestThreeSleeves(seriesBySymbol, {
   symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
   period = 200,
   sleeveWeight = 1 / 3,
-  costBpsPerWeightChange = 30
+  costBpsPerWeightChange = 30,
+  evaluationStartTs = -Infinity,
+  evaluationEndTs = Infinity
 } = {}) {
   const prepared = {};
   for (const symbol of symbols) prepared[symbol] = buildSmaSignal(seriesBySymbol[symbol], period);
@@ -91,6 +99,8 @@ function backtestThreeSleeves(seriesBySymbol, {
   const returns = [];
 
   for (let i = period + 1; i < n - 1; i += 1) {
+    const tradeTs = prepared[symbols[0]].candles[i].ts;
+    if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
     let r = 0;
 
     for (const symbol of symbols) {
@@ -123,6 +133,8 @@ function backtestThreeSleeves(seriesBySymbol, {
     period,
     sleeveWeight,
     costBpsPerWeightChange,
+    evaluationStartTs,
+    evaluationEndTs,
     returnPct: (equity - 1) * 100,
     cagrPct: cagr * 100,
     maxDrawdownPct: maxDrawdown * 100,
