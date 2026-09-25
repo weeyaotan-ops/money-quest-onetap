@@ -20,12 +20,16 @@ jobs:
           node --check research/hunter_reborn_binance_scan.js
           node --check research/hunter_reborn_daily_regime.js
           node --check research/hunter_reborn_shadow_state.js
+          node --check research/hunter_reborn_bootstrap.js
           node --check test/hunter_reborn_event_lab.test.js
           node --check test/hunter_reborn_daily_regime.test.js
           node --check test/hunter_reborn_shadow_state.test.js
+          node --check test/hunter_reborn_bootstrap.test.js
       - name: Event lab tests
         run: npm run test:reborn
       - name: Daily regime tests
         run: npm run test:reborn-regime
       - name: Shadow state tests
         run: npm run test:reborn-shadow
+      - name: Bootstrap tests
+        run: npm run test:reborn-bootstrap
