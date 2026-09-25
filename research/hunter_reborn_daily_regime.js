@@ -251,6 +251,12 @@ function backtestVolatilityThrottle(seriesBySymbol, {
     const tradeTs = prepared[symbols[0]].candles[i].ts;
     if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
 
+    if (Math.abs(desiredScale - currentScale) >= scaleDeadband) {
+      currentScale = desiredScale;
+      scaleChanges += 1;
+    }
+
+    const scale = currentScale;
     let r = 0;
     let dayExposure = 0;
 
@@ -327,6 +333,7 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
   period = 200,
   volatilityLookback = 60,
   targetAnnualizedPortfolioVolatility = 0.20,
+  scaleDeadband = 0,
   sleeveWeight = 1 / 3,
   costBpsPerWeightChange = 30,
   evaluationStartTs = -Infinity,
@@ -355,6 +362,8 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
   let maxDrawdown = 0;
   let turnover = 0;
   let scaleSum = 0;
+  let currentScale = 1;
+  let scaleChanges = 0;
   let exposureSum = 0;
   let days = 0;
   const previousWeights = Object.fromEntries(symbols.map(s => [s, 0]));
@@ -369,7 +378,7 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
       if (j >= period + 1) history.push(baseReturns[j]);
     }
 
-    let scale = 1;
+    let desiredScale = 1;
     if (history.length >= Math.max(20, Math.floor(volatilityLookback * 0.8))) {
       const avg = mean(history);
       const variance = history.length > 1
@@ -377,7 +386,7 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
         : 0;
       const annualizedPortfolioVolatility = Math.sqrt(variance) * Math.sqrt(365.25);
       if (annualizedPortfolioVolatility > 0) {
-        scale = Math.min(1, targetAnnualizedPortfolioVolatility / annualizedPortfolioVolatility);
+        desiredScale = Math.min(1, targetAnnualizedPortfolioVolatility / annualizedPortfolioVolatility);
       }
     }
 
@@ -420,6 +429,7 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
     period,
     volatilityLookback,
     targetAnnualizedPortfolioVolatility,
+    scaleDeadband,
     sleeveWeight,
     costBpsPerWeightChange,
     evaluationStartTs,
@@ -431,6 +441,7 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
     calmar: maxDrawdown < 0 ? cagr / Math.abs(maxDrawdown) : 0,
     turnover,
     averageScale: days ? scaleSum / days : 1,
+    scaleChanges,
     averageExposurePct: days ? exposureSum / days * 100 : 0
   };
 }
