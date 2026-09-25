@@ -73,3 +73,15 @@ For 15m research, change `--interval 15m`. The downloader paginates public Binan
 ## Promotion rule
 
 Nothing in this branch is live-eligible. A separate future promotion step must be explicit and evidence-based. It must not reuse or spoof the existing `combinedSelected`, old setup version, or Exact Mirror lineage flags.
+
+## Negative validation update — 25 Sep 2026
+
+The first one-year BTCUSDT 1h probe produced a tentative compression-release candidate. That candidate was **not promoted**.
+
+Follow-up validation deliberately tried to falsify it:
+
+- **BTCUSDT 15m**, 29 Mar 2026 to 25 Sep 2026, 17,281 candles, 20 fresh configs, 12 bps round-trip cost assumption, 70/30 chronological split: **zero configurations qualified from discovery**.
+- **BTCUSDT 1h**, 25 Sep 2024 to 25 Sep 2026, 17,535 candles, 20 fresh configs, 12 bps round-trip cost assumption, 70/30 chronological split with six discovery folds: **zero configurations qualified**.
+- The earlier `CR_q0.9_c0.8` / 2h candidate therefore **failed longer-history validation and is rejected**.
+
+This is the intended research behavior: a setup is removed when broader data fails to support it. No live promotion is authorized.
