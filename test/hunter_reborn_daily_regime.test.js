@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { buildSmaSignal, backtestLongCash, backtestThreeSleeves, backtestBtcMarketGate } = require('../research/hunter_reborn_daily_regime');
+const { buildSmaSignal, backtestLongCash, backtestThreeSleeves, backtestBtcMarketGate, backtestVolatilityThrottle } = require('../research/hunter_reborn_daily_regime');
 
 function series(n = 500, drift = 0.001) {
   const out = [];
@@ -53,6 +53,24 @@ function series(n = 500, drift = 0.001) {
   assert.equal(r.liveExecution, false);
   assert.equal(r.rule, 'BTC_MARKET_GATE_AND_OWN_SMA_LONG_CASH');
   assert.ok(r.cagrPct > 0);
+}
+
+{
+  const s = series(700);
+  const r = backtestVolatilityThrottle(
+    { BTCUSDT: s, ETHUSDT: s, SOLUSDT: s },
+    {
+      period: 200,
+      volatilityLookback: 60,
+      targetAnnualizedVolatility: 0.40,
+      evaluationStartTs: 350 * 86400000
+    }
+  );
+  assert.equal(r.liveExecution, false);
+  assert.equal(r.rule, 'OWN_SMA_LONG_CASH_WITH_VOLATILITY_THROTTLE');
+  assert.ok(r.averageExposurePct >= 0);
+  assert.ok(r.averageExposurePct <= 100);
+  assert.ok(r.turnover >= 0);
 }
 
 console.log('HUNTER_REBORN_DAILY_REGIME_TESTS_OK');
