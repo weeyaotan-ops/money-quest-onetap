@@ -1,0 +1,35 @@
+name: Hunter Reborn Research CI
+
+on:
+  push:
+    branches: [research/hunter-reborn-v0-20260925]
+  pull_request:
+    branches: [exact-mirror-resting-v2]
+
+jobs:
+  research-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: |
+          node --check research/hunter_reborn_event_lab.js
+          node --check research/hunter_reborn_binance_scan.js
+          node --check research/hunter_reborn_daily_regime.js
+          node --check research/hunter_reborn_shadow_state.js
+          node --check research/hunter_reborn_bootstrap.js
+          node --check test/hunter_reborn_event_lab.test.js
+          node --check test/hunter_reborn_daily_regime.test.js
+          node --check test/hunter_reborn_shadow_state.test.js
+          node --check test/hunter_reborn_bootstrap.test.js
+      - name: Event lab tests
+        run: npm run test:reborn
+      - name: Daily regime tests
+        run: npm run test:reborn-regime
+      - name: Shadow state tests
+        run: npm run test:reborn-shadow
+      - name: Bootstrap tests
+        run: npm run test:reborn-bootstrap

@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-09-25T15:51:00.000Z",
+  "mode": "SHADOW_RESEARCH_ONLY",
+  "liveExecution": false,
+  "source": "Binance Spot daily public market data",
+  "asOfOpen": "2026-09-25T00:00:00.000Z",
+  "priorCompletedDailyCandle": "2026-09-24T00:00:00.000Z",
+  "period": 200,
+  "volatilityLookback": 60,
+  "annualizedBasePortfolioVolatility": 0.4255,
+  "defensive": {
+    "targetAnnualizedPortfolioVolatility": 0.2,
+    "scale": 0.47,
+    "grossWeight": 0.4701
+  },
+  "moderate": {
+    "targetAnnualizedPortfolioVolatility": 0.25,
+    "scale": 0.5875,
+    "grossWeight": 0.5874
+  },
+  "assets": {
+    "BTCUSDT": {
+      "signalClose": 84410.24,
+      "sma200": 70887.0153,
+      "regime": "ON",
+      "executionOpen": 84410.24,
+      "baseWeight": 0.3333333333333333,
+      "defensiveWeight": 0.1567,
+      "moderateWeight": 0.1958
+    },
+    "ETHUSDT": {
+      "signalClose": 2688.05,
+      "sma200": 2091.8756,
+      "regime": "ON",
+      "executionOpen": 2688.06,
+      "baseWeight": 0.3333333333333333,
+      "defensiveWeight": 0.1567,
+      "moderateWeight": 0.1958
+    },
+    "SOLUSDT": {
+      "signalClose": 117.04,
+      "sma200": 84.4616,
+      "regime": "ON",
+      "executionOpen": 117.04,
+      "baseWeight": 0.3333333333333333,
+      "defensiveWeight": 0.1567,
+      "moderateWeight": 0.1958
+    }
+  }
+}
