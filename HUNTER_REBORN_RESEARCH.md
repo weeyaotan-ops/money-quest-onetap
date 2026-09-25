@@ -198,3 +198,55 @@ At SMA200 and 50 bps, this historical sample improved the core result to roughly
 However, the improvement was not consistent across all nearby long-SMA periods: it helped around 150–200 days but was weaker around 220–250 days. Therefore it remains a **secondary research candidate**, not a promoted core rule.
 
 No result in this document authorizes live execution.
+
+
+## Current strongest research candidate — hierarchical BTC market gate
+
+After correcting warm-up bias and rejecting the intraday, rotation, dual-momentum, ensemble and Donchian variants that did not survive stricter checks, the strongest current **BTC/ETH/SOL-specific** candidate is:
+
+```
+BTC sleeve:
+  long 1/3 only if prior BTC daily close > BTC SMA200
+
+ETH sleeve:
+  long 1/3 only if prior ETH daily close > ETH SMA200
+  AND prior BTC daily close > BTC SMA200
+
+SOL sleeve:
+  long 1/3 only if prior SOL daily close > SOL SMA200
+  AND prior BTC daily close > BTC SMA200
+
+otherwise:
+  unused sleeve stays in cash
+```
+
+Execution remains causal: prior completed daily close decides the next daily open position.
+
+Corrected Binance Spot evaluation, with one full year of pre-evaluation warm-up and 50 bps charged on every sleeve weight change, 25 Sep 2021 to 25 Sep 2026:
+
+- total return: **+247.0%**
+- CAGR: **28.3%**
+- max drawdown: **-34.7%**
+- Sharpe: **0.84**
+
+For comparison, the corrected own-SMA200-only three-sleeve core produced:
+
+- total return: +216.5%
+- CAGR: 25.9%
+- max drawdown: -40.7%
+- Sharpe: 0.79
+
+The gate improved the two non-BTC sleeves individually at SMA200:
+
+- ETH: CAGR 19.4% -> 21.8%; max DD -40.0% -> -35.0%
+- SOL: CAGR 24.3% -> 30.1%; max DD -68.1% -> -58.3%
+
+Robustness checks:
+
+- keeping the BTC gate at SMA200 while varying ETH/SOL own trend periods showed improvement for SOL across 150/180/200/220/250 days, and for ETH across 180/200/220/250 days (150d was weaker);
+- varying the BTC gate itself showed the strongest plateau around roughly 150–200 days, with deterioration above ~220 days;
+- therefore SMA200 is retained as the neutral anchor rather than selecting the highest-return gate period.
+
+This edge **did not generalize cleanly to a broad altcoin universe**. BNB, XRP, ADA and DOGE did not show the same robust long/cash behavior. Treat the hierarchy as specific to the BTC/ETH/SOL research universe, not as a universal crypto rule.
+
+Still research-only. No live promotion, leverage, or execution integration is authorized.
