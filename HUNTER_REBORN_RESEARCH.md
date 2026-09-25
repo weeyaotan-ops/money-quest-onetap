@@ -598,3 +598,57 @@ This reinforces the intended interpretation: the 20% portfolio-volatility target
 6. No intraday entry layer is currently promoted.
 
 No merge, deployment, leverage, or live execution is authorized by these findings.
+
+
+## Funding-adjusted USD-M cross-check
+
+A futures-specific cross-check was run using Binance USD-M perpetual daily klines for price/SMA/portfolio-volatility and Binance historical funding-rate records for carry cost.
+
+Focused evaluation window:
+
+- warm-up starts 20 Aug 2022
+- performance evaluation: 10 Mar 2023 to 24 Sep 2026
+- BTCUSDT / ETHUSDT / SOLUSDT
+- daily signal timing remains prior close -> next daily open
+- positive funding is deducted from long exposure; negative funding is credited
+- all funding events in the UTC day are summed
+- the 00:00 funding event is included conservatively
+- transaction-cost stress remains charged on weight changes
+
+At 50 bps transaction-cost stress:
+
+**Price-only core**
+- CAGR: 39.5%
+- max DD: -37.1%
+- Sharpe: 1.01
+
+**Funding-adjusted core**
+- CAGR: 31.7%
+- max DD: -39.1%
+- Sharpe: 0.87
+- simple summed funding charge over the test path: ~20.39% of notional-weighted capital
+
+**Funding-adjusted Defensive 20% portfolio-vol mode**
+- CAGR: **31.8%**
+- max DD: **-19.2%**
+- Sharpe: **1.40**
+- Calmar: **1.66**
+- simple summed funding charge: ~9.38%
+
+**Funding-adjusted Moderate 25% mode**
+- CAGR: 34.1%
+- max DD: -22.0%
+- Sharpe: 1.30
+- Calmar: 1.55
+- simple summed funding charge: ~11.29%
+
+At **100 bps transaction-cost stress**, funding-adjusted Defensive 20% still produced:
+
+- CAGR: 27.3%
+- max DD: -21.1%
+- Sharpe: 1.23
+- Calmar: 1.29
+
+Interpretation: funding is a material drag and cannot be ignored, but it did not invalidate the current long/cash trend + portfolio-vol risk framework in this focused futures sample. The risk overlay also reduces funding drag by lowering average long exposure.
+
+This is still a historical research result, not authorization to trade futures live or use leverage.
