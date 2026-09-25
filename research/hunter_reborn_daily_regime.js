@@ -222,10 +222,110 @@ function backtestBtcMarketGate(seriesBySymbol, {
   };
 }
 
+
+function backtestVolatilityThrottle(seriesBySymbol, {
+  symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+  period = 200,
+  volatilityLookback = 60,
+  targetAnnualizedVolatility = 0.40,
+  sleeveWeight = 1 / 3,
+  costBpsPerWeightChange = 30,
+  evaluationStartTs = -Infinity,
+  evaluationEndTs = Infinity
+} = {}) {
+  const prepared = {};
+  for (const symbol of symbols) prepared[symbol] = buildSmaSignal(seriesBySymbol[symbol], period);
+
+  const n = Math.min(...symbols.map(s => prepared[s].candles.length));
+  const warmup = Math.max(period, volatilityLookback) + 1;
+  let equity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  let turnover = 0;
+  let exposureSum = 0;
+  let exposureDays = 0;
+  const previousWeights = Object.fromEntries(symbols.map(s => [s, 0]));
+  const returns = [];
+
+  for (let i = warmup; i < n - 1; i += 1) {
+    const tradeTs = prepared[symbols[0]].candles[i].ts;
+    if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
+
+    let r = 0;
+    let dayExposure = 0;
+
+    for (const symbol of symbols) {
+      const { candles, signal } = prepared[symbol];
+      let weight = 0;
+
+      if (signal[i - 1]) {
+        const logReturns = [];
+        for (let j = i - 1 - volatilityLookback + 1; j <= i - 1; j += 1) {
+          if (j <= 0) continue;
+          logReturns.push(Math.log(candles[j].close / candles[j - 1].close));
+        }
+
+        const avg = mean(logReturns);
+        const variance = logReturns.length > 1
+          ? logReturns.reduce((sum, x) => sum + (x - avg) ** 2, 0) / (logReturns.length - 1)
+          : 0;
+        const annualizedVolatility = Math.sqrt(variance) * Math.sqrt(365.25);
+        const throttle = annualizedVolatility > 0
+          ? Math.min(1, targetAnnualizedVolatility / annualizedVolatility)
+          : 1;
+
+        weight = sleeveWeight * throttle;
+      }
+
+      r += weight * (candles[i + 1].open / candles[i].open - 1);
+
+      const change = Math.abs(weight - previousWeights[symbol]);
+      r -= change * costBpsPerWeightChange / 10000;
+      turnover += change;
+      previousWeights[symbol] = weight;
+      dayExposure += weight;
+    }
+
+    equity *= Math.max(1e-9, 1 + r);
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.min(maxDrawdown, equity / peak - 1);
+    returns.push(r);
+    exposureSum += dayExposure;
+    exposureDays += 1;
+  }
+
+  const years = returns.length / 365.25;
+  const avg = mean(returns);
+  const sd = Math.sqrt(mean(returns.map(x => (x - avg) ** 2)));
+  const cagr = years > 0 ? Math.pow(equity, 1 / years) - 1 : 0;
+
+  return {
+    mode: 'SHADOW_RESEARCH_ONLY',
+    liveExecution: false,
+    rule: 'OWN_SMA_LONG_CASH_WITH_VOLATILITY_THROTTLE',
+    symbols,
+    period,
+    volatilityLookback,
+    targetAnnualizedVolatility,
+    sleeveWeight,
+    costBpsPerWeightChange,
+    evaluationStartTs,
+    evaluationEndTs,
+    returnPct: (equity - 1) * 100,
+    cagrPct: cagr * 100,
+    maxDrawdownPct: maxDrawdown * 100,
+    sharpe: sd > 0 ? avg / sd * Math.sqrt(365.25) : 0,
+    calmar: maxDrawdown < 0 ? cagr / Math.abs(maxDrawdown) : 0,
+    turnover,
+    averageExposurePct: exposureDays ? exposureSum / exposureDays * 100 : 0
+  };
+}
+
 module.exports = {
   normalizeDaily,
   buildSmaSignal,
   backtestLongCash,
   backtestThreeSleeves,
-  backtestBtcMarketGate
+  backtestBtcMarketGate,
+  backtestVolatilityThrottle
 };
