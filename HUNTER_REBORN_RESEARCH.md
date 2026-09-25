@@ -525,3 +525,76 @@ The snapshot is stored at:
 `research/snapshots/hunter_reborn_shadow_2026-09-25.json`
 
 This is a reproducibility artifact only, not a trade instruction.
+
+
+## Portfolio-vol robustness: refresh cadence and block bootstrap
+
+### Scale refresh cadence
+
+The SMA200 core still updates daily. Only the portfolio-volatility scalar refresh frequency was varied.
+
+BTC / ETH / SOL, 60-day estimator, 50 bps costs:
+
+**20% target**
+- daily refresh: CAGR 22.6%, max DD -17.5%, Sharpe 1.19
+- every 3 days: CAGR 22.7%, max DD -17.9%, Sharpe 1.19
+- every 7 days: CAGR 23.1%, max DD -17.7%, Sharpe 1.20
+- every 14 days: CAGR 24.1%, max DD -17.6%, Sharpe 1.21
+
+**25% target**
+- daily refresh: CAGR 24.6%, max DD -20.6%, Sharpe 1.11
+- every 7 days: CAGR 25.3%, max DD -20.9%, Sharpe 1.12
+- every 14 days: CAGR 25.6%, max DD -20.9%, Sharpe 1.12
+
+Longer BTC / ETH history (25 Sep 2018 to 25 Sep 2026) showed the same pattern: weekly and biweekly refresh remained viable, while daily refresh produced slightly shallower drawdown. The risk-first research default therefore remains **daily scale refresh**; slower refresh is an operational simplification option, not a separate edge.
+
+### Paired block-bootstrap stress test
+
+To reduce dependence on one historical ordering, the net daily return streams of the unthrottled core and 20% portfolio-vol mode were resampled in paired blocks. The same sampled blocks were applied to both strategies so the comparison remained path-matched. Two block sizes were used to preserve short- and medium-range dependence.
+
+#### BTC / ETH / SOL, 25 Sep 2021 to 25 Sep 2026
+2,000 deterministic resamples per block size:
+
+**7-day blocks**
+- risk mode had shallower max DD in **100.0%** of resamples
+- higher Sharpe in **98.8%**
+- higher Calmar in **97.3%**
+- higher CAGR in only **40.1%**
+
+**30-day blocks**
+- shallower max DD in **100.0%**
+- higher Sharpe in **99.0%**
+- higher Calmar in **98.2%**
+- higher CAGR in **50.2%**
+
+The bootstrap median max DD moved from roughly -47% to -21% with 7-day blocks, and from roughly -51% to -23% with 30-day blocks.
+
+#### BTC / ETH, 25 Sep 2018 to 25 Sep 2026
+2,000 deterministic resamples per block size:
+
+**7-day blocks**
+- shallower max DD in **100.0%**
+- higher Sharpe in **97.8%**
+- higher Calmar in **89.7%**
+- higher CAGR in **14.1%**
+
+**30-day blocks**
+- shallower max DD in **100.0%**
+- higher Sharpe in **97.8%**
+- higher Calmar in **89.7%**
+- higher CAGR in **16.4%**
+
+This reinforces the intended interpretation: the 20% portfolio-volatility target is a **risk-path improvement**, not a return-maximization rule. It often sacrifices upside in exchange for materially shallower drawdown and better risk-adjusted behavior.
+
+### Locked research hierarchy after this pass
+
+1. **Directional core:** own prior daily close > own SMA200 -> active sleeve; otherwise cash.
+2. **Primary risk overlay:** 60-day base-portfolio realized-volatility target.
+   - Defensive research mode: 20% annualized target.
+   - Moderate research mode: 25% annualized target.
+3. **Refresh default:** daily, with weekly refresh shown to be viable if operational simplicity is preferred.
+4. Per-asset volatility throttle remains secondary.
+5. BTC hard/soft gate remains downgraded.
+6. No intraday entry layer is currently promoted.
+
+No merge, deployment, leverage, or live execution is authorized by these findings.
