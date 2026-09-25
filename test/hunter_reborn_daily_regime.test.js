@@ -35,4 +35,13 @@ function series(n = 500, drift = 0.001) {
   assert.ok(r.cagrPct > 0);
 }
 
+{
+  const s = series(600);
+  const evalStart = 350 * 86400000;
+  const r = backtestLongCash(s, { period: 200, evaluationStartTs: evalStart });
+  assert.equal(r.evaluationStartTs, evalStart);
+  assert.ok(r.exposurePct > 0);
+  assert.ok(r.trades >= 1);
+}
+
 console.log('HUNTER_REBORN_DAILY_REGIME_TESTS_OK');
