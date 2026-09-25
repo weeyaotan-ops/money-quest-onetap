@@ -11,7 +11,8 @@
     "research:reborn": "node research/hunter_reborn_binance_scan.js",
     "test:reborn-regime": "node test/hunter_reborn_daily_regime.test.js",
     "test:reborn-shadow": "node test/hunter_reborn_shadow_state.test.js",
-    "research:reborn-shadow": "node research/hunter_reborn_shadow_state.js"
+    "research:reborn-shadow": "node research/hunter_reborn_shadow_state.js",
+    "test:reborn-bootstrap": "node test/hunter_reborn_bootstrap.test.js"
   },
   "engines": {
     "node": ">=20"
