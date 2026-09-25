@@ -250,3 +250,40 @@ Robustness checks:
 This edge **did not generalize cleanly to a broad altcoin universe**. BNB, XRP, ADA and DOGE did not show the same robust long/cash behavior. Treat the hierarchy as specific to the BTC/ETH/SOL research universe, not as a universal crypto rule.
 
 Still research-only. No live promotion, leverage, or execution integration is authorized.
+
+
+## Rolling-window falsification — core vs BTC gate
+
+The BTC market gate was subjected to a longer rolling-window test using BTC/ETH history from 25 Sep 2018 to 25 Sep 2026. Each rolling window was 365 days, advanced every 30 days. This test was run after one full year of indicator warm-up.
+
+At 50 bps transaction-cost stress:
+
+### Own-SMA200 core
+- positive rolling 12m windows: **65.1%**
+- median rolling CAGR: **29.1%**
+- worst rolling CAGR: **-50.0%**
+- median rolling max DD: **-30.8%**
+- worst rolling max DD: **-63.8%**
+
+### Hard BTC gate
+- positive rolling 12m windows: **68.6%**
+- median rolling CAGR: **28.2%**
+- worst rolling CAGR: **-62.2%**
+- median rolling max DD: **-30.8%**
+- worst rolling max DD: **-62.1%**
+
+### Soft BTC gate sensitivity
+When ETH exposure during BTC-bear regime was scaled instead of forced fully to zero:
+
+- 25% residual ETH exposure: 69.8% positive windows, median CAGR 28.4%, worst CAGR -59.1%
+- 50% residual ETH exposure: 68.6% positive windows, median CAGR 27.3%, worst CAGR -56.0%
+- 75% residual ETH exposure: 67.4% positive windows, median CAGR 27.9%, worst CAGR -53.0%
+
+The gate does not dominate the own-SMA200 core across rolling windows. It improves some regimes and worsens others, especially around parts of 2021.
+
+**Current interpretation:**
+- `own close > own SMA200 -> long; otherwise cash` remains the most defensible core edge family for this research universe.
+- BTC market gating is downgraded to an optional risk overlay, not the core rule.
+- No hard or soft gate setting is promoted based on the current evidence.
+
+Research-only; no live execution authorization.
