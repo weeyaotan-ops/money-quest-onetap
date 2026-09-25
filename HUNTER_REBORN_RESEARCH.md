@@ -134,3 +134,67 @@ Yearly filtered portfolio returns were approximately:
 - 2026 YTD through 25 Sep: +25.7%
 
 This remains **research evidence, not proof of a persistent future edge**. It has a materially losing year (2025), and max drawdown remains large. No live promotion is authorized.
+
+
+## Warm-up correction — supersedes earlier long-horizon figures
+
+A research bias was found after the first daily-regime runs: the evaluation data originally started on the same date as the indicator history. That meant SMA200 had no pre-evaluation warm-up and artificially left part of early 2022 uninvested.
+
+This has been corrected. The data loader now supplies at least one year of history before the evaluation start, while performance still begins on **25 Sep 2021**. The research module also now accepts a separate evaluation window so warm-up history cannot be confused with performance history.
+
+Corrected Binance Spot evaluation, BTCUSDT / ETHUSDT / SOLUSDT, 25 Sep 2021 to 25 Sep 2026:
+
+### Core: three fixed 1/3 sleeves, own prior close > own SMA200, otherwise cash
+
+At **50 bps per sleeve weight change**:
+
+- total return: **+216.5%**
+- CAGR: **25.9%**
+- max drawdown: **-40.7%**
+- Sharpe: **0.79**
+- turnover: **37.0 sleeve-weight units**
+
+Cost stress:
+
+- 30 bps: CAGR 27.8%, max DD -40.2%, Sharpe 0.82
+- 50 bps: CAGR 25.9%, max DD -40.7%, Sharpe 0.79
+- 100 bps: CAGR 21.4%, max DD -42.4%, Sharpe 0.69
+
+Corrected yearly portfolio returns at 50 bps were approximately:
+
+- 2021 partial: +12.5%
+- 2022: **-12.7%**
+- 2023: +112.4%
+- 2024: +39.5%
+- 2025: **-13.3%**
+- 2026 through 25 Sep: +25.4%
+
+Equal-weight buy-and-hold over the same evaluation window returned about +50.5%, CAGR 8.5%, max DD -85.5%, Sharpe 0.45.
+
+The earlier +244.3% / 32.0% CAGR / -35.7% drawdown figures are therefore **superseded** and must not be cited as the current result.
+
+### Parameter robustness
+
+With the corrected warm-up and 50 bps costs, long/cash filters from roughly 150 to 250 days remained positive over the full evaluation, but results varied materially. SMA200 remains the neutral anchor because it is not an isolated profitable point and gave one of the stronger risk-adjusted outcomes in this band.
+
+### Rejected overlays
+
+- 4h momentum entry overlay: survived some cross-asset checks but weakened materially in later BTC history; not promoted.
+- weekly 120-day relative-strength rotation: attractive full-sample results but failed rebalance-phase robustness and suffered large 2022 losses once warm-up was corrected; not promoted.
+- dual-momentum requirement (SMA200 + positive 120-day return): did not improve recent-window robustness; rejected.
+- SMA ensemble weighting: reduced concentration around one threshold but did not improve the recent evaluation window; not promoted.
+
+### Secondary candidate: BTC market gate
+
+A simple hierarchy was also tested: BTC keeps its own SMA filter; ETH and SOL may be long only when **both** their own prior close and BTC prior close are above the same long SMA.
+
+At SMA200 and 50 bps, this historical sample improved the core result to roughly:
+
+- total return: +247.0%
+- CAGR: 28.3%
+- max drawdown: -34.7%
+- Sharpe: 0.84
+
+However, the improvement was not consistent across all nearby long-SMA periods: it helped around 150–200 days but was weaker around 220–250 days. Therefore it remains a **secondary research candidate**, not a promoted core rule.
+
+No result in this document authorizes live execution.
