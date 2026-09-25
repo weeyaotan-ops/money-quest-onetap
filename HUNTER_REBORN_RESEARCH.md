@@ -372,3 +372,115 @@ This is the strongest drawdown-reduction overlay found so far.
 3. **BTC market gate:** remains research-only and downgraded; rolling-window tests did not show dominance over the core.
 
 Nothing here authorizes live execution, leverage, or deployment.
+
+
+## Portfolio-level volatility targeting — current strongest risk overlay
+
+A stronger risk overlay was found by scaling the **whole active SMA200 portfolio** rather than throttling each asset independently.
+
+Causal rule:
+
+```
+base weights:
+  each asset = 1/3 only when own prior close > own SMA200
+  otherwise 0
+
+basePortfolioVol:
+  annualized standard deviation of prior 60 daily returns
+  of the unthrottled base portfolio
+
+scale = min(1, targetPortfolioVol / basePortfolioVol)
+
+final weights = base weights * scale
+```
+
+Important constraints:
+
+- the overlay cannot turn an OFF signal ON;
+- it cannot increase any weight above the original SMA200 core;
+- `scale <= 1` always;
+- volatility uses only prior base-portfolio returns;
+- pre-evaluation history is used for both SMA and portfolio-volatility warm-up;
+- execution remains prior-close decision -> next-open return;
+- no leverage is introduced.
+
+### BTC / ETH / SOL, 25 Sep 2021 to 25 Sep 2026
+
+Binance Spot, full warm-up, 50 bps charged per weight change:
+
+**Core SMA200**
+- CAGR: 25.9%
+- max DD: -40.7%
+- Sharpe: 0.79
+
+**60d / 20% portfolio-vol target**
+- CAGR: **22.6%**
+- max DD: **-17.5%**
+- Sharpe: **1.19**
+- Calmar: **1.29**
+
+**60d / 25% portfolio-vol target**
+- CAGR: **24.6%**
+- max DD: **-20.6%**
+- Sharpe: **1.11**
+- Calmar: **1.20**
+
+At 100 bps transaction-cost stress:
+
+- 20% target: CAGR 19.3%, max DD -20.0%, Sharpe 1.05
+- 25% target: CAGR 20.9%, max DD -23.4%, Sharpe 0.98
+
+The target therefore behaves like a transparent risk dial rather than an entry filter.
+
+### Lookback robustness
+
+BTC / ETH / SOL, 50 bps:
+
+- 45d / 20%: CAGR 20.7%, max DD -17.1%, Sharpe 1.14
+- 60d / 20%: CAGR 22.6%, max DD -17.5%, Sharpe 1.19
+- 90d / 20%: CAGR 24.4%, max DD -15.4%, Sharpe 1.23
+- 45d / 25%: CAGR 22.8%, max DD -20.1%, Sharpe 1.07
+- 60d / 25%: CAGR 24.6%, max DD -20.6%, Sharpe 1.11
+- 90d / 25%: CAGR 27.2%, max DD -18.8%, Sharpe 1.16
+
+The effect is not isolated to one lookback. 60 days remains the neutral anchor because it also behaved strongly in the longer BTC/ETH sample.
+
+### Longer BTC / ETH check, 25 Sep 2018 to 25 Sep 2026
+
+With 50 bps costs and complete warm-up:
+
+**60d / 20% target**
+- CAGR: 25.5%
+- max DD: -22.2%
+- Sharpe: 1.26
+- Calmar: 1.15
+- positive rolling 12m windows: 81.4%
+- worst rolling 12m CAGR: -13.1%
+- worst rolling 12m DD: -22.2%
+
+**60d / 25% target**
+- CAGR: 28.8%
+- max DD: -27.1%
+- Sharpe: 1.20
+- Calmar: 1.06
+- positive rolling 12m windows: 80.2%
+- worst rolling 12m CAGR: -16.1%
+- worst rolling 12m DD: -27.1%
+
+For comparison, the unthrottled BTC/ETH own-SMA200 core over the longer sample had:
+
+- CAGR: 41.1%
+- max DD: -63.8%
+- Sharpe: 0.97
+- positive rolling 12m windows: 65.1%
+- worst rolling 12m CAGR: about -50%
+
+### Current risk hierarchy
+
+- **Core signal:** own prior close > own SMA200 -> active sleeve; otherwise cash.
+- **Defensive research mode:** 60d portfolio-vol target at 20%.
+- **Moderate research mode:** 60d portfolio-vol target at 25%.
+- **Per-asset volatility throttle:** still valid as a secondary overlay, but portfolio-level targeting produced better historical risk-adjusted behavior.
+- **BTC market gate:** remains downgraded and research-only.
+
+These are backtest findings, not proof of future returns. No live deployment or leverage is authorized.
