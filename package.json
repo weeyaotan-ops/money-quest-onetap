@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "test:v4": "node test/recovery_router_v4_capture_signal_only.test.js",
-    "test:hunter-live-gate": "node test/hunter_live_gate_v1.test.js"
+    "test:hunter-live-gate": "node test/hunter_live_gate_v1.test.js",
+    "test:reborn": "node test/hunter_reborn_event_lab.test.js",
+    "research:reborn": "node research/hunter_reborn_binance_scan.js"
   },
   "engines": {
     "node": ">=20"
