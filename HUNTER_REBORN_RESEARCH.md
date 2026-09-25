@@ -484,3 +484,44 @@ For comparison, the unthrottled BTC/ETH own-SMA200 core over the longer sample h
 - **BTC market gate:** remains downgraded and research-only.
 
 These are backtest findings, not proof of future returns. No live deployment or leverage is authorized.
+
+
+## Operational shadow state
+
+A read-only daily state generator has been added:
+
+```bash
+npm run research:reborn-shadow
+```
+
+It fetches Binance Spot public daily klines and outputs:
+
+- prior completed daily candle used for the signal;
+- SMA200 regime state for BTC / ETH / SOL;
+- unthrottled base weights;
+- prior 60-day realized volatility of the unthrottled core portfolio;
+- Defensive 20% portfolio-vol scale and final weights;
+- Moderate 25% portfolio-vol scale and final weights.
+
+It does **not** submit orders, emit Confirm Live tickets, or connect to an exchange execution path.
+
+### First recorded shadow snapshot — 25 Sep 2026
+
+Using the completed 24 Sep 2026 UTC daily candle for the 25 Sep 2026 UTC open:
+
+- BTCUSDT: regime ON; close 84,410.24; SMA200 ~70,887.02
+- ETHUSDT: regime ON; close 2,688.05; SMA200 ~2,091.88
+- SOLUSDT: regime ON; close 117.04; SMA200 ~84.46
+- all three base sleeves therefore ON at 1/3 each
+- trailing 60-day annualized base-portfolio volatility: ~42.55%
+
+Research weights at that open:
+
+- Defensive 20% target: scale ~0.470; each active sleeve ~15.67%; gross ~47.0%
+- Moderate 25% target: scale ~0.588; each active sleeve ~19.58%; gross ~58.7%
+
+The snapshot is stored at:
+
+`research/snapshots/hunter_reborn_shadow_2026-09-25.json`
+
+This is a reproducibility artifact only, not a trade instruction.
