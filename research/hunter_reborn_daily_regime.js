@@ -390,6 +390,12 @@ function backtestPortfolioVolatilityTarget(seriesBySymbol, {
       }
     }
 
+    if (Math.abs(desiredScale - currentScale) >= scaleDeadband) {
+      currentScale = desiredScale;
+      scaleChanges += 1;
+    }
+    const scale = currentScale;
+
     let r = 0;
     let dayExposure = 0;
 
