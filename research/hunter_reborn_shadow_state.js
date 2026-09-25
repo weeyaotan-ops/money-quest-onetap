@@ -109,7 +109,7 @@ function calculateShadowState(seriesBySymbol, {
     priorCompletedDailyCandle: new Date(aligned[symbols[0]][signalIndex].ts).toISOString(),
     period,
     volatilityLookback,
-    annualizedBasePortfolioVolatility,
+    annualizedBasePortfolioVolatility: annualizedPortfolioVolatility,
     defensive: {
       targetAnnualizedPortfolioVolatility: defensiveTarget,
       scale: defensiveScale,
