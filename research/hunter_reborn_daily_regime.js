@@ -143,9 +143,89 @@ function backtestThreeSleeves(seriesBySymbol, {
   };
 }
 
+
+function backtestBtcMarketGate(seriesBySymbol, {
+  symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+  gateSymbol = 'BTCUSDT',
+  gatePeriod = 200,
+  assetPeriod = 200,
+  sleeveWeight = 1 / 3,
+  costBpsPerWeightChange = 30,
+  evaluationStartTs = -Infinity,
+  evaluationEndTs = Infinity
+} = {}) {
+  const prepared = {};
+  for (const symbol of symbols) prepared[symbol] = buildSmaSignal(seriesBySymbol[symbol], assetPeriod);
+  const gate = buildSmaSignal(seriesBySymbol[gateSymbol], gatePeriod);
+
+  const n = Math.min(
+    gate.candles.length,
+    ...symbols.map(s => prepared[s].candles.length)
+  );
+  const warmup = Math.max(gatePeriod, assetPeriod) + 1;
+  let equity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  let turnover = 0;
+  const previousWeights = Object.fromEntries(symbols.map(s => [s, 0]));
+  const returns = [];
+
+  for (let i = warmup; i < n - 1; i += 1) {
+    const tradeTs = gate.candles[i].ts;
+    if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
+
+    const gateOn = Boolean(gate.signal[i - 1]);
+    let r = 0;
+
+    for (const symbol of symbols) {
+      const { candles, signal } = prepared[symbol];
+      const ownOn = Boolean(signal[i - 1]);
+      const active = symbol === gateSymbol ? gateOn : (gateOn && ownOn);
+      const weight = active ? sleeveWeight : 0;
+
+      r += weight * (candles[i + 1].open / candles[i].open - 1);
+
+      const change = Math.abs(weight - previousWeights[symbol]);
+      r -= change * costBpsPerWeightChange / 10000;
+      turnover += change;
+      previousWeights[symbol] = weight;
+    }
+
+    equity *= Math.max(1e-9, 1 + r);
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.min(maxDrawdown, equity / peak - 1);
+    returns.push(r);
+  }
+
+  const years = returns.length / 365.25;
+  const avg = mean(returns);
+  const sd = Math.sqrt(mean(returns.map(x => (x - avg) ** 2)));
+  const cagr = years > 0 ? Math.pow(equity, 1 / years) - 1 : 0;
+
+  return {
+    mode: 'SHADOW_RESEARCH_ONLY',
+    liveExecution: false,
+    rule: 'BTC_MARKET_GATE_AND_OWN_SMA_LONG_CASH',
+    symbols,
+    gateSymbol,
+    gatePeriod,
+    assetPeriod,
+    sleeveWeight,
+    costBpsPerWeightChange,
+    evaluationStartTs,
+    evaluationEndTs,
+    returnPct: (equity - 1) * 100,
+    cagrPct: cagr * 100,
+    maxDrawdownPct: maxDrawdown * 100,
+    sharpe: sd > 0 ? avg / sd * Math.sqrt(365.25) : 0,
+    turnover
+  };
+}
+
 module.exports = {
   normalizeDaily,
   buildSmaSignal,
   backtestLongCash,
-  backtestThreeSleeves
+  backtestThreeSleeves,
+  backtestBtcMarketGate
 };
