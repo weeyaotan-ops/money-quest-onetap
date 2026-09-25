@@ -85,3 +85,52 @@ Follow-up validation deliberately tried to falsify it:
 - The earlier `CR_q0.9_c0.8` / 2h candidate therefore **failed longer-history validation and is rejected**.
 
 This is the intended research behavior: a setup is removed when broader data fails to support it. No live promotion is authorized.
+
+## Strongest surviving edge family so far — daily long/cash regime filter
+
+After rejecting the earlier intraday price-only and derivatives candidates, the research moved to five years of daily data.
+
+The current strongest **research candidate** is not a high-frequency entry pattern. It is a long-only regime filter:
+
+```
+prior daily close > long SMA
+→ hold long from next daily open
+otherwise
+→ cash
+```
+
+Key safeguards:
+
+- causal timing: yesterday's close decides today's open position;
+- no short leg;
+- no same-bar return leakage;
+- spot cross-check to avoid perpetual funding contamination;
+- trading costs charged on every weight change;
+- no live execution path.
+
+A broad SMA parameter band around 150–250 days remained viable across BTCUSDT, ETHUSDT and SOLUSDT spot from 25 Sep 2021 to 25 Sep 2026. The 200-day version is retained as the neutral research anchor rather than because it maximized any one backtest.
+
+At a conservative 30 bps charged on each sleeve weight change, the three-sleeve portfolio (BTC / ETH / SOL, fixed 1/3 each when active, otherwise cash) produced in this historical sample:
+
+- total return: +244.3%
+- CAGR: 32.0%
+- max drawdown: -35.7%
+- Sharpe: 0.93
+- turnover: 33.0 sleeve-weight units
+
+Equal-weight buy-and-hold over the same sample produced:
+
+- total return: +58.0%
+- CAGR: 10.8%
+- max drawdown: -74.5%
+- Sharpe: 0.48
+
+Yearly filtered portfolio returns were approximately:
+
+- 2022: 0.0%
+- 2023: +116.0%
+- 2024: +42.3%
+- 2025: -11.4%
+- 2026 YTD through 25 Sep: +25.7%
+
+This remains **research evidence, not proof of a persistent future edge**. It has a materially losing year (2025), and max drawdown remains large. No live promotion is authorized.
