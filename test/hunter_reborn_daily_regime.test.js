@@ -92,4 +92,22 @@ function series(n = 500, drift = 0.001) {
   assert.ok(r.averageExposurePct <= 100);
 }
 
+{
+  const s = series(720);
+  const r = backtestPortfolioVolatilityTarget(
+    { BTCUSDT: s, ETHUSDT: s, SOLUSDT: s },
+    {
+      period: 200,
+      volatilityLookback: 60,
+      targetAnnualizedPortfolioVolatility: 0.20,
+      scaleDeadband: 0.05,
+      evaluationStartTs: 350 * 86400000
+    }
+  );
+  assert.equal(r.liveExecution, false);
+  assert.equal(r.scaleDeadband, 0.05);
+  assert.ok(r.averageScale > 0 && r.averageScale <= 1);
+  assert.ok(r.scaleChanges >= 0);
+}
+
 console.log('HUNTER_REBORN_DAILY_REGIME_TESTS_OK');
