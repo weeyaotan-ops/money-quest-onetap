@@ -251,12 +251,6 @@ function backtestVolatilityThrottle(seriesBySymbol, {
     const tradeTs = prepared[symbols[0]].candles[i].ts;
     if (tradeTs < evaluationStartTs || tradeTs >= evaluationEndTs) continue;
 
-    if (Math.abs(desiredScale - currentScale) >= scaleDeadband) {
-      currentScale = desiredScale;
-      scaleChanges += 1;
-    }
-
-    const scale = currentScale;
     let r = 0;
     let dayExposure = 0;
 
