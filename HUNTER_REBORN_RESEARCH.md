@@ -287,3 +287,88 @@ The gate does not dominate the own-SMA200 core across rolling windows. It improv
 - No hard or soft gate setting is promoted based on the current evidence.
 
 Research-only; no live execution authorization.
+
+
+## Drawdown-reduction research — volatility throttle
+
+The core directional rule remains unchanged:
+
+```
+own prior daily close > own SMA200
+→ long the asset sleeve
+otherwise
+→ cash
+```
+
+A separate **Conservative Risk Mode** was tested that only scales an already-active sleeve downward:
+
+```
+realizedVol = annualized standard deviation of the prior 60 daily log returns
+throttle = min(1, 0.40 / realizedVol)
+active sleeve weight = (1/3) * throttle
+```
+
+The overlay never increases a sleeve above its original 1/3 maximum and never creates a new long signal.
+
+### Corrected BTC / ETH / SOL sample
+
+Binance Spot, one-year pre-evaluation warm-up, evaluation 25 Sep 2021 to 25 Sep 2026, 50 bps per weight change:
+
+**Core SMA200**
+- total return: +216.5%
+- CAGR: 25.9%
+- max drawdown: -40.7%
+- Sharpe: 0.79
+- Calmar: 0.64
+- average gross exposure: 47.9%
+
+**SMA200 + 60d realized-vol throttle, 40% annualized target**
+- total return: +146.8%
+- CAGR: 19.8%
+- max drawdown: **-23.6%**
+- Sharpe: **0.86**
+- Calmar: **0.84**
+- average gross exposure: 32.9%
+
+The reduction in drawdown is not free: return and average market exposure both fall. This is therefore a risk mode, not a replacement signal.
+
+### Parameter neighborhood
+
+Using the same 60-day realized-volatility estimate:
+
+- 40% target: CAGR 19.8%, max DD -23.6%, Sharpe 0.86, Calmar 0.84
+- 45% target: CAGR 21.5%, max DD -26.1%, Sharpe 0.85, Calmar 0.82
+- 50% target: CAGR 22.9%, max DD -27.8%, Sharpe 0.85, Calmar 0.82
+- 55% target: CAGR 24.0%, max DD -29.6%, Sharpe 0.84, Calmar 0.81
+- 60% target: CAGR 24.6%, max DD -32.0%, Sharpe 0.83, Calmar 0.77
+
+This forms a smooth risk/return trade-off rather than a single isolated parameter optimum.
+
+### Longer-history rolling check
+
+For BTC/ETH from 25 Sep 2018 to 25 Sep 2026, using 86 rolling 365-day windows advanced every 30 days and 50 bps costs:
+
+**Own-SMA200 core**
+- positive windows: 65.1%
+- median rolling CAGR: 29.1%
+- worst rolling CAGR: -50.0%
+- median rolling max DD: -30.8%
+- worst rolling max DD: -63.8%
+
+**60d / 40% volatility throttle**
+- positive windows: 69.8%
+- median rolling CAGR: 23.1%
+- worst rolling CAGR: -28.8%
+- median rolling max DD: -22.8%
+- worst rolling max DD: **-36.9%**
+- rolling drawdown was shallower than the core in **100% of the 86 windows**
+
+This is the strongest drawdown-reduction overlay found so far.
+
+### Current hierarchy
+
+1. **Core edge:** own daily close > own SMA200 -> long; otherwise cash.
+2. **Conservative Risk Mode:** optional 60d realized-volatility throttle with a 40% annualized target.
+3. **BTC market gate:** remains research-only and downgraded; rolling-window tests did not show dominance over the core.
+
+Nothing here authorizes live execution, leverage, or deployment.
