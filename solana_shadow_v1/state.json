@@ -1,0 +1,41 @@
+{
+  "kind": "SOLANA_MEME_SHADOW_V1_STATE",
+  "researchOnly": true,
+  "liveTrading": false,
+  "protocolBranch": "research/solana-shadow-v1-20260926",
+  "startedAt": "2026-09-26T06:53:00Z",
+  "bankrollReferenceSol": 100,
+  "counts": {
+    "scans": 0,
+    "discovered": 0,
+    "candidateDecisions": 0,
+    "eligibleSignals": 0,
+    "resolved1h": 0,
+    "resolved6h": 0,
+    "resolved24h": 0,
+    "rugFlags": 0
+  },
+  "performance": {
+    "meanNetReturn1hPct": null,
+    "meanNetReturn6hPct": null,
+    "medianNetReturn6hPct": null,
+    "positiveRate6h": null,
+    "meanNetReturn24hPct": null,
+    "rugRate": null,
+    "simulated100SolMark": 100
+  },
+  "promotionGate": {
+    "minimumResolvedCandidates": 100,
+    "minimumMeanNetReturn6hPct": 10,
+    "minimumMedianNetReturn6hPct": 0,
+    "minimumPositiveRate6h": 0.55,
+    "maximumRugRate": 0.10,
+    "status": "INSUFFICIENT_SAMPLE"
+  },
+  "signals": [],
+  "notes": [
+    "Only decisions recorded before outcomes count.",
+    "No live orders are authorized.",
+    "Thresholds are frozen until 100 eligible candidates are resolved at the 6h horizon."
+  ]
+}
