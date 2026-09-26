@@ -2,6 +2,11 @@ name: Solana Meme Paper
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/memecoin-paper.yml'
   schedule:
     - cron: '7 * * * *'
 
