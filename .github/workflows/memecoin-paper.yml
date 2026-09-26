@@ -1,0 +1,45 @@
+name: Solana Meme Paper
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: solana-meme-paper-v1
+  cancel-in-progress: false
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/solana-shadow-v1-20260926
+          fetch-depth: 1
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run one prospective paper scan
+        run: node solana_shadow_v1/paper_once.js
+
+      - name: Persist paper ledger
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add solana_shadow_v1/paper_account.json solana_shadow_v1/state.json solana_shadow_v1/decisions.ndjson
+          if git diff --cached --quiet; then
+            echo "No ledger changes"
+            exit 0
+          fi
+          git commit -m "Update Solana meme paper ledger"
+          git push origin HEAD:research/solana-shadow-v1-20260926
