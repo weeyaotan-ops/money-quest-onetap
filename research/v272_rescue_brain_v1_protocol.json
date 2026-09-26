@@ -1,0 +1,29 @@
+{
+  "kind": "V272_RESCUE_BRAIN_V1_PROSPECTIVE_PROTOCOL",
+  "mode": "RESEARCH_ONLY",
+  "liveTrading": false,
+  "rulesFrozen": {
+    "roundTripFrictionBpsFallback": 12.0,
+    "minimumRiskBps": 80.0,
+    "minimumNetRR": 1.5,
+    "minimumSupport": 0.35,
+    "maximumSlowFastDisagreementR": 0.25,
+    "minimumNetTruthScoreR": 0.10,
+    "maximumSpreadBps": 2.0,
+    "maximumQuoteAgeMs": 5000
+  },
+  "evaluation": {
+    "minimumClosedSelections": 100,
+    "minimumCalendarDays": 30,
+    "minimumNetExpectancyR": 0.10,
+    "minimumProfitFactor": 1.20,
+    "maximumDrawdownPct": 10.0,
+    "noRetuningBeforePrimaryCheckpoint": true,
+    "executionParityRequired": true
+  },
+  "notes": [
+    "Old V2.7.2 +2R/-1R dashboard accounting is not treated as real Binance net PnL.",
+    "ABSTAIN is a valid decision.",
+    "Only selections made after this frozen protocol count toward prospective evidence."
+  ]
+}
