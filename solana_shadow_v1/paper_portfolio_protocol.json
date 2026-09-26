@@ -1,0 +1,58 @@
+{
+  "kind": "SOLANA_MEME_PAPER_PORTFOLIO_V1",
+  "mode": "PAPER_MONEY_ONLY",
+  "currency": "USDT",
+  "startingCashUsdt": 100,
+  "liveTrading": false,
+  "positionRules": {
+    "allocationPerNewTradePctOfCurrentEquity": 15,
+    "minimumTradeUsdt": 10,
+    "maximumTradeUsdt": 20,
+    "maximumConcurrentPositions": 4,
+    "noLeverage": true,
+    "noAveragingDown": true,
+    "oneOpenPositionPerMint": true
+  },
+  "entryModel": {
+    "trigger": "first prospective ELIGIBLE decision under frozen Solana Meme Shadow V1",
+    "entryReference": "first observable DEX Screener USD price after ELIGIBLE decision",
+    "entrySlippagePct": 1.5,
+    "networkAndPriorityFeeUsdt": 0.03,
+    "rejectIfReferenceLiquidityUsdBelow": 50000,
+    "rejectIfPriceUnavailableOrStale": true
+  },
+  "exitModel": {
+    "evaluationCadence": "hourly",
+    "takeProfitPctFromEffectiveEntry": 50,
+    "stopLossPctFromEffectiveEntry": -30,
+    "maximumHoldHours": 6,
+    "exitSlippagePct": 1.5,
+    "networkAndPriorityFeeUsdt": 0.03,
+    "rugExitRule": "at next observable price if drawdown <= -80% or liquidity collapse >=70%; record gap loss instead of assuming stop fill",
+    "noPerfectIntrabarFillAssumption": true
+  },
+  "accounting": {
+    "markOpenPositionsToLatestObservablePrice": true,
+    "realizedPnlIncludesAllModeledCosts": true,
+    "unrealizedPnlIncludesEstimatedExitCost": true,
+    "equity": "cash + marked net liquidation value of open positions",
+    "metrics": [
+      "cashUsdt",
+      "equityUsdt",
+      "realizedPnlUsdt",
+      "unrealizedPnlUsdt",
+      "returnPct",
+      "openPositions",
+      "closedTrades",
+      "wins",
+      "losses",
+      "winRate",
+      "profitFactor",
+      "maxDrawdownPct",
+      "largestWinUsdt",
+      "largestLossUsdt",
+      "rugLosses"
+    ]
+  },
+  "freezeRule": "Do not change sizing, TP, SL, max-hold, costs, or candidate thresholds before at least 100 closed paper trades."
+}
