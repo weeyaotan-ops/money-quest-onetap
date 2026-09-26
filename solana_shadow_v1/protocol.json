@@ -1,0 +1,70 @@
+{
+  "kind": "SOLANA_MEME_SHADOW_V1_PROTOCOL",
+  "mode": "RESEARCH_ONLY",
+  "createdAt": "2026-09-26T14:53:00+08:00",
+  "liveTrading": false,
+  "bankrollReferenceSol": 100,
+  "goal": "Test whether early Solana meme-token market-flow and distribution signals have forward predictive value before any real-money automation.",
+  "discoverySources": [
+    "DEX Screener latest token profiles",
+    "DEX Screener latest boosts",
+    "DEX Screener top boosts",
+    "DEX Screener community takeovers"
+  ],
+  "onchainChecks": [
+    "Solana RPC mint authority disabled",
+    "Solana RPC freeze authority disabled",
+    "Solana RPC top-holder concentration when available"
+  ],
+  "hardFilters": {
+    "minPairAgeMinutes": 10,
+    "maxPairAgeHours": 72,
+    "minLiquidityUsd": 50000,
+    "minMarketCapUsd": 100000,
+    "maxMarketCapUsd": 20000000,
+    "minLiquidityToMarketCap": 0.03,
+    "minVolume5mUsd": 15000,
+    "minVolume1hUsd": 50000,
+    "minBuys5m": 30,
+    "minBuySellRatio5m": 1.25,
+    "minVolumeAcceleration5mVs1hAverage": 1.5,
+    "minPriceChange5mPct": -15,
+    "maxPriceChange5mPct": 60,
+    "minPriceChange1hPct": -30,
+    "maxPriceChange1hPct": 150,
+    "maxTopHolderPct": 30
+  },
+  "score": {
+    "minimumEligible": 0.72,
+    "weights": {
+      "liquidity": 0.15,
+      "liquidityToMarketCap": 0.15,
+      "volumeAcceleration": 0.20,
+      "buyPressure": 0.20,
+      "transactionActivity": 0.10,
+      "pairAge": 0.10,
+      "socialPresence": 0.05,
+      "notOverextended": 0.05
+    }
+  },
+  "forwardEvaluation": {
+    "entryReference": "DEX Screener USD price at the timestamp the candidate first becomes ELIGIBLE",
+    "horizonsHours": [1, 6, 24],
+    "roundTripFrictionPct": 3.0,
+    "rugFlag": "price drawdown <= -80% or liquidity decline >= 70% versus entry snapshot when observable",
+    "minimumResolvedCandidates": 100,
+    "primaryHorizonHours": 6,
+    "promotionGate": {
+      "minimumMeanNetReturnPct": 10,
+      "minimumMedianNetReturnPct": 0,
+      "minimumPositiveRate": 0.55,
+      "maximumRugRate": 0.10
+    }
+  },
+  "freezeRules": {
+    "noThresholdRetuningBefore100Resolved": true,
+    "noBackfillingSignalsAfterOutcome": true,
+    "allEligibleAndRejectedCandidatesMustBeLogged": true,
+    "noLiveOrders": true
+  }
+}
