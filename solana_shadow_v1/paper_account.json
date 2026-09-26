@@ -33,5 +33,13 @@
     "Every entry must be recorded prospectively before its outcome is known.",
     "No perfect stop fill is assumed during gaps or liquidity collapses.",
     "Costs are charged per the frozen paper portfolio protocol."
-  ]
+  ],
+  "lastRunAt": "2026-09-26T08:52:02.107Z",
+  "scanCount": 1,
+  "lastScanSummary": {
+    "startedAt": "2026-09-26T08:52:02.107Z",
+    "finishedAt": "2026-09-26T08:52:09.221Z",
+    "discovered": 56,
+    "eligible": 0
+  }
 }

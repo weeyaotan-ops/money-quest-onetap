@@ -6,9 +6,9 @@
   "startedAt": "2026-09-26T06:53:00Z",
   "bankrollReferenceSol": 100,
   "counts": {
-    "scans": 0,
-    "discovered": 0,
-    "candidateDecisions": 0,
+    "scans": 1,
+    "discovered": 56,
+    "candidateDecisions": 56,
     "eligibleSignals": 0,
     "resolved1h": 0,
     "resolved6h": 0,
@@ -22,14 +22,22 @@
     "positiveRate6h": null,
     "meanNetReturn24hPct": null,
     "rugRate": null,
-    "simulated100SolMark": 100
+    "simulated100SolMark": 100,
+    "paperEquityUsdt": 100,
+    "paperReturnPct": 0,
+    "paperClosedTrades": 0,
+    "paperWins": 0,
+    "paperLosses": 0,
+    "paperMaxDrawdownPct": 0,
+    "paperProfitFactor": null,
+    "paperOpenPositions": 0
   },
   "promotionGate": {
     "minimumResolvedCandidates": 100,
     "minimumMeanNetReturn6hPct": 10,
     "minimumMedianNetReturn6hPct": 0,
     "minimumPositiveRate6h": 0.55,
-    "maximumRugRate": 0.10,
+    "maximumRugRate": 0.1,
     "status": "INSUFFICIENT_SAMPLE"
   },
   "signals": [],
@@ -37,5 +45,13 @@
     "Only decisions recorded before outcomes count.",
     "No live orders are authorized.",
     "Thresholds are frozen until 100 eligible candidates are resolved at the 6h horizon."
-  ]
+  ],
+  "seenEligibleMints": {},
+  "lastRunAt": "2026-09-26T08:52:02.107Z",
+  "lastScanSummary": {
+    "startedAt": "2026-09-26T08:52:02.107Z",
+    "finishedAt": "2026-09-26T08:52:09.221Z",
+    "discovered": 56,
+    "eligible": 0
+  }
 }
