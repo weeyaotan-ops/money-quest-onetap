@@ -1,0 +1,56 @@
+{
+  "kind": "V272_RESCUE_SHADOW_STATE",
+  "version": 1,
+  "researchOnly": true,
+  "liveTrading": false,
+  "protocolBranch": "research/v272-rescue-brain-20260926",
+  "protocolFrozenCommit": "38dfe6af5085ca52144e6bca529547f988f88e1f",
+  "brainCommit": "ef17ae0be8ac3107050d40ca227181ef79a9b71c",
+  "runnerCommit": "e3cda5591d25bd78cf7df4bbf09ccbde9d3eeb60",
+  "prospectiveStart": "2026-09-26T06:03:53.604Z",
+  "lastVerifiedManualScan": {
+    "at": "2026-09-26T06:03:53.604Z",
+    "scope": "Top 4 Binance USDT-M perpetuals by 24h quote volume; 1m/5m/15m",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "ZECUSDT"
+    ],
+    "baseCandidates": 0,
+    "eligible": 0
+  },
+  "counts": {
+    "scans": 1,
+    "candidateDecisions": 0,
+    "eligibleSelections": 0,
+    "abstainedCandidates": 0,
+    "openSelections": 0,
+    "closedSelections": 0,
+    "noFills": 0
+  },
+  "performance": {
+    "wins": 0,
+    "losses": 0,
+    "breakeven": 0,
+    "netExpectancyR": null,
+    "profitFactor": null,
+    "maxDrawdownPct": null,
+    "startingBalance": 1000,
+    "simulatedBalance": 1000,
+    "coverage": null,
+    "fillRate": null
+  },
+  "promotionGate": {
+    "minClosedSelections": 100,
+    "minNetExpectancyR": 0.1,
+    "minProfitFactor": 1.2,
+    "maxDrawdownPct": 10,
+    "status": "INSUFFICIENT_SAMPLE"
+  },
+  "notes": [
+    "Only prospective decisions made after the frozen protocol count.",
+    "No live orders are authorized.",
+    "Performance remains null until at least one eligible selection is resolved using realistic Binance costs."
+  ]
+}
