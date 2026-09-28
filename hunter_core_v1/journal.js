@@ -199,11 +199,13 @@ function updateExisting(state, ranked, snapshots, now) {
   }
 }
 
-function processCycle(state, ranked, snapshots, now = Date.now()) {
+function processCycle(state, ranked, snapshots, now = Date.now(), options = {}) {
   updateExisting(state, ranked, snapshots, now);
 
+  const maxNew = Number.isFinite(Number(options.maxNew)) ? Math.max(0, Number(options.maxNew)) : Infinity;
   const created = [];
   for (const result of ranked) {
+    if (created.length >= maxNew) break;
     if (!['LONG', 'SHORT'].includes(result.decision) || !result.plan) continue;
 
     // Avoid duplicate signals while the same symbol/direction is still being evaluated.
