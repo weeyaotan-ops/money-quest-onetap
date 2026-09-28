@@ -1,6 +1,6 @@
 'use strict';
 
-const { snapshot } = require('./binance_public');
+const { snapshot } = require('./market_data');
 const { rankSnapshots } = require('./core');
 
 const SYMBOLS = (process.env.HUNTER_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT')
