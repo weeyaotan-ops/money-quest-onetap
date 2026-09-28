@@ -1,0 +1,44 @@
+name: Hunter V2 Edge Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-v2-research.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile research/backtest_hunter_v1.py
+          python -m py_compile research/backtest_hunter_v2.py
+
+      - name: Run V2 research
+        run: |
+          python research/backtest_hunter_v2.py             --workers 28             --out v2_output
+
+      - name: Upload V2 research
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v2-research-${{ github.run_id }}
+          path: v2_output/
+          if-no-files-found: warn
+          retention-days: 90
