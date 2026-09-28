@@ -1,0 +1,38 @@
+name: Hunter V1 Historical Backtest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout fixed Hunter V1
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Self-test
+        run: python research/backtest_hunter_v1.py --self-test
+
+      - name: Run frozen V1 backtest
+        run: |
+          python research/backtest_hunter_v1.py             --start 2022-01-01             --end 2026-08-31             --oos-start 2025-01-01             --workers 28             --fee-bps 5             --slippage-bps 2             --risk-pct 0.005             --out backtest_output
+
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v1-backtest-${{ github.run_id }}
+          path: backtest_output/
+          if-no-files-found: warn
+          retention-days: 90
