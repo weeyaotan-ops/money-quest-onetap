@@ -189,16 +189,17 @@ def valid(t):
     return s["trades"]>=10 and s["avgR"] is not None and s["avgR"]>.05 and s["profitFactor"] is not None and s["profitFactor"]>1.10 and (s["maxDrawdownPct"] or 99)<12
 
 def grids(setup):
-    common=list(itertools.product([.12,.22],[-.20,0,.15],[-.20,0],[-.20,0],[1.0,1.75]))
+    # Keep the search coarse on purpose. We are looking for a broad plateau, not a perfect fit.
+    common=list(itertools.product([.12,.22],[-.10,.10],[-.10,0]))
     if setup=="CHANNEL_BREAKOUT":
         for channel in [12,24,48]:
-            for trend_min,rs_min,flow_min,deriv_min,fcap in common:
-                for er_min,volmin,stop,trail in itertools.product([.12,.22],[-.5,.2],[1.5,2.0],[2.0,3.0]):
-                    yield dict(setup=setup,channel=channel,trend_min=trend_min,rs_min=rs_min,flow_min=flow_min,deriv_min=deriv_min,funding_cap=fcap,er_min=er_min,volume_min=volmin,stop_atr=stop,trail_atr=trail,ema_exit=False,max_hold_bars=672)
+            for trend_min,rs_min,flow_min in common:
+                for er_min,volmin in itertools.product([.12,.22],[-.5,.2]):
+                    yield dict(setup=setup,channel=channel,trend_min=trend_min,rs_min=rs_min,flow_min=flow_min,deriv_min=-.15,funding_cap=1.5,er_min=er_min,volume_min=volmin,stop_atr=1.75,trail_atr=2.5,ema_exit=False,max_hold_bars=672)
     else:
-        for trend_min,rs_min,flow_min,deriv_min,fcap in common:
-            for er_min,reclaim,stop,trail,ema_exit in itertools.product([.10,.20],[.8,1.2],[1.3,1.8],[2.0,3.0],[False,True]):
-                yield dict(setup=setup,trend_min=trend_min,rs_min=rs_min,flow_min=flow_min,deriv_min=deriv_min,funding_cap=fcap,er_min=er_min,reclaim_atr=reclaim,stop_atr=stop,trail_atr=trail,ema_exit=ema_exit,max_hold_bars=672)
+        for trend_min,rs_min,flow_min in common:
+            for er_min,reclaim,stop in itertools.product([.10,.20],[.8,1.2],[1.4,1.8]):
+                yield dict(setup=setup,trend_min=trend_min,rs_min=rs_min,flow_min=flow_min,deriv_min=-.15,funding_cap=1.5,er_min=er_min,reclaim_atr=reclaim,stop_atr=stop,trail_atr=2.5,ema_exit=False,max_hold_bars=672)
 
 def research(setup,events,all_data):
     cand=[]
