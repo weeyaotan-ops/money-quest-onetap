@@ -1,0 +1,41 @@
+name: Hunter Interactive Telegram Bot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-interactive-bot.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"
+
+concurrency:
+  group: hunter-interactive-telegram-bot
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout Hunter Core V1
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax check
+        run: node --check hunter_core_v1/interactive_bot.js
+
+      - name: Run interactive bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node hunter_core_v1/interactive_bot.js
