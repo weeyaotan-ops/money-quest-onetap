@@ -3,7 +3,7 @@
 const path = require('path');
 const { snapshot } = require('./market_data');
 const { rankSnapshots } = require('./core');
-const { loadState, performance } = require('./journal');
+const { loadState, performance, performanceBreakdown } = require('./journal');
 const {
   shortSymbol,
   stageVisual,
@@ -25,6 +25,7 @@ if (!BOT_TOKEN || !CHAT_ID) {
 }
 
 let cache = null;
+let previousData = null;
 let cacheAt = 0;
 const CACHE_MS = 12000;
 
@@ -39,6 +40,20 @@ function priceFmt(x) {
   return n.toFixed(4);
 }
 
+function localTime(date = new Date()) {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Singapore',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date);
+}
+
+function currentPrice(snapshot) {
+  return Number(snapshot?.lastPrice || snapshot?.candles15m?.[snapshot.candles15m.length - 1]?.close);
+}
+
 function directionText(x) {
   const t = Number(x.components?.trend || 0);
   if (t > 0.12) return '↗ UP';
@@ -51,6 +66,11 @@ function componentVisual(v, positive, negative) {
   if (n > 0.15) return `🟢 ${positive}`;
   if (n < -0.15) return `🔴 ${negative}`;
   return '⚪ Neutral';
+}
+
+function providerText(data) {
+  const values = [...new Set(Object.values(data?.snapBySymbol || {}).map((s) => s.provider).filter(Boolean))];
+  return values.length ? values.join(' / ') : 'n/a';
 }
 
 function mainKeyboard() {
@@ -98,9 +118,10 @@ function analystKeyboard() {
     inline_keyboard: [
       [
         { text: '🔄 Refresh', callback_data: 'analyst' },
-        { text: '🎯 Best Now', callback_data: 'best' }
+        { text: '⚡ Changes', callback_data: 'changes' }
       ],
       [
+        { text: '🎯 Best Now', callback_data: 'best' },
         { text: '🏠 Home', callback_data: 'start' }
       ]
     ]
@@ -144,27 +165,40 @@ async function analyze(force = false) {
   const ranked = rankSnapshots(snaps, EQUITY, RISK_PCT);
   const bySymbol = Object.fromEntries(ranked.map((x) => [x.symbol, x]));
   const snapBySymbol = Object.fromEntries(snaps.map((x) => [x.symbol, x]));
+
+  if (cache) previousData = cache;
   cache = { ranked, bySymbol, snapBySymbol, at: new Date() };
   cacheAt = Date.now();
   return cache;
 }
 
-function statusText() {
+function actionLine(x) {
+  const v = stageVisual(x);
+  if (v.stage === 'ACTIONABLE') return 'DO NOW: Follow the signal plan.';
+  if (v.stage === 'ARMED') return 'DO NOW: Prepare. Wait for confirmation.';
+  if (v.stage === 'WATCH') return 'DO NOW: Watch the zone. Do not enter yet.';
+  return 'DO NOW: Wait. No trade.';
+}
+
+function statusText(data) {
   return [
     '⚙️ HUNTER STATUS',
     '',
     '🟢 System: ONLINE',
     '🔔 Auto scan: every 15 min',
-    '🧠 Live analyst: ON',
+    '🧠 Analyst: ON',
     '🎯 Watch zones: ON',
     '🟠 Early heads-up: ON',
     '📒 Forward tracking: ON',
+    '🔁 Duplicate protection: ON',
+    '',
+    `Data: ${providerText(data)}`,
+    'Scoring: closed 15m / 1h / 4h candles',
+    'Display price: live ticker',
+    `Updated: ${localTime(data.at)} SGT/MYT`,
     '',
     'Signal threshold: |Edge| ≥ 0.65',
-    'Risk model: 0.5% equity',
-    'Mode: SIGNAL ONLY',
-    '',
-    'No automatic order execution.'
+    'Mode: SIGNAL ONLY'
   ].join('\n');
 }
 
@@ -173,7 +207,7 @@ function assetText(symbol, data) {
   const s = data.snapBySymbol[symbol];
   if (!x || !s) return `${shortSymbol(symbol)}: data unavailable`;
 
-  const price = Number(s.candles15m[s.candles15m.length - 1]?.close);
+  const price = currentPrice(s);
   const visual = stageVisual(x);
   const regime = regimeVisual(x.regime.name);
   const watch = watchPlan(x, s);
@@ -185,7 +219,9 @@ function assetText(symbol, data) {
     `${visual.icon} ${visual.label}`,
     `Direction: ${directionText(x)}`,
     `${regime.icon} Market: ${regime.label}`,
-    `Edge: ${fmt(x.edge, 2)} / 0.65`
+    `Edge: ${fmt(x.edge, 2)} / 0.65`,
+    '',
+    actionLine(x)
   ];
 
   if (x.decision !== 'NO_TRADE' && x.plan) {
@@ -193,27 +229,18 @@ function assetText(symbol, data) {
       '',
       `🎯 ENTRY: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
       `🛑 STOP: ${priceFmt(x.plan.stop)}`,
-      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`,
-      '',
-      'This is an actionable signal.'
+      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`
     );
   } else if (watch && visual.stage !== 'NO_TRADE') {
-    const sideWord = watch.side === 'LONG' ? 'LONG' : 'SHORT';
     lines.push(
       '',
-      `👀 Watch zone: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
-      `🧭 Bias: ${sideWord}`,
-      `❌ Weakens beyond: ${priceFmt(watch.invalid)}`,
-      `Need: Edge ${watch.side === 'LONG' ? '≥ +0.65' : '≤ -0.65'}`,
-      '',
-      visual.stage === 'ARMED'
-        ? 'Close. Prepare, but wait for confirmation.'
-        : 'Watch only. Price touching the zone is NOT an entry.'
+      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
+      `🧭 Bias: ${watch.side}`,
+      `❌ Weakens beyond: ${priceFmt(watch.invalid)}`
     );
-  } else {
-    lines.push('', 'Nothing to do now.');
   }
 
+  lines.push('', `Updated: ${localTime(data.at)}`);
   return lines.join('\n');
 }
 
@@ -229,7 +256,7 @@ function whyText(symbol, data) {
   const regimeReason = {
     TREND: 'Price is moving cleanly enough to follow.',
     BREAKOUT: 'Price is expanding with momentum.',
-    RANGE: 'Sideways market. Hunter reduces confidence.',
+    RANGE: 'Sideways market. Hunter cuts confidence.',
     CHAOS: 'Too unstable. Hunter blocks trades.'
   }[x.regime.name] || x.regime.name;
 
@@ -244,16 +271,15 @@ function whyText(symbol, data) {
     '',
     regimeReason,
     '',
-    `${visual.icon} Final: ${visual.label} | Edge ${fmt(x.edge, 2)}`
+    `${visual.icon} Final: ${visual.label} | Edge ${fmt(x.edge, 2)}`,
+    actionLine(x)
   ];
 
   if (watch && x.decision === 'NO_TRADE' && visual.stage !== 'NO_TRADE') {
-    lines.push(
-      `👀 Main price area: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
-      'Price + confirmation are both required.'
-    );
+    lines.push(`👀 Main price area: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
   }
 
+  lines.push('', `Source: ${s.provider}`, 'Signal math uses CLOSED candles; live price is display only.');
   return lines.join('\n');
 }
 
@@ -262,11 +288,10 @@ function overviewText(data) {
   for (const x of data.ranked) {
     const v = stageVisual(x);
     const r = regimeVisual(x.regime.name);
-    lines.push(
-      `${v.icon} ${shortSymbol(x.symbol)}  ${v.label}  |  ${directionText(x)}  |  ${r.icon} ${r.label}  |  ${fmt(x.edge, 2)}`
-    );
+    lines.push(`${v.icon} ${shortSymbol(x.symbol)}  ${v.label} | ${directionText(x)} | ${r.icon} ${r.label} | ${fmt(x.edge, 2)}`);
   }
-  lines.push('', '🟢/🔴 = actionable | 🟠 = close | 🟡 = watch | ⚪ = wait');
+  lines.push('', '🟢/🔴 action | 🟠 prepare | 🟡 watch | ⚪ wait');
+  lines.push(`Updated: ${localTime(data.at)}`);
   return lines.join('\n');
 }
 
@@ -283,7 +308,9 @@ function bestText(data) {
     `${v.icon} ${shortSymbol(x.symbol)} — ${v.label}`,
     `Direction: ${directionText(x)}`,
     `Market: ${regimeVisual(x.regime.name).icon} ${x.regime.name}`,
-    `Edge: ${fmt(x.edge, 2)} / 0.65`
+    `Edge: ${fmt(x.edge, 2)} / 0.65`,
+    '',
+    actionLine(x)
   ];
 
   if (x.decision !== 'NO_TRADE' && x.plan) {
@@ -293,15 +320,7 @@ function bestText(data) {
       `STOP: ${priceFmt(x.plan.stop)}`
     );
   } else if (watch && v.stage !== 'NO_TRADE') {
-    lines.push(
-      '',
-      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
-      `Need: Edge ${watch.side === 'LONG' ? '≥ +0.65' : '≤ -0.65'}`,
-      '',
-      v.stage === 'ARMED' ? 'Prepare. Do not enter yet.' : 'Watch only.'
-    );
-  } else {
-    lines.push('', 'No trade. Waiting is correct.');
+    lines.push('', `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
   }
 
   return lines.join('\n');
@@ -318,9 +337,9 @@ function analystText(data) {
   const lines = [
     '🧠 HUNTER ANALYST',
     '',
-    `${a.biasIcon} Market bias: ${a.bias}`,
+    `${a.biasIcon} Bias: ${a.bias}`,
     `${a.riskIcon} Risk: ${a.risk}`,
-    `${regime.icon} Main regime: ${a.best.regime.name}`,
+    `${regime.icon} Regime: ${a.best.regime.name}`,
     '',
     `🎯 Focus: ${shortSymbol(a.best.symbol)}`,
     `${a.bestVisual.icon} ${a.bestVisual.label}`,
@@ -328,37 +347,82 @@ function analystText(data) {
   ];
 
   if (watch && a.best.decision === 'NO_TRADE' && a.bestVisual.stage !== 'NO_TRADE') {
-    lines.push(
-      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`
-    );
+    lines.push(`👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
   }
 
   lines.push(
     '',
-    `Bottom line: ${a.oneLiner}`,
+    `BOTTOM LINE: ${a.oneLiner}`,
+    actionLine(a.best),
     '',
-    `Breadth: ${a.bulls} bullish / ${a.bears} bearish / ${a.ranges} range`
+    `Breadth: ${a.bulls} bullish / ${a.bears} bearish / ${a.ranges} range`,
+    `Updated: ${localTime(data.at)}`
   );
 
   return lines.join('\n');
 }
 
+function changesText(data) {
+  if (!previousData) {
+    return ['⚡ CHANGES', '', 'No comparison yet.', 'Refresh Analyst once, then check Changes again.'].join('\n');
+  }
+
+  const rows = [];
+  let material = 0;
+  for (const symbol of SYMBOLS) {
+    const now = data.bySymbol[symbol];
+    const prev = previousData.bySymbol[symbol];
+    if (!now || !prev) continue;
+    const d = Number(now.edge) - Number(prev.edge);
+    const stageChanged = stageVisual(now).stage !== stageVisual(prev).stage;
+    const regimeChanged = now.regime.name !== prev.regime.name;
+    if (Math.abs(d) >= 0.05 || stageChanged || regimeChanged) material += 1;
+
+    rows.push({
+      symbol,
+      d,
+      stageChanged,
+      regimeChanged,
+      text: `${shortSymbol(symbol)}: Edge ${d >= 0 ? '+' : ''}${fmt(d, 2)}${stageChanged ? ` | ${stageVisual(prev).label} → ${stageVisual(now).label}` : ''}${regimeChanged ? ` | ${prev.regime.name} → ${now.regime.name}` : ''}`
+    });
+  }
+
+  rows.sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+  if (!material) {
+    return ['⚡ CHANGES', '', 'No meaningful change since the previous refresh.', '', 'Market structure is broadly the same.'].join('\n');
+  }
+
+  return [
+    '⚡ CHANGES',
+    '',
+    ...rows.filter((r) => Math.abs(r.d) >= 0.05 || r.stageChanged || r.regimeChanged).map((r) => r.text),
+    '',
+    'Largest movement is shown first.'
+  ].join('\n');
+}
+
 function activeText(data) {
-  const active = data.ranked.filter((x) => x.decision !== 'NO_TRADE');
-  if (!active.length) {
-    return [
-      '📌 ACTIVE',
-      '',
-      '⚪ No actionable signal now.',
-      '',
-      'Hunter will alert you automatically.'
-    ].join('\n');
+  const state = loadState(STATE_PATH);
+  const journalActive = (state.signals || []).filter((s) => ['PENDING_ENTRY', 'TRIGGERED'].includes(s.status));
+  const liveActionable = data.ranked.filter((x) => x.decision !== 'NO_TRADE');
+
+  if (!journalActive.length && !liveActionable.length) {
+    return ['📌 ACTIVE', '', '⚪ No active setup now.', '', 'Hunter will alert you automatically.'].join('\n');
   }
 
   const lines = ['📌 ACTIVE', ''];
-  for (const x of active) {
-    const v = stageVisual(x);
-    lines.push(`${v.icon} ${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
+  for (const s of journalActive.slice(-5)) {
+    const icon = s.side === 'LONG' ? '🟢' : '🔴';
+    const status = s.status === 'TRIGGERED' ? 'ENTRY TRIGGERED' : 'WAITING ENTRY';
+    lines.push(`${icon} ${shortSymbol(s.symbol)} — ${s.side} — ${status}`);
+    lines.push(`Entry ${priceFmt(s.entryZone[0])}-${priceFmt(s.entryZone[1])} | Stop ${priceFmt(s.stop)}`);
+  }
+
+  if (!journalActive.length && liveActionable.length) {
+    for (const x of liveActionable) {
+      const v = stageVisual(x);
+      lines.push(`${v.icon} ${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
+    }
   }
   return lines.join('\n');
 }
@@ -366,23 +430,20 @@ function activeText(data) {
 function performanceText() {
   const state = loadState(STATE_PATH);
   const p = performance(state);
+  const bySymbol = performanceBreakdown(state, 'symbol');
+  const byRegime = performanceBreakdown(state, 'regime');
 
   if (!p.actionable) {
-    return [
-      '📊 PERFORMANCE',
-      '',
-      'No completed forward-test data yet.',
-      '',
-      'Hunter is collecting real signals first.'
-    ].join('\n');
+    return ['📊 PERFORMANCE', '', 'No forward-test signal yet.', '', 'Hunter is collecting data first.'].join('\n');
   }
 
   const lines = [
     '📊 PERFORMANCE',
     '',
-    `Signals tracked: ${p.actionable}`,
-    `Entry triggered: ${p.triggered}`,
-    `Completed: ${p.completed}`
+    `Signals: ${p.actionable}`,
+    `Triggered: ${p.triggered}`,
+    `Completed: ${p.completed}`,
+    `Cancelled/expired: ${p.expired}`
   ];
 
   if (p.completed >= 10) {
@@ -391,8 +452,19 @@ function performanceText() {
       `Average: ${p.avgFinalR == null ? 'n/a' : fmt(p.avgFinalR, 2) + 'R'}`
     );
   } else {
-    lines.push('', 'Too early to judge.');
-    lines.push('Need more completed signals first.');
+    lines.push('', 'Too early for a reliable verdict.');
+  }
+
+  const symbolRows = Object.entries(bySymbol).filter(([, g]) => g.completed >= 3);
+  if (symbolRows.length) {
+    lines.push('', 'BY COIN');
+    for (const [key, g] of symbolRows) lines.push(`${shortSymbol(key)}: n=${g.completed} | avg ${fmt(g.avgR, 2)}R`);
+  }
+
+  const regimeRows = Object.entries(byRegime).filter(([, g]) => g.completed >= 3);
+  if (regimeRows.length) {
+    lines.push('', 'BY REGIME');
+    for (const [key, g] of regimeRows) lines.push(`${key}: n=${g.completed} | avg ${fmt(g.avgR, 2)}R`);
   }
 
   return lines.join('\n');
@@ -405,7 +477,7 @@ async function showMenu() {
     '🧠 Analyst = whole-market answer',
     '🎯 Best Now = strongest setup',
     '🌍 Market = all 3 at a glance',
-    '📌 Active = real signals',
+    '📌 Active = open setup tracking',
     '📊 Performance = real forward results'
   ].join('\n'), mainKeyboard());
 }
@@ -413,10 +485,6 @@ async function showMenu() {
 async function handleAction(action, callbackId) {
   await answerCallback(callbackId);
 
-  if (action === 'status') {
-    await send(statusText(), backKeyboard());
-    return;
-  }
   if (action === 'performance') {
     await send(performanceText(), backKeyboard());
     return;
@@ -427,10 +495,12 @@ async function handleAction(action, callbackId) {
   }
 
   try {
-    const force = action.startsWith('refresh:') || ['analyst', 'overview', 'best', 'active'].includes(action);
+    const force = action.startsWith('refresh:') || ['analyst', 'changes', 'overview', 'best', 'active', 'status'].includes(action);
     const data = await analyze(force);
 
-    if (action.startsWith('asset:')) {
+    if (action === 'status') {
+      await send(statusText(data), backKeyboard());
+    } else if (action.startsWith('asset:')) {
       const symbol = action.slice(6);
       await send(assetText(symbol, data), assetKeyboard(symbol));
     } else if (action.startsWith('refresh:')) {
@@ -441,6 +511,8 @@ async function handleAction(action, callbackId) {
       await send(whyText(symbol, data), assetKeyboard(symbol));
     } else if (action === 'analyst') {
       await send(analystText(data), analystKeyboard());
+    } else if (action === 'changes') {
+      await send(changesText(data), analystKeyboard());
     } else if (action === 'overview') {
       await send(overviewText(data), backKeyboard());
     } else if (action === 'best') {
@@ -512,7 +584,7 @@ async function setCommands() {
       { command: 'btc', description: 'BTC' },
       { command: 'eth', description: 'ETH' },
       { command: 'sol', description: 'SOL' },
-      { command: 'active', description: 'Current signals' },
+      { command: 'active', description: 'Open setup tracking' },
       { command: 'performance', description: 'Forward-test results' },
       { command: 'status', description: 'System status' }
     ]
@@ -520,7 +592,7 @@ async function setCommands() {
 }
 
 async function run() {
-  console.log(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', status: 'STARTING' }));
+  console.log(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', status: 'STARTING' }));
   await tg('deleteWebhook', { drop_pending_updates: false });
   await setCommands();
   let offset = 0;
@@ -533,13 +605,13 @@ async function run() {
         await handleUpdate(update);
       }
     } catch (err) {
-      console.error(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', error: err.message }));
+      console.error(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', error: err.message }));
       await sleep(2500);
     }
   }
 }
 
 run().catch((err) => {
-  console.error(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', fatal: err.message }));
+  console.error(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', fatal: err.message }));
   process.exit(1);
 });
