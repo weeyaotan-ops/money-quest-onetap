@@ -1,10 +1,16 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const { snapshot } = require('./market_data');
-const { rankSnapshots, normalizedMomentum } = require('./core');
-const { loadState, performance, stageFromEdge } = require('./journal');
+const { rankSnapshots } = require('./core');
+const { loadState, performance } = require('./journal');
+const {
+  shortSymbol,
+  stageVisual,
+  regimeVisual,
+  watchPlan,
+  marketSynthesis
+} = require('./advisor');
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -33,30 +39,29 @@ function priceFmt(x) {
   return n.toFixed(4);
 }
 
-function shortSymbol(symbol) {
-  return String(symbol).replace('USDT', '');
+function directionText(x) {
+  const t = Number(x.components?.trend || 0);
+  if (t > 0.12) return '↗ UP';
+  if (t < -0.12) return '↘ DOWN';
+  return '→ MIXED';
 }
 
-function stageLabel(edge) {
-  const s = stageFromEdge(edge);
-  if (s === 'ACTIONABLE') return 'ACTIONABLE';
-  if (s === 'ARMED') return 'ALMOST READY';
-  if (s === 'WATCH') return 'WATCH';
-  return 'WAIT';
-}
-
-function directionLabel(x) {
-  if (x.components.trend > 0.12) return 'UP';
-  if (x.components.trend < -0.12) return 'DOWN';
-  return 'MIXED';
+function componentVisual(v, positive, negative) {
+  const n = Number(v || 0);
+  if (n > 0.15) return `🟢 ${positive}`;
+  if (n < -0.15) return `🔴 ${negative}`;
+  return '⚪ Neutral';
 }
 
 function mainKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: 'Best Now', callback_data: 'best' },
-        { text: 'Market', callback_data: 'overview' }
+        { text: '🧠 Analyst', callback_data: 'analyst' },
+        { text: '🎯 Best Now', callback_data: 'best' }
+      ],
+      [
+        { text: '🌍 Market', callback_data: 'overview' }
       ],
       [
         { text: 'BTC', callback_data: 'asset:BTCUSDT' },
@@ -64,11 +69,11 @@ function mainKeyboard() {
         { text: 'SOL', callback_data: 'asset:SOLUSDT' }
       ],
       [
-        { text: 'Active', callback_data: 'active' },
-        { text: 'Performance', callback_data: 'performance' }
+        { text: '📌 Active', callback_data: 'active' },
+        { text: '📊 Performance', callback_data: 'performance' }
       ],
       [
-        { text: 'Status', callback_data: 'status' }
+        { text: '⚙️ Status', callback_data: 'status' }
       ]
     ]
   };
@@ -78,18 +83,32 @@ function assetKeyboard(symbol) {
   return {
     inline_keyboard: [
       [
-        { text: 'Refresh', callback_data: `refresh:${symbol}` },
-        { text: 'Why?', callback_data: `why:${symbol}` }
+        { text: '🔄 Refresh', callback_data: `refresh:${symbol}` },
+        { text: '🧠 Why?', callback_data: `why:${symbol}` }
       ],
       [
-        { text: 'Home', callback_data: 'start' }
+        { text: '🏠 Home', callback_data: 'start' }
+      ]
+    ]
+  };
+}
+
+function analystKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🔄 Refresh', callback_data: 'analyst' },
+        { text: '🎯 Best Now', callback_data: 'best' }
+      ],
+      [
+        { text: '🏠 Home', callback_data: 'start' }
       ]
     ]
   };
 }
 
 function backKeyboard() {
-  return { inline_keyboard: [[{ text: 'Home', callback_data: 'start' }]] };
+  return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
 }
 
 async function tg(method, body) {
@@ -132,14 +151,18 @@ async function analyze(force = false) {
 
 function statusText() {
   return [
-    'HUNTER STATUS',
+    '⚙️ HUNTER STATUS',
     '',
-    'System: ONLINE',
-    'Mode: SIGNAL ONLY',
-    'Scan: every 15 minutes',
-    'Coins: BTC / ETH / SOL',
-    'Signal: |Edge| >= 0.65',
+    '🟢 System: ONLINE',
+    '🔔 Auto scan: every 15 min',
+    '🧠 Live analyst: ON',
+    '🎯 Watch zones: ON',
+    '🟠 Early heads-up: ON',
+    '📒 Forward tracking: ON',
+    '',
+    'Signal threshold: |Edge| ≥ 0.65',
     'Risk model: 0.5% equity',
+    'Mode: SIGNAL ONLY',
     '',
     'No automatic order execution.'
   ].join('\n');
@@ -151,30 +174,42 @@ function assetText(symbol, data) {
   if (!x || !s) return `${shortSymbol(symbol)}: data unavailable`;
 
   const price = Number(s.candles15m[s.candles15m.length - 1]?.close);
-  const status = stageLabel(x.edge);
+  const visual = stageVisual(x);
+  const regime = regimeVisual(x.regime.name);
+  const watch = watchPlan(x, s);
 
   const lines = [
     `${shortSymbol(symbol)} / USDT`,
     '',
-    `Price: $${priceFmt(price)}`,
-    `Status: ${status}`,
-    `Direction: ${directionLabel(x)}`,
-    `Market: ${x.regime.name}`,
+    `💵 $${priceFmt(price)}`,
+    `${visual.icon} ${visual.label}`,
+    `Direction: ${directionText(x)}`,
+    `${regime.icon} Market: ${regime.label}`,
     `Edge: ${fmt(x.edge, 2)} / 0.65`
   ];
 
   if (x.decision !== 'NO_TRADE' && x.plan) {
     lines.push(
       '',
-      `Signal: ${x.decision}`,
-      `Entry: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
-      `Stop: ${priceFmt(x.plan.stop)}`,
-      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`
+      `🎯 ENTRY: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
+      `🛑 STOP: ${priceFmt(x.plan.stop)}`,
+      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`,
+      '',
+      'This is an actionable signal.'
     );
-  } else if (status === 'ALMOST READY') {
-    lines.push('', 'Close, but not confirmed yet.');
-  } else if (status === 'WATCH') {
-    lines.push('', 'Worth watching. No trade yet.');
+  } else if (watch && visual.stage !== 'NO_TRADE') {
+    const sideWord = watch.side === 'LONG' ? 'LONG' : 'SHORT';
+    lines.push(
+      '',
+      `👀 Watch zone: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
+      `🧭 Bias: ${sideWord}`,
+      `❌ Weakens beyond: ${priceFmt(watch.invalid)}`,
+      `Need: Edge ${watch.side === 'LONG' ? '≥ +0.65' : '≤ -0.65'}`,
+      '',
+      visual.stage === 'ARMED'
+        ? 'Close. Prepare, but wait for confirmation.'
+        : 'Watch only. Price touching the zone is NOT an entry.'
+    );
   } else {
     lines.push('', 'Nothing to do now.');
   }
@@ -182,74 +217,128 @@ function assetText(symbol, data) {
   return lines.join('\n');
 }
 
-function reasonWord(v, positive, negative) {
-  if (v > 0.15) return positive;
-  if (v < -0.15) return negative;
-  return 'Neutral';
-}
-
 function whyText(symbol, data) {
   const x = data.bySymbol[symbol];
-  if (!x) return 'Data unavailable.';
+  const s = data.snapBySymbol[symbol];
+  if (!x || !s) return 'Data unavailable.';
+
+  const visual = stageVisual(x);
+  const regime = regimeVisual(x.regime.name);
+  const watch = watchPlan(x, s);
 
   const regimeReason = {
-    TREND: 'Market is moving cleanly.',
-    BREAKOUT: 'Price is breaking out with activity.',
-    RANGE: 'Market is sideways, so Hunter reduces confidence.',
-    CHAOS: 'Market is too unstable, so Hunter blocks trades.'
+    TREND: 'Price is moving cleanly enough to follow.',
+    BREAKOUT: 'Price is expanding with momentum.',
+    RANGE: 'Sideways market. Hunter reduces confidence.',
+    CHAOS: 'Too unstable. Hunter blocks trades.'
   }[x.regime.name] || x.regime.name;
 
-  return [
-    `WHY ${shortSymbol(symbol)}?`,
+  const lines = [
+    `🧠 WHY ${shortSymbol(symbol)}?`,
     '',
-    `Trend: ${reasonWord(x.components.trend, 'Supports LONG', 'Supports SHORT')}`,
-    `Relative strength: ${reasonWord(x.components.relativeStrength, 'Strong vs others', 'Weak vs others')}`,
-    `Futures positioning: ${reasonWord(x.components.derivatives, 'Supportive', 'Against move')}`,
-    `Buy/Sell flow: ${reasonWord(x.components.flow, 'Buyers stronger', 'Sellers stronger')}`,
-    `Market: ${x.regime.name}`,
+    `Trend: ${componentVisual(x.components.trend, 'Supports LONG', 'Supports SHORT')}`,
+    `Relative: ${componentVisual(x.components.relativeStrength, 'Strong vs others', 'Weak vs others')}`,
+    `Futures: ${componentVisual(x.components.derivatives, 'Supportive', 'Against move')}`,
+    `Buy/Sell flow: ${componentVisual(x.components.flow, 'Buyers stronger', 'Sellers stronger')}`,
+    `${regime.icon} Regime: ${regime.label}`,
     '',
     regimeReason,
     '',
-    `Final Edge: ${fmt(x.edge, 2)}`,
-    'Needs 0.65 for a real signal.'
-  ].join('\n');
+    `${visual.icon} Final: ${visual.label} | Edge ${fmt(x.edge, 2)}`
+  ];
+
+  if (watch && x.decision === 'NO_TRADE' && visual.stage !== 'NO_TRADE') {
+    lines.push(
+      `👀 Main price area: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
+      'Price + confirmation are both required.'
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function overviewText(data) {
-  const lines = ['MARKET', ''];
+  const lines = ['🌍 MARKET', ''];
   for (const x of data.ranked) {
+    const v = stageVisual(x);
+    const r = regimeVisual(x.regime.name);
     lines.push(
-      `${shortSymbol(x.symbol)}  ${stageLabel(x.edge)}  |  ${directionLabel(x)}  |  Edge ${fmt(x.edge, 2)}`
+      `${v.icon} ${shortSymbol(x.symbol)}  ${v.label}  |  ${directionText(x)}  |  ${r.icon} ${r.label}  |  ${fmt(x.edge, 2)}`
     );
   }
-  lines.push('', 'Only ACTIONABLE becomes a Telegram signal.');
+  lines.push('', '🟢/🔴 = actionable | 🟠 = close | 🟡 = watch | ⚪ = wait');
   return lines.join('\n');
 }
 
 function bestText(data) {
   const x = data.ranked[0];
-  if (!x) return 'No market data available.';
+  const s = x ? data.snapBySymbol[x.symbol] : null;
+  if (!x || !s) return 'No market data available.';
 
+  const v = stageVisual(x);
+  const watch = watchPlan(x, s);
   const lines = [
-    'BEST NOW',
+    '🎯 BEST NOW',
     '',
-    `${shortSymbol(x.symbol)}`,
-    `Status: ${stageLabel(x.edge)}`,
-    `Direction: ${directionLabel(x)}`,
-    `Market: ${x.regime.name}`,
+    `${v.icon} ${shortSymbol(x.symbol)} — ${v.label}`,
+    `Direction: ${directionText(x)}`,
+    `Market: ${regimeVisual(x.regime.name).icon} ${x.regime.name}`,
     `Edge: ${fmt(x.edge, 2)} / 0.65`
   ];
 
   if (x.decision !== 'NO_TRADE' && x.plan) {
     lines.push(
       '',
-      `Signal: ${x.decision}`,
-      `Entry: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
-      `Stop: ${priceFmt(x.plan.stop)}`
+      `ENTRY: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
+      `STOP: ${priceFmt(x.plan.stop)}`
+    );
+  } else if (watch && v.stage !== 'NO_TRADE') {
+    lines.push(
+      '',
+      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
+      `Need: Edge ${watch.side === 'LONG' ? '≥ +0.65' : '≤ -0.65'}`,
+      '',
+      v.stage === 'ARMED' ? 'Prepare. Do not enter yet.' : 'Watch only.'
     );
   } else {
-    lines.push('', 'No trade yet.');
+    lines.push('', 'No trade. Waiting is correct.');
   }
+
+  return lines.join('\n');
+}
+
+function analystText(data) {
+  const a = marketSynthesis(data);
+  if (!a) return 'No market data available.';
+
+  const bestSnap = data.snapBySymbol[a.best.symbol];
+  const watch = watchPlan(a.best, bestSnap);
+  const regime = regimeVisual(a.best.regime.name);
+
+  const lines = [
+    '🧠 HUNTER ANALYST',
+    '',
+    `${a.biasIcon} Market bias: ${a.bias}`,
+    `${a.riskIcon} Risk: ${a.risk}`,
+    `${regime.icon} Main regime: ${a.best.regime.name}`,
+    '',
+    `🎯 Focus: ${shortSymbol(a.best.symbol)}`,
+    `${a.bestVisual.icon} ${a.bestVisual.label}`,
+    `Edge: ${fmt(a.best.edge, 2)} / 0.65`
+  ];
+
+  if (watch && a.best.decision === 'NO_TRADE' && a.bestVisual.stage !== 'NO_TRADE') {
+    lines.push(
+      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`
+    );
+  }
+
+  lines.push(
+    '',
+    `Bottom line: ${a.oneLiner}`,
+    '',
+    `Breadth: ${a.bulls} bullish / ${a.bears} bearish / ${a.ranges} range`
+  );
 
   return lines.join('\n');
 }
@@ -258,17 +347,18 @@ function activeText(data) {
   const active = data.ranked.filter((x) => x.decision !== 'NO_TRADE');
   if (!active.length) {
     return [
-      'ACTIVE SIGNALS',
+      '📌 ACTIVE',
       '',
-      'None right now.',
+      '⚪ No actionable signal now.',
       '',
-      'Hunter will message you automatically when one reaches the threshold.'
+      'Hunter will alert you automatically.'
     ].join('\n');
   }
 
-  const lines = ['ACTIVE SIGNALS', ''];
+  const lines = ['📌 ACTIVE', ''];
   for (const x of active) {
-    lines.push(`${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
+    const v = stageVisual(x);
+    lines.push(`${v.icon} ${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
   }
   return lines.join('\n');
 }
@@ -279,7 +369,7 @@ function performanceText() {
 
   if (!p.actionable) {
     return [
-      'PERFORMANCE',
+      '📊 PERFORMANCE',
       '',
       'No completed forward-test data yet.',
       '',
@@ -288,7 +378,7 @@ function performanceText() {
   }
 
   const lines = [
-    'PERFORMANCE',
+    '📊 PERFORMANCE',
     '',
     `Signals tracked: ${p.actionable}`,
     `Entry triggered: ${p.triggered}`,
@@ -298,14 +388,13 @@ function performanceText() {
   if (p.completed >= 10) {
     lines.push(
       `Win rate: ${p.winRateFinal == null ? 'n/a' : fmt(p.winRateFinal * 100, 1) + '%'}`,
-      `Average result: ${p.avgFinalR == null ? 'n/a' : fmt(p.avgFinalR, 2) + 'R'}`
+      `Average: ${p.avgFinalR == null ? 'n/a' : fmt(p.avgFinalR, 2) + 'R'}`
     );
   } else {
-    lines.push('', 'Too early to judge the strategy.');
+    lines.push('', 'Too early to judge.');
     lines.push('Need more completed signals first.');
   }
 
-  if (state.updatedAt) lines.push('', `Data synced: ${state.updatedAt}`);
   return lines.join('\n');
 }
 
@@ -313,11 +402,11 @@ async function showMenu() {
   await send([
     'HUNTER',
     '',
-    'Best Now = strongest setup',
-    'Market = quick view of all 3',
-    'BTC / ETH / SOL = details',
-    'Active = current real signals',
-    'Performance = forward-test results'
+    '🧠 Analyst = whole-market answer',
+    '🎯 Best Now = strongest setup',
+    '🌍 Market = all 3 at a glance',
+    '📌 Active = real signals',
+    '📊 Performance = real forward results'
   ].join('\n'), mainKeyboard());
 }
 
@@ -338,7 +427,7 @@ async function handleAction(action, callbackId) {
   }
 
   try {
-    const force = action.startsWith('refresh:') || ['overview', 'best', 'active'].includes(action);
+    const force = action.startsWith('refresh:') || ['analyst', 'overview', 'best', 'active'].includes(action);
     const data = await analyze(force);
 
     if (action.startsWith('asset:')) {
@@ -350,6 +439,8 @@ async function handleAction(action, callbackId) {
     } else if (action.startsWith('why:')) {
       const symbol = action.slice(4);
       await send(whyText(symbol, data), assetKeyboard(symbol));
+    } else if (action === 'analyst') {
+      await send(analystText(data), analystKeyboard());
     } else if (action === 'overview') {
       await send(overviewText(data), backKeyboard());
     } else if (action === 'best') {
@@ -361,13 +452,14 @@ async function handleAction(action, callbackId) {
     }
   } catch (err) {
     console.error(JSON.stringify({ ok: false, action, error: err.message }));
-    await send('Market refresh failed. Try again in a moment.', backKeyboard());
+    await send('⚠️ Market refresh failed. Try again in a moment.', backKeyboard());
   }
 }
 
 function normalizeMessage(text) {
   const t = String(text || '').trim().toLowerCase().replace(/@\w+$/, '');
   if (t === '/start' || t === 'start' || t === '/menu' || t === 'menu') return 'start';
+  if (t === '/analyst' || t === 'analyst') return 'analyst';
   if (t === '/btc' || t === 'btc') return 'asset:BTCUSDT';
   if (t === '/eth' || t === 'eth') return 'asset:ETHUSDT';
   if (t === '/sol' || t === 'sol') return 'asset:SOLUSDT';
@@ -413,7 +505,8 @@ async function getUpdates(offset) {
 async function setCommands() {
   await tg('setMyCommands', {
     commands: [
-      { command: 'start', description: 'Open simple Hunter menu' },
+      { command: 'start', description: 'Open Hunter' },
+      { command: 'analyst', description: 'Whole-market analyst' },
       { command: 'best', description: 'Best setup now' },
       { command: 'market', description: 'Quick market view' },
       { command: 'btc', description: 'BTC' },
@@ -427,7 +520,7 @@ async function setCommands() {
 }
 
 async function run() {
-  console.log(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', status: 'STARTING' }));
+  console.log(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', status: 'STARTING' }));
   await tg('deleteWebhook', { drop_pending_updates: false });
   await setCommands();
   let offset = 0;
@@ -440,13 +533,13 @@ async function run() {
         await handleUpdate(update);
       }
     } catch (err) {
-      console.error(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', error: err.message }));
+      console.error(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', error: err.message }));
       await sleep(2500);
     }
   }
 }
 
 run().catch((err) => {
-  console.error(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', fatal: err.message }));
+  console.error(JSON.stringify({ bot: 'Hunter Interactive V3 Analyst', fatal: err.message }));
   process.exit(1);
 });
