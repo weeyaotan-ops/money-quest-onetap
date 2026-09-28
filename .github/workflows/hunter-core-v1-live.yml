@@ -2,6 +2,10 @@ name: Hunter Core V1 Live Scan
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-core-v1-live.yml"
   schedule:
     - cron: "*/15 * * * *"
 
@@ -30,9 +34,11 @@ jobs:
       - name: Deterministic safety tests
         run: node test/hunter_core_v1.test.js
 
-      - name: Live Binance scan
+      - name: Live scan and notify actionable signal
         env:
           HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
           HUNTER_EQUITY_USDT: "1000"
           HUNTER_RISK_PCT: "0.005"
-        run: node hunter_core_v1/scan.js
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node hunter_core_v1/live_signal.js
