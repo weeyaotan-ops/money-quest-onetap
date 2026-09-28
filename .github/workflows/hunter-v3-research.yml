@@ -7,6 +7,10 @@ on:
     paths:
       - ".github/workflows/hunter-v3-research.yml"
 
+concurrency:
+  group: hunter-v3-robust-edge-research
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
