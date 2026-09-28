@@ -1,0 +1,38 @@
+name: Hunter Core V1 Live Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hunter-core-v1-live
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Hunter Core V1
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Deterministic safety tests
+        run: node test/hunter_core_v1.test.js
+
+      - name: Live Binance scan
+        env:
+          HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
+          HUNTER_EQUITY_USDT: "1000"
+          HUNTER_RISK_PCT: "0.005"
+        run: node hunter_core_v1/scan.js
