@@ -43,8 +43,9 @@ jobs:
         run: |
           node test/hunter_core_v1.test.js
           node test/hunter_journal.test.js
+          node test/hunter_advisor.test.js
 
-      - name: Live scan and notify actionable signal
+      - name: Live scan and notify
         env:
           HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
           HUNTER_EQUITY_USDT: "1000"
