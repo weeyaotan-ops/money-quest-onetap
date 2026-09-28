@@ -19,7 +19,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
       - name: Checkout Hunter Core V1
         uses: actions/checkout@v4
@@ -31,14 +31,34 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Restore Hunter research state
+        uses: actions/cache@v4
+        with:
+          path: .hunter_state
+          key: hunter-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            hunter-state-
+
       - name: Deterministic safety tests
-        run: node test/hunter_core_v1.test.js
+        run: |
+          node test/hunter_core_v1.test.js
+          node test/hunter_journal.test.js
 
       - name: Live scan and notify actionable signal
         env:
           HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
           HUNTER_EQUITY_USDT: "1000"
           HUNTER_RISK_PCT: "0.005"
+          HUNTER_STATE_PATH: ".hunter_state/state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hunter_core_v1/live_signal.js
+
+      - name: Archive forward-test journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-journal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .hunter_state/state.json
+          if-no-files-found: ignore
+          retention-days: 90
