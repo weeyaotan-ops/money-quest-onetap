@@ -31,11 +31,22 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Restore latest Hunter journal
+        uses: actions/cache/restore@v4
+        with:
+          path: .hunter_state
+          key: hunter-interactive-${{ github.run_id }}
+          restore-keys: |
+            hunter-state-
+
       - name: Syntax check
-        run: node --check hunter_core_v1/interactive_bot.js
+        run: |
+          node --check hunter_core_v1/interactive_bot.js
+          node test/hunter_journal.test.js
 
       - name: Run interactive bot
         env:
+          HUNTER_STATE_PATH: ".hunter_state/state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hunter_core_v1/interactive_bot.js
