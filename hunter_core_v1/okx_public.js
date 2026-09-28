@@ -69,7 +69,7 @@ async function funding(symbol, limit = 30) {
     .reverse();
 }
 
-async function openInterestHistory(symbol, period = '15m') {
+async function openInterestHistory(symbol, period = '5m') {
   const rows = await getJson('/api/v5/rubik/stat/contracts/open-interest-volume', {
     ccy: baseFromSymbol(symbol),
     period
@@ -92,7 +92,7 @@ async function basis(symbol) {
   return [{ time: Date.now(), rate, basis: mark - spot }];
 }
 
-async function taker(symbol, period = '15m') {
+async function taker(symbol, period = '5m') {
   const rows = await getJson('/api/v5/rubik/stat/taker-volume', {
     ccy: baseFromSymbol(symbol),
     instType: 'CONTRACTS',
@@ -114,15 +114,39 @@ async function taker(symbol, period = '15m') {
     .slice(-32);
 }
 
+function aggregateOi15m(rows) {
+  const sorted = [...rows].sort((a, b) => a.time - b.time);
+  const out = [];
+  for (let i = 2; i < sorted.length; i += 3) out.push(sorted[i]);
+  return out.slice(-32);
+}
+
+function aggregateTaker15m(rows) {
+  const sorted = [...rows].sort((a, b) => a.time - b.time);
+  const out = [];
+  for (let i = 0; i + 2 < sorted.length; i += 3) {
+    const chunk = sorted.slice(i, i + 3);
+    const buyVol = chunk.reduce((a, x) => a + Number(x.buyVol || 0), 0);
+    const sellVol = chunk.reduce((a, x) => a + Number(x.sellVol || 0), 0);
+    out.push({
+      time: chunk[chunk.length - 1].time,
+      buySellRatio: sellVol > 0 ? buyVol / sellVol : 1,
+      buyVol,
+      sellVol
+    });
+  }
+  return out.slice(-32);
+}
+
 async function snapshot(symbol) {
   const [candles4h, candles1h, candles15m, f, oi, b, t, lp] = await Promise.all([
     candles(symbol, '4h', 160),
     candles(symbol, '1h', 180),
     candles(symbol, '15m', 180),
     funding(symbol, 30),
-    openInterestHistory(symbol, '15m'),
+    openInterestHistory(symbol, '5m'),
     basis(symbol),
-    taker(symbol, '15m'),
+    taker(symbol, '5m'),
     lastPrice(symbol)
   ]);
 
@@ -134,9 +158,9 @@ async function snapshot(symbol) {
     candles1h,
     candles15m,
     funding: f,
-    openInterestHistory: oi,
+    openInterestHistory: aggregateOi15m(oi),
     basis: b,
-    taker: t
+    taker: aggregateTaker15m(t)
   };
 }
 
@@ -148,5 +172,7 @@ module.exports = {
   openInterestHistory,
   basis,
   taker,
-  mapCandles
+  mapCandles,
+  aggregateOi15m,
+  aggregateTaker15m
 };
