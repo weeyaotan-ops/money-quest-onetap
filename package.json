@@ -8,7 +8,8 @@
     "test:v4": "node test/recovery_router_v4_capture_signal_only.test.js",
     "test:hunter-live-gate": "node test/hunter_live_gate_v1.test.js",
     "test:hunter-core": "node test/hunter_core_v1.test.js",
-    "hunter:scan": "node hunter_core_v1/scan.js"
+    "hunter:scan": "node hunter_core_v1/scan.js",
+    "hunter:live": "node hunter_core_v1/live_signal.js"
   },
   "engines": {
     "node": ">=20"
