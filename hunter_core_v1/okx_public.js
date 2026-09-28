@@ -28,13 +28,9 @@ function spotId(symbol) {
 
 const BAR_MAP = { '4h': '4H', '1h': '1H', '15m': '15m' };
 
-async function candles(symbol, interval, limit = 180) {
-  const rows = await getJson('/api/v5/market/candles', {
-    instId: instId(symbol),
-    bar: BAR_MAP[interval] || interval,
-    limit: Math.min(limit, 300)
-  });
+function mapCandles(rows) {
   return rows
+    .filter((r) => String(r[8] ?? '1') === '1')
     .map((r) => ({
       openTime: Number(r[0]),
       open: Number(r[1]),
@@ -47,6 +43,22 @@ async function candles(symbol, interval, limit = 180) {
     .reverse();
 }
 
+async function candles(symbol, interval, limit = 180) {
+  const rows = await getJson('/api/v5/market/candles', {
+    instId: instId(symbol),
+    bar: BAR_MAP[interval] || interval,
+    limit: Math.min(limit, 300)
+  });
+  return mapCandles(rows);
+}
+
+async function lastPrice(symbol) {
+  const rows = await getJson('/api/v5/market/ticker', { instId: instId(symbol) });
+  const price = Number(rows[0] && rows[0].last);
+  if (!(price > 0)) throw new Error(`OKX invalid ticker price for ${symbol}`);
+  return price;
+}
+
 async function funding(symbol, limit = 30) {
   const rows = await getJson('/api/v5/public/funding-rate-history', {
     instId: instId(symbol),
@@ -57,7 +69,7 @@ async function funding(symbol, limit = 30) {
     .reverse();
 }
 
-async function openInterestHistory(symbol, period = '5m') {
+async function openInterestHistory(symbol, period = '15m') {
   const rows = await getJson('/api/v5/rubik/stat/contracts/open-interest-volume', {
     ccy: baseFromSymbol(symbol),
     period
@@ -80,7 +92,7 @@ async function basis(symbol) {
   return [{ time: Date.now(), rate, basis: mark - spot }];
 }
 
-async function taker(symbol, period = '5m') {
+async function taker(symbol, period = '15m') {
   const rows = await getJson('/api/v5/rubik/stat/taker-volume', {
     ccy: baseFromSymbol(symbol),
     instType: 'CONTRACTS',
@@ -103,19 +115,21 @@ async function taker(symbol, period = '5m') {
 }
 
 async function snapshot(symbol) {
-  const [candles4h, candles1h, candles15m, f, oi, b, t] = await Promise.all([
+  const [candles4h, candles1h, candles15m, f, oi, b, t, lp] = await Promise.all([
     candles(symbol, '4h', 160),
     candles(symbol, '1h', 180),
     candles(symbol, '15m', 180),
     funding(symbol, 30),
-    openInterestHistory(symbol, '5m'),
+    openInterestHistory(symbol, '15m'),
     basis(symbol),
-    taker(symbol, '5m')
+    taker(symbol, '15m'),
+    lastPrice(symbol)
   ]);
 
   return {
     provider: 'OKX_FALLBACK',
     symbol,
+    lastPrice: lp,
     candles4h,
     candles1h,
     candles15m,
@@ -126,4 +140,13 @@ async function snapshot(symbol) {
   };
 }
 
-module.exports = { snapshot, candles, funding, openInterestHistory, basis, taker };
+module.exports = {
+  snapshot,
+  candles,
+  lastPrice,
+  funding,
+  openInterestHistory,
+  basis,
+  taker,
+  mapCandles
+};
