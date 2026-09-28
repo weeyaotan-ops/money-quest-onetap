@@ -48,3 +48,5 @@ jobs:
           retention-days: 90
 
 # cached prediction stream restart
+
+# faster walk-forward restart
