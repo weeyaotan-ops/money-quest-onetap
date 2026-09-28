@@ -297,6 +297,7 @@ async function setCommands() {
 
 async function run() {
   console.log(JSON.stringify({ bot: 'Hunter Interactive V1', status: 'STARTING' }));
+  await tg('deleteWebhook', { drop_pending_updates: false });
   await setCommands();
   let offset = 0;
 
