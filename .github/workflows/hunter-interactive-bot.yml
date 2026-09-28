@@ -39,10 +39,11 @@ jobs:
           restore-keys: |
             hunter-state-
 
-      - name: Syntax check
+      - name: Syntax and advisor tests
         run: |
           node --check hunter_core_v1/interactive_bot.js
           node test/hunter_journal.test.js
+          node test/hunter_advisor.test.js
 
       - name: Run interactive bot
         env:
