@@ -2,6 +2,10 @@ name: Hunter V1 Historical Backtest
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-v1-backtest.yml"
 
 permissions:
   contents: read
