@@ -1,0 +1,48 @@
+name: Hunter V4 Adaptive Edge Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-v4-research.yml"
+
+concurrency:
+  group: hunter-v4-adaptive-edge-research
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile research/backtest_hunter_v1.py
+          python -m py_compile research/backtest_hunter_v4.py
+
+      - name: Run V4 adaptive edge research
+        run: |
+          python research/backtest_hunter_v4.py             --workers 28             --out v4_output
+
+      - name: Upload V4 research
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v4-research-${{ github.run_id }}
+          path: v4_output/
+          if-no-files-found: warn
+          retention-days: 90
