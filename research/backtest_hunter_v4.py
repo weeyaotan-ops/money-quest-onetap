@@ -180,16 +180,22 @@ def main():
     for sym in SYMBOLS:data[sym]=v1.load_symbol(sym,warm,TEST_END,args.workers);quality[sym]=data[sym]["quality"]
     samples=build_samples(data,ms(START),end_ms(TEST_END))
     dev_start,dev_end=ms(DEV_START),end_ms(DEV_END);val_start,val_end=ms(VAL_START),end_ms(VAL_END);test_start,test_end=ms(TEST_START),end_ms(TEST_END)
-    candidates=[]
+    # Build each walk-forward prediction stream once, then reuse it for threshold search,
+    # validation and the final holdout. This changes runtime only, not the research protocol.
+    pred_cache={}
     for tm in (6,12,18):
         for lam in (1.0,10.0,50.0):
-            devpred=add_predictions(samples,tm,lam,dev_start,dev_end)
-            for th in (.20,.35,.50,.65,.80):
-                tr=trades_for(devpred,data,th);score=objective(tr)
-                if score>-900:candidates.append(dict(trainMonths=tm,lambda_=lam,threshold=th,dev=summary(tr),devScore=score))
+            pred_cache[(tm,lam)]=add_predictions(samples,tm,lam,dev_start,test_end)
+
+    candidates=[]
+    for (tm,lam),preds in pred_cache.items():
+        devpred=[r for r in preds if dev_start<=r["time"]<=dev_end]
+        for th in (.20,.35,.50,.65,.80):
+            tr=trades_for(devpred,data,th);score=objective(tr)
+            if score>-900:candidates.append(dict(trainMonths=tm,lambda_=lam,threshold=th,dev=summary(tr),devScore=score))
     candidates.sort(key=lambda x:x["devScore"],reverse=True);top=candidates[:15]
     for c in top:
-        vp=add_predictions(samples,c["trainMonths"],c["lambda_"],val_start,val_end)
+        vp=[r for r in pred_cache[(c["trainMonths"],c["lambda_"])] if val_start<=r["time"]<=val_end]
         vt=trades_for(vp,data,c["threshold"]);c["val"]=summary(vt);c["pass"]=valid(vt)
         ar=c["val"]["avgR"] if c["val"]["avgR"] is not None else -9;pf=c["val"]["profitFactor"] or 0
         c["valScore"]=ar*math.sqrt(max(1,c["val"]["trades"]))+.15*(min(pf,3)-1)
@@ -197,8 +203,9 @@ def main():
     print("TOP",json.dumps(top),flush=True)
     if not selected:
         serial={"selected":None,"top":top};(out/"hunter_v4_results.json").write_text(json.dumps(serial,indent=2),encoding="utf-8");print("REJECTED V4");return
-    tp=add_predictions(samples,selected["trainMonths"],selected["lambda_"],test_start,test_end);tt=trades_for(tp,data,selected["threshold"])
-    fp=add_predictions(samples,selected["trainMonths"],selected["lambda_"],dev_start,test_end);ft=trades_for(fp,data,selected["threshold"])
+    allpred=pred_cache[(selected["trainMonths"],selected["lambda_"])]
+    tp=[r for r in allpred if test_start<=r["time"]<=test_end];tt=trades_for(tp,data,selected["threshold"])
+    fp=[r for r in allpred if dev_start<=r["time"]<=test_end];ft=trades_for(fp,data,selected["threshold"])
     serial={"selected":selected,"holdout":summary(tt),"fullAdaptive":summary(ft),"holdoutTrades":tt,"fullTradeCount":len(ft),"quality":quality}
     (out/"hunter_v4_results.json").write_text(json.dumps(serial,indent=2),encoding="utf-8")
     print("\n=== HUNTER V4 COMPLETE ===");print(json.dumps(serial,indent=2))
