@@ -1,13 +1,17 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { snapshot } = require('./market_data');
 const { rankSnapshots, normalizedMomentum } = require('./core');
+const { loadState, performance, stageFromEdge } = require('./journal');
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
 const EQUITY = Number(process.env.HUNTER_EQUITY_USDT || 1000);
 const RISK_PCT = Number(process.env.HUNTER_RISK_PCT || 0.005);
+const STATE_PATH = process.env.HUNTER_STATE_PATH || path.join('.hunter_state', 'state.json');
 
 if (!BOT_TOKEN || !CHAT_ID) {
   console.error('Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID');
@@ -19,7 +23,7 @@ let cacheAt = 0;
 const CACHE_MS = 12000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const fmt = (x, d = 3) => Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
+const fmt = (x, d = 2) => Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
 
 function priceFmt(x) {
   const n = Number(x);
@@ -29,29 +33,63 @@ function priceFmt(x) {
   return n.toFixed(4);
 }
 
-function arrow(v) {
-  if (v > 0.12) return '↑ Bullish';
-  if (v < -0.12) return '↓ Bearish';
-  return '→ Neutral';
+function shortSymbol(symbol) {
+  return String(symbol).replace('USDT', '');
 }
 
-function keyboard() {
+function stageLabel(edge) {
+  const s = stageFromEdge(edge);
+  if (s === 'ACTIONABLE') return 'ACTIONABLE';
+  if (s === 'ARMED') return 'ALMOST READY';
+  if (s === 'WATCH') return 'WATCH';
+  return 'WAIT';
+}
+
+function directionLabel(x) {
+  if (x.components.trend > 0.12) return 'UP';
+  if (x.components.trend < -0.12) return 'DOWN';
+  return 'MIXED';
+}
+
+function mainKeyboard() {
   return {
     inline_keyboard: [
+      [
+        { text: 'Best Now', callback_data: 'best' },
+        { text: 'Market', callback_data: 'overview' }
+      ],
       [
         { text: 'BTC', callback_data: 'asset:BTCUSDT' },
         { text: 'ETH', callback_data: 'asset:ETHUSDT' },
         { text: 'SOL', callback_data: 'asset:SOLUSDT' }
       ],
       [
-        { text: 'Market Overview', callback_data: 'overview' },
-        { text: 'Best Setup', callback_data: 'best' }
+        { text: 'Active', callback_data: 'active' },
+        { text: 'Performance', callback_data: 'performance' }
       ],
       [
-        { text: 'Hunter Status', callback_data: 'status' }
+        { text: 'Status', callback_data: 'status' }
       ]
     ]
   };
+}
+
+function assetKeyboard(symbol) {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Refresh', callback_data: `refresh:${symbol}` },
+        { text: 'Why?', callback_data: `why:${symbol}` }
+      ],
+      [
+        { text: 'Home', callback_data: 'start' }
+      ]
+    ]
+  };
+}
+
+function backKeyboard() {
+  return { inline_keyboard: [[{ text: 'Home', callback_data: 'start' }]] };
 }
 
 async function tg(method, body) {
@@ -67,12 +105,12 @@ async function tg(method, body) {
   return data;
 }
 
-async function send(text, withMenu = true) {
+async function send(text, replyMarkup = mainKeyboard()) {
   return tg('sendMessage', {
     chat_id: CHAT_ID,
     text,
     disable_web_page_preview: true,
-    ...(withMenu ? { reply_markup: keyboard() } : {})
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
   });
 }
 
@@ -94,16 +132,15 @@ async function analyze(force = false) {
 
 function statusText() {
   return [
-    'HUNTER CORE V1',
+    'HUNTER STATUS',
     '',
+    'System: ONLINE',
     'Mode: SIGNAL ONLY',
-    'Auto scan: every 15 min',
-    'Markets: BTC / ETH / SOL',
-    'Signal threshold: Edge >= +0.65 LONG',
-    'Signal threshold: Edge <= -0.65 SHORT',
+    'Scan: every 15 minutes',
+    'Coins: BTC / ETH / SOL',
+    'Signal: |Edge| >= 0.65',
+    'Risk model: 0.5% equity',
     '',
-    'Interactive bot: ONLINE while this worker is running',
-    'Buttons only show market data and Hunter judgement.',
     'No automatic order execution.'
   ].join('\n');
 }
@@ -111,107 +148,188 @@ function statusText() {
 function assetText(symbol, data) {
   const x = data.bySymbol[symbol];
   const s = data.snapBySymbol[symbol];
-  if (!x || !s) return `${symbol}: data unavailable`;
+  if (!x || !s) return `${shortSymbol(symbol)}: data unavailable`;
 
   const price = Number(s.candles15m[s.candles15m.length - 1]?.close);
-  const m4h = normalizedMomentum(s.candles4h, 12);
-  const m1h = normalizedMomentum(s.candles1h, 24);
-  const m15 = normalizedMomentum(s.candles15m, 16);
-  const oiPct = x.derivativesDiagnostics.oiChange * 100;
-  const plan = x.plan;
+  const status = stageLabel(x.edge);
 
   const lines = [
-    `${symbol.replace('USDT', '/USDT')}`,
+    `${shortSymbol(symbol)} / USDT`,
     '',
     `Price: $${priceFmt(price)}`,
-    `4H: ${arrow(m4h)}`,
-    `1H: ${arrow(m1h)}`,
-    `15M: ${arrow(m15)}`,
-    '',
-    `Regime: ${x.regime.name}`,
-    `Edge: ${fmt(x.edge, 3)}`,
-    `Trend: ${fmt(x.components.trend, 3)}`,
-    `Relative Strength: ${fmt(x.components.relativeStrength, 3)}`,
-    `Derivatives: ${fmt(x.components.derivatives, 3)}`,
-    `Flow: ${fmt(x.components.flow, 3)}`,
-    `OI change: ${fmt(oiPct, 2)}%`,
-    '',
-    `Hunter: ${x.decision}`
+    `Status: ${status}`,
+    `Direction: ${directionLabel(x)}`,
+    `Market: ${x.regime.name}`,
+    `Edge: ${fmt(x.edge, 2)} / 0.65`
   ];
 
-  if (plan) {
+  if (x.decision !== 'NO_TRADE' && x.plan) {
     lines.push(
       '',
-      `Entry: ${priceFmt(plan.entryZone[0])} - ${priceFmt(plan.entryZone[1])}`,
-      `Stop: ${priceFmt(plan.stop)}`,
-      `Risk: ${(RISK_PCT * 100).toFixed(2)}%`,
-      `Position: ${fmt(plan.notional, 2)} USDT`
+      `Signal: ${x.decision}`,
+      `Entry: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
+      `Stop: ${priceFmt(x.plan.stop)}`,
+      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`
     );
+  } else if (status === 'ALMOST READY') {
+    lines.push('', 'Close, but not confirmed yet.');
+  } else if (status === 'WATCH') {
+    lines.push('', 'Worth watching. No trade yet.');
   } else {
-    lines.push('', 'No actionable signal now.');
+    lines.push('', 'Nothing to do now.');
   }
 
-  lines.push('', `Updated: ${data.at.toISOString()}`);
   return lines.join('\n');
 }
 
+function reasonWord(v, positive, negative) {
+  if (v > 0.15) return positive;
+  if (v < -0.15) return negative;
+  return 'Neutral';
+}
+
+function whyText(symbol, data) {
+  const x = data.bySymbol[symbol];
+  if (!x) return 'Data unavailable.';
+
+  const regimeReason = {
+    TREND: 'Market is moving cleanly.',
+    BREAKOUT: 'Price is breaking out with activity.',
+    RANGE: 'Market is sideways, so Hunter reduces confidence.',
+    CHAOS: 'Market is too unstable, so Hunter blocks trades.'
+  }[x.regime.name] || x.regime.name;
+
+  return [
+    `WHY ${shortSymbol(symbol)}?`,
+    '',
+    `Trend: ${reasonWord(x.components.trend, 'Supports LONG', 'Supports SHORT')}`,
+    `Relative strength: ${reasonWord(x.components.relativeStrength, 'Strong vs others', 'Weak vs others')}`,
+    `Futures positioning: ${reasonWord(x.components.derivatives, 'Supportive', 'Against move')}`,
+    `Buy/Sell flow: ${reasonWord(x.components.flow, 'Buyers stronger', 'Sellers stronger')}`,
+    `Market: ${x.regime.name}`,
+    '',
+    regimeReason,
+    '',
+    `Final Edge: ${fmt(x.edge, 2)}`,
+    'Needs 0.65 for a real signal.'
+  ].join('\n');
+}
+
 function overviewText(data) {
-  const lines = ['MARKET OVERVIEW', ''];
+  const lines = ['MARKET', ''];
   for (const x of data.ranked) {
     lines.push(
-      `${x.symbol.replace('USDT', '')}: ${x.decision} | Edge ${fmt(x.edge, 3)} | ${x.regime.name}`
+      `${shortSymbol(x.symbol)}  ${stageLabel(x.edge)}  |  ${directionLabel(x)}  |  Edge ${fmt(x.edge, 2)}`
     );
   }
-  lines.push('', 'Only |Edge| >= 0.65 becomes an actionable signal.');
+  lines.push('', 'Only ACTIONABLE becomes a Telegram signal.');
   return lines.join('\n');
 }
 
 function bestText(data) {
   const x = data.ranked[0];
   if (!x) return 'No market data available.';
-  if (x.decision === 'NO_TRADE') {
+
+  const lines = [
+    'BEST NOW',
+    '',
+    `${shortSymbol(x.symbol)}`,
+    `Status: ${stageLabel(x.edge)}`,
+    `Direction: ${directionLabel(x)}`,
+    `Market: ${x.regime.name}`,
+    `Edge: ${fmt(x.edge, 2)} / 0.65`
+  ];
+
+  if (x.decision !== 'NO_TRADE' && x.plan) {
+    lines.push(
+      '',
+      `Signal: ${x.decision}`,
+      `Entry: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
+      `Stop: ${priceFmt(x.plan.stop)}`
+    );
+  } else {
+    lines.push('', 'No trade yet.');
+  }
+
+  return lines.join('\n');
+}
+
+function activeText(data) {
+  const active = data.ranked.filter((x) => x.decision !== 'NO_TRADE');
+  if (!active.length) {
     return [
-      'BEST SETUP',
+      'ACTIVE SIGNALS',
       '',
-      'No actionable trade right now.',
-      `Strongest watch: ${x.symbol}`,
-      `Edge: ${fmt(x.edge, 3)}`,
-      `Regime: ${x.regime.name}`,
+      'None right now.',
       '',
-      'Hunter is waiting rather than forcing a trade.'
+      'Hunter will message you automatically when one reaches the threshold.'
     ].join('\n');
   }
-  return [
-    'BEST SETUP',
+
+  const lines = ['ACTIVE SIGNALS', ''];
+  for (const x of active) {
+    lines.push(`${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
+  }
+  return lines.join('\n');
+}
+
+function performanceText() {
+  const state = loadState(STATE_PATH);
+  const p = performance(state);
+
+  if (!p.actionable) {
+    return [
+      'PERFORMANCE',
+      '',
+      'No completed forward-test data yet.',
+      '',
+      'Hunter is collecting real signals first.'
+    ].join('\n');
+  }
+
+  const lines = [
+    'PERFORMANCE',
     '',
-    `${x.symbol} — ${x.decision}`,
-    `Edge: ${fmt(x.edge, 3)}`,
-    `Regime: ${x.regime.name}`,
-    '',
-    x.plan ? `Entry: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}` : '',
-    x.plan ? `Stop: ${priceFmt(x.plan.stop)}` : '',
-    '',
-    'This is the strongest actionable market among BTC / ETH / SOL.'
-  ].filter(Boolean).join('\n');
+    `Signals tracked: ${p.actionable}`,
+    `Entry triggered: ${p.triggered}`,
+    `Completed: ${p.completed}`
+  ];
+
+  if (p.completed >= 10) {
+    lines.push(
+      `Win rate: ${p.winRateFinal == null ? 'n/a' : fmt(p.winRateFinal * 100, 1) + '%'}`,
+      `Average result: ${p.avgFinalR == null ? 'n/a' : fmt(p.avgFinalR, 2) + 'R'}`
+    );
+  } else {
+    lines.push('', 'Too early to judge the strategy.');
+    lines.push('Need more completed signals first.');
+  }
+
+  if (state.updatedAt) lines.push('', `Data synced: ${state.updatedAt}`);
+  return lines.join('\n');
 }
 
 async function showMenu() {
   await send([
-    'HUNTER CORE V1',
+    'HUNTER',
     '',
-    'Tap a button for live market analysis.',
-    'BTC / ETH / SOL = individual market',
-    'Market Overview = compare all 3',
-    'Best Setup = strongest current setup',
-    'Hunter Status = system status'
-  ].join('\n'));
+    'Best Now = strongest setup',
+    'Market = quick view of all 3',
+    'BTC / ETH / SOL = details',
+    'Active = current real signals',
+    'Performance = forward-test results'
+  ].join('\n'), mainKeyboard());
 }
 
 async function handleAction(action, callbackId) {
   await answerCallback(callbackId);
 
   if (action === 'status') {
-    await send(statusText());
+    await send(statusText(), backKeyboard());
+    return;
+  }
+  if (action === 'performance') {
+    await send(performanceText(), backKeyboard());
     return;
   }
   if (action === 'menu' || action === 'start') {
@@ -219,22 +337,31 @@ async function handleAction(action, callbackId) {
     return;
   }
 
-  await send('Refreshing live market data...', false);
-
   try {
-    const data = await analyze(true);
+    const force = action.startsWith('refresh:') || ['overview', 'best', 'active'].includes(action);
+    const data = await analyze(force);
+
     if (action.startsWith('asset:')) {
-      await send(assetText(action.slice(6), data));
+      const symbol = action.slice(6);
+      await send(assetText(symbol, data), assetKeyboard(symbol));
+    } else if (action.startsWith('refresh:')) {
+      const symbol = action.slice(8);
+      await send(assetText(symbol, data), assetKeyboard(symbol));
+    } else if (action.startsWith('why:')) {
+      const symbol = action.slice(4);
+      await send(whyText(symbol, data), assetKeyboard(symbol));
     } else if (action === 'overview') {
-      await send(overviewText(data));
+      await send(overviewText(data), backKeyboard());
     } else if (action === 'best') {
-      await send(bestText(data));
+      await send(bestText(data), backKeyboard());
+    } else if (action === 'active') {
+      await send(activeText(data), backKeyboard());
     } else {
       await showMenu();
     }
   } catch (err) {
     console.error(JSON.stringify({ ok: false, action, error: err.message }));
-    await send('Market refresh failed. Please try again in a moment.');
+    await send('Market refresh failed. Try again in a moment.', backKeyboard());
   }
 }
 
@@ -244,8 +371,10 @@ function normalizeMessage(text) {
   if (t === '/btc' || t === 'btc') return 'asset:BTCUSDT';
   if (t === '/eth' || t === 'eth') return 'asset:ETHUSDT';
   if (t === '/sol' || t === 'sol') return 'asset:SOLUSDT';
-  if (t === '/overview' || t === 'overview') return 'overview';
+  if (t === '/market' || t === 'market' || t === '/overview' || t === 'overview') return 'overview';
   if (t === '/best' || t === 'best') return 'best';
+  if (t === '/active' || t === 'active') return 'active';
+  if (t === '/performance' || t === 'performance') return 'performance';
   if (t === '/status' || t === 'status') return 'status';
   return null;
 }
@@ -284,19 +413,21 @@ async function getUpdates(offset) {
 async function setCommands() {
   await tg('setMyCommands', {
     commands: [
-      { command: 'start', description: 'Open Hunter menu' },
-      { command: 'btc', description: 'BTC live analysis' },
-      { command: 'eth', description: 'ETH live analysis' },
-      { command: 'sol', description: 'SOL live analysis' },
-      { command: 'overview', description: 'Compare BTC ETH SOL' },
-      { command: 'best', description: 'Best current setup' },
-      { command: 'status', description: 'Hunter system status' }
+      { command: 'start', description: 'Open simple Hunter menu' },
+      { command: 'best', description: 'Best setup now' },
+      { command: 'market', description: 'Quick market view' },
+      { command: 'btc', description: 'BTC' },
+      { command: 'eth', description: 'ETH' },
+      { command: 'sol', description: 'SOL' },
+      { command: 'active', description: 'Current signals' },
+      { command: 'performance', description: 'Forward-test results' },
+      { command: 'status', description: 'System status' }
     ]
   });
 }
 
 async function run() {
-  console.log(JSON.stringify({ bot: 'Hunter Interactive V1', status: 'STARTING' }));
+  console.log(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', status: 'STARTING' }));
   await tg('deleteWebhook', { drop_pending_updates: false });
   await setCommands();
   let offset = 0;
@@ -309,13 +440,13 @@ async function run() {
         await handleUpdate(update);
       }
     } catch (err) {
-      console.error(JSON.stringify({ bot: 'Hunter Interactive V1', error: err.message }));
+      console.error(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', error: err.message }));
       await sleep(2500);
     }
   }
 }
 
 run().catch((err) => {
-  console.error(JSON.stringify({ bot: 'Hunter Interactive V1', fatal: err.message }));
+  console.error(JSON.stringify({ bot: 'Hunter Interactive V2 Simple', fatal: err.message }));
   process.exit(1);
 });
