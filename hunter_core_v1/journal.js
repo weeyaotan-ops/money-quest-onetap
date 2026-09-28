@@ -125,7 +125,7 @@ function findActive(state, symbol, side) {
   return state.signals.find((s) => s.symbol === symbol && s.side === side && active(s));
 }
 
-function updateExisting(state, ranked, snapshots, now) {
+function updateExisting(state, ranked, snapshots, now, events = []) {
   const resultMap = Object.fromEntries(ranked.map((x) => [x.symbol, x]));
   const snapMap = Object.fromEntries(snapshots.map((x) => [x.symbol, x]));
 
@@ -145,12 +145,14 @@ function updateExisting(state, ranked, snapshots, now) {
         s.status = 'EXPIRED';
         s.completedAt = new Date(now).toISOString();
         s.closeReason = 'ENTRY_NOT_TOUCHED_24H';
+        events.push({ type: 'EXPIRED', signalId: s.id, symbol: s.symbol, side: s.side });
         continue;
       }
       if (opposite || collapsed) {
         s.status = 'INVALIDATED';
         s.completedAt = new Date(now).toISOString();
         s.closeReason = opposite ? 'EDGE_FLIPPED' : 'EDGE_COLLAPSED';
+        events.push({ type: 'INVALIDATED', signalId: s.id, symbol: s.symbol, side: s.side, reason: s.closeReason });
         continue;
       }
 
@@ -160,12 +162,14 @@ function updateExisting(state, ranked, snapshots, now) {
           s.triggeredAt = new Date(now).toISOString();
           s.completedAt = new Date(now).toISOString();
           s.closeReason = 'ENTRY_AND_STOP_SAME_15M_CANDLE';
+          events.push({ type: 'AMBIGUOUS', signalId: s.id, symbol: s.symbol, side: s.side });
           continue;
         }
         s.status = 'TRIGGERED';
         s.triggeredAt = new Date(now).toISOString();
         s.mfeR = 0;
         s.maeR = 0;
+        events.push({ type: 'ENTRY_TRIGGERED', signalId: s.id, symbol: s.symbol, side: s.side, entryMid: s.entryMid, stop: s.stop });
       } else {
         continue;
       }
@@ -181,6 +185,7 @@ function updateExisting(state, ranked, snapshots, now) {
         s.completedAt = new Date(now).toISOString();
         s.closeReason = 'STOP_TOUCHED';
         s.finalR = -1;
+        events.push({ type: 'STOP_TOUCHED', signalId: s.id, symbol: s.symbol, side: s.side, finalR: -1 });
         continue;
       }
 
@@ -194,13 +199,15 @@ function updateExisting(state, ranked, snapshots, now) {
         s.status = 'COMPLETED';
         s.completedAt = new Date(now).toISOString();
         s.closeReason = '24H_FORWARD_EVAL';
+        events.push({ type: 'FORWARD_COMPLETE', signalId: s.id, symbol: s.symbol, side: s.side, finalR: currentR });
       }
     }
   }
 }
 
 function processCycle(state, ranked, snapshots, now = Date.now(), options = {}) {
-  updateExisting(state, ranked, snapshots, now);
+  const events = [];
+  updateExisting(state, ranked, snapshots, now, events);
 
   const maxNew = Number.isFinite(Number(options.maxNew)) ? Math.max(0, Number(options.maxNew)) : Infinity;
   const created = [];
@@ -217,6 +224,7 @@ function processCycle(state, ranked, snapshots, now = Date.now(), options = {}) 
         s.status = 'INVALIDATED';
         s.completedAt = new Date(now).toISOString();
         s.closeReason = 'OPPOSITE_ACTIONABLE_SIGNAL';
+        events.push({ type: 'INVALIDATED', signalId: s.id, symbol: s.symbol, side: s.side, reason: s.closeReason });
       }
     }
 
@@ -230,7 +238,7 @@ function processCycle(state, ranked, snapshots, now = Date.now(), options = {}) 
   // Bound local state size while preserving completed research history.
   if (state.signals.length > 1000) state.signals = state.signals.slice(-1000);
   state.updatedAt = new Date(now).toISOString();
-  return { state, created };
+  return { state, created, events };
 }
 
 function performance(state) {
@@ -259,6 +267,27 @@ function performance(state) {
   };
 }
 
+function performanceBreakdown(state, field) {
+  const groups = {};
+  for (const s of state.signals || []) {
+    const key = field === 'regime' ? s.regimeAtSignal : s.symbol;
+    if (!key) continue;
+    groups[key] = groups[key] || { signals: 0, completed: 0, wins: 0, sumR: 0 };
+    groups[key].signals += 1;
+    if (s.status === 'COMPLETED' && Number.isFinite(s.finalR)) {
+      groups[key].completed += 1;
+      groups[key].sumR += s.finalR;
+      if (s.finalR > 0) groups[key].wins += 1;
+    }
+  }
+  return Object.fromEntries(Object.entries(groups).map(([key, g]) => [key, {
+    signals: g.signals,
+    completed: g.completed,
+    winRate: g.completed ? g.wins / g.completed : null,
+    avgR: g.completed ? g.sumR / g.completed : null
+  }]));
+}
+
 module.exports = {
   emptyState,
   loadState,
@@ -267,5 +296,6 @@ module.exports = {
   directionFromEdge,
   processCycle,
   performance,
+  performanceBreakdown,
   rMultiple
 };
