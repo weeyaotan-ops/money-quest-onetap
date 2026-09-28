@@ -10,6 +10,7 @@ const {
   performance,
   stageFromEdge
 } = require('./journal');
+const { shortSymbol, watchPlan, regimeVisual } = require('./advisor');
 
 const SYMBOLS = (process.env.HUNTER_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -21,30 +22,54 @@ const STATE_PATH = process.env.HUNTER_STATE_PATH || path.join('.hunter_state', '
 
 const fmt = (x, d = 3) => Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
 
+function priceFmt(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return 'n/a';
+  if (n >= 1000) return n.toFixed(2);
+  if (n >= 10) return n.toFixed(3);
+  return n.toFixed(4);
+}
+
 function buildMessage(x) {
   const p = x.plan;
-  const side = x.decision === 'LONG' ? 'LONG' : 'SHORT';
+  const isLong = x.decision === 'LONG';
+  const icon = isLong ? '🟢' : '🔴';
   const [a, b] = p.entryZone;
   return [
-    'HUNTER CORE V1 — ACTIONABLE',
+    `${icon} HUNTER ACTIONABLE`,
     '',
-    `${x.symbol} — ${side}`,
-    `Edge: ${fmt(x.edge, 3)}`,
-    `Regime: ${x.regime.name}`,
+    `${shortSymbol(x.symbol)} — ${x.decision}`,
+    `Edge: ${fmt(x.edge, 2)}`,
+    `${regimeVisual(x.regime.name).icon} Market: ${x.regime.name}`,
     '',
-    `Direction: ${x.components.trend > 0 ? 'Bullish' : 'Bearish'}`,
-    `Relative strength: ${fmt(x.components.relativeStrength, 3)}`,
-    `Derivatives: ${fmt(x.components.derivatives, 3)}`,
-    `Order flow: ${fmt(x.components.flow, 3)}`,
-    '',
-    `Entry: ${fmt(a, 4)} – ${fmt(b, 4)}`,
-    `Stop: ${fmt(p.stop, 4)}`,
-    `Risk: ${(RISK_PCT * 100).toFixed(2)}% equity`,
+    `🎯 Entry: ${priceFmt(a)} - ${priceFmt(b)}`,
+    `🛑 Stop: ${priceFmt(p.stop)}`,
+    `Risk: ${(RISK_PCT * 100).toFixed(1)}%`,
     `Risk USD: ${fmt(p.riskUsd, 2)}`,
-    `Position: ${fmt(p.notional, 2)} USDT`,
     '',
-    'Forward tracking: ON',
+    '📒 Forward tracking: ON',
     'Mode: SIGNAL ONLY'
+  ].join('\n');
+}
+
+function buildHeadsUp(x, snap) {
+  const watch = watchPlan(x, snap);
+  if (!watch) return null;
+  const sideIcon = watch.side === 'LONG' ? '🟢' : '🔴';
+  const last = snap.candles15m[snap.candles15m.length - 1];
+  const price = Number(last?.close);
+  return [
+    '🟠 HUNTER HEADS-UP — NOT A SIGNAL',
+    '',
+    `${shortSymbol(x.symbol)} may be forming ${sideIcon} ${watch.side}`,
+    `Now: $${priceFmt(price)}`,
+    `Edge: ${fmt(x.edge, 2)} / 0.65`,
+    '',
+    `👀 Watch zone: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
+    `❌ Weakens beyond: ${priceFmt(watch.invalid)}`,
+    `Need: Edge ${watch.side === 'LONG' ? '≥ +0.65' : '≤ -0.65'}`,
+    '',
+    'Prepare only. Do not enter yet.'
   ].join('\n');
 }
 
@@ -69,10 +94,18 @@ async function telegram(text) {
   return true;
 }
 
+function resetOldHeadsUps(state, ranked) {
+  state.armedAlerts = state.armedAlerts || {};
+  for (const x of ranked) {
+    if (Math.abs(Number(x.edge)) < 0.35) delete state.armedAlerts[x.symbol];
+  }
+}
+
 async function run() {
   const snaps = await Promise.all(SYMBOLS.map(snapshot));
   const ranked = rankSnapshots(snaps, EQUITY, RISK_PCT);
   const state = loadState(STATE_PATH);
+  resetOldHeadsUps(state, ranked);
 
   const processed = processCycle(state, ranked, snaps, Date.now(), { maxNew: 1 });
   const created = processed.created;
@@ -91,41 +124,79 @@ async function run() {
     journal: performance(processed.state)
   }, null, 2));
 
-  if (!created.length) {
-    saveState(STATE_PATH, processed.state);
+  if (created.length) {
+    const newSignal = created[0];
+    const best = ranked.find((x) => x.symbol === newSignal.symbol && x.decision === newSignal.side);
 
+    if (!best) {
+      saveState(STATE_PATH, processed.state);
+      console.log(JSON.stringify({ telegram: 'SKIPPED', reason: 'new journal signal missing ranked result' }));
+      return;
+    }
+
+    const sent = await telegram(buildMessage(best));
+    if (sent) {
+      newSignal.deliveredAt = new Date().toISOString();
+      processed.state.armedAlerts = processed.state.armedAlerts || {};
+      processed.state.armedAlerts[best.symbol] = {
+        side: best.decision,
+        at: new Date().toISOString(),
+        edge: best.edge
+      };
+      saveState(STATE_PATH, processed.state);
+      console.log(JSON.stringify({
+        telegram: 'SENT_ACTIONABLE',
+        symbol: best.symbol,
+        decision: best.decision,
+        edge: best.edge,
+        signalId: newSignal.id
+      }));
+    }
+    return;
+  }
+
+  const armed = ranked.find((x) => stageFromEdge(x.edge) === 'ARMED');
+  if (armed) {
+    const side = Number(armed.edge) >= 0 ? 'LONG' : 'SHORT';
+    const prev = processed.state.armedAlerts?.[armed.symbol];
+    const shouldSend = !prev || prev.side !== side;
+
+    if (shouldSend) {
+      const snap = snaps.find((s) => s.symbol === armed.symbol);
+      const message = snap ? buildHeadsUp(armed, snap) : null;
+      if (message) {
+        const sent = await telegram(message);
+        if (sent) {
+          processed.state.armedAlerts = processed.state.armedAlerts || {};
+          processed.state.armedAlerts[armed.symbol] = {
+            side,
+            at: new Date().toISOString(),
+            edge: armed.edge
+          };
+          console.log(JSON.stringify({
+            telegram: 'SENT_HEADS_UP',
+            symbol: armed.symbol,
+            side,
+            edge: armed.edge
+          }));
+        }
+      }
+    } else {
+      console.log(JSON.stringify({
+        telegram: 'SKIPPED',
+        reason: 'armed heads-up already sent',
+        symbol: armed.symbol
+      }));
+    }
+  } else {
     const actionable = ranked.filter((x) => x.decision !== 'NO_TRADE');
     const reason = actionable.length
       ? 'duplicate active setup already being tracked'
-      : 'no actionable edge';
-
+      : 'no actionable or armed edge';
     console.log(JSON.stringify({ telegram: 'SKIPPED', reason }));
-    return;
   }
 
-  const newSignal = created[0];
-  const best = ranked.find((x) => x.symbol === newSignal.symbol && x.decision === newSignal.side);
-
-  if (!best) {
-    saveState(STATE_PATH, processed.state);
-    console.log(JSON.stringify({ telegram: 'SKIPPED', reason: 'new journal signal missing ranked result' }));
-    return;
-  }
-
-  const sent = await telegram(buildMessage(best));
-
-  // Save only after successful delivery, so a delivery failure can retry next scan.
-  if (sent) {
-    newSignal.deliveredAt = new Date().toISOString();
-    saveState(STATE_PATH, processed.state);
-    console.log(JSON.stringify({
-      telegram: 'SENT',
-      symbol: best.symbol,
-      decision: best.decision,
-      edge: best.edge,
-      signalId: newSignal.id
-    }));
-  }
+  saveState(STATE_PATH, processed.state);
 }
 
 run().catch((err) => {
