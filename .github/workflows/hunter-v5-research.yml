@@ -1,0 +1,48 @@
+name: Hunter V5 Mean Reversion Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-v5-research.yml"
+
+concurrency:
+  group: hunter-v5-mean-reversion-research
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-core-v1-clean
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile research/backtest_hunter_v1.py
+          python -m py_compile research/backtest_hunter_v5.py
+
+      - name: Run V5 research
+        run: |
+          python research/backtest_hunter_v5.py             --workers 28             --out v5_output
+
+      - name: Upload V5 research
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v5-research-${{ github.run_id }}
+          path: v5_output/
+          if-no-files-found: warn
+          retention-days: 90
