@@ -13,16 +13,25 @@ function qs(params) {
   return new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null)).toString();
 }
 
-function mapKlines(rows) {
-  return rows.map((r) => ({
-    openTime: Number(r[0]), open: Number(r[1]), high: Number(r[2]), low: Number(r[3]),
-    close: Number(r[4]), volume: Number(r[5]), closeTime: Number(r[6])
-  }));
+function mapKlines(rows, now = Date.now()) {
+  return rows
+    .map((r) => ({
+      openTime: Number(r[0]), open: Number(r[1]), high: Number(r[2]), low: Number(r[3]),
+      close: Number(r[4]), volume: Number(r[5]), closeTime: Number(r[6])
+    }))
+    .filter((x) => Number.isFinite(x.closeTime) && x.closeTime <= now);
 }
 
 async function klines(symbol, interval, limit = 160) {
   const rows = await getJson(`${FUTURES_BASE}/fapi/v1/klines?${qs({ symbol, interval, limit })}`);
   return mapKlines(rows);
+}
+
+async function lastPrice(symbol) {
+  const row = await getJson(`${FUTURES_BASE}/fapi/v1/ticker/price?${qs({ symbol })}`);
+  const price = Number(row && row.price);
+  if (!(price > 0)) throw new Error(`Binance invalid ticker price for ${symbol}`);
+  return price;
 }
 
 async function funding(symbol, limit = 30) {
@@ -51,16 +60,37 @@ async function taker(symbol, period = '15m', limit = 32) {
 }
 
 async function snapshot(symbol) {
-  const [candles4h, candles1h, candles15m, f, oi, b, t] = await Promise.all([
+  const [candles4h, candles1h, candles15m, f, oi, b, t, lp] = await Promise.all([
     klines(symbol, '4h', 160),
     klines(symbol, '1h', 180),
     klines(symbol, '15m', 180),
     funding(symbol, 30),
     openInterestHistory(symbol, '15m', 32),
     basis(symbol, '15m', 30),
-    taker(symbol, '15m', 32)
+    taker(symbol, '15m', 32),
+    lastPrice(symbol)
   ]);
-  return { symbol, candles4h, candles1h, candles15m, funding: f, openInterestHistory: oi, basis: b, taker: t };
+  return {
+    provider: 'BINANCE',
+    symbol,
+    lastPrice: lp,
+    candles4h,
+    candles1h,
+    candles15m,
+    funding: f,
+    openInterestHistory: oi,
+    basis: b,
+    taker: t
+  };
 }
 
-module.exports = { snapshot, klines, funding, openInterestHistory, basis, taker };
+module.exports = {
+  snapshot,
+  klines,
+  lastPrice,
+  funding,
+  openInterestHistory,
+  basis,
+  taker,
+  mapKlines
+};
