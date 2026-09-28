@@ -118,7 +118,10 @@ def add_predictions(samples,train_months,lamb,eval_start,eval_end):
         for _ in range(train_months):
             td=date(td.year-1,12,1) if td.month==1 else date(td.year,td.month-1,1)
         train_start=ms(td)
-        train=[r for r in samples if train_start<=r["time"]<m and r["time"]+4*60*60*1000<m]
+        sample_times=[r["time"] for r in samples]
+        i0=bisect.bisect_left(sample_times,train_start)
+        i1=bisect.bisect_left(sample_times,m-4*60*60*1000)
+        train=samples[i0:i1]
         model=train_model(train,lamb)
         if not model:continue
         for r in by_month.get(m,[]):
@@ -183,8 +186,8 @@ def main():
     # Build each walk-forward prediction stream once, then reuse it for threshold search,
     # validation and the final holdout. This changes runtime only, not the research protocol.
     pred_cache={}
-    for tm in (6,12,18):
-        for lam in (1.0,10.0,50.0):
+    for tm in (6,18):
+        for lam in (1.0,20.0):
             pred_cache[(tm,lam)]=add_predictions(samples,tm,lam,dev_start,test_end)
 
     candidates=[]
