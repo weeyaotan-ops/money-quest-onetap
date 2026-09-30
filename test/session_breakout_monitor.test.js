@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { STRATEGY_VERSION, localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
+const { STRATEGY_VERSION, localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary, buildDailySummary, actionableHealthStatus } = require('../session_breakout_monitor');
 
 const M15 = 15 * 60 * 1000;
 
@@ -335,6 +335,52 @@ function trend4h(end, bearish = false) {
   assert.ok(s, 'a new breakout after re-entry should be allowed');
   assert.strictEqual(s.side, 'LONG');
   assert.strictEqual(s.freshBreakout, true);
+})();
+
+
+
+(function dailySummaryIsConciseAndTracksR() {
+  const ts = Date.parse('2026-09-30T12:00:00Z');
+  const state = {
+    trades: {
+      a: {
+        signalAtMs: ts,
+        status: 'TP2',
+        terminal: true,
+        milestones: { tp1:{hit:true}, tp2:{hit:true}, sl:{hit:false} }
+      },
+      b: {
+        signalAtMs: ts + 1000,
+        status: 'SL',
+        terminal: true,
+        milestones: { tp1:{hit:false}, tp2:{hit:false}, sl:{hit:true} }
+      }
+    },
+    shadow: {}
+  };
+  const msg = buildDailySummary(state, '2026-09-30');
+  assert.ok(msg.includes('正式信号：2'));
+  assert.ok(msg.includes('已完成净结果：+1.0R'));
+})();
+
+(function actionableHealthOnlyCaresAboutCoreTradingFeeds() {
+  const healthyCore = [
+    { symbol:'BTCUSDT', status:'HEALTHY' },
+    { symbol:'ETHUSDT', status:'HEALTHY' },
+    { symbol:'SOLUSDT', status:'HEALTHY' }
+  ];
+  assert.strictEqual(
+    actionableHealthStatus([], [{symbol:'EURUSD', provider:'DUKASCOPY', error:'closed'}], healthyCore),
+    'HEALTHY'
+  );
+  assert.strictEqual(
+    actionableHealthStatus(['ETHUSDT'], [], healthyCore),
+    'DEGRADED'
+  );
+  assert.strictEqual(
+    actionableHealthStatus(['BTCUSDT','ETHUSDT','SOLUSDT'], [], healthyCore),
+    'FAILED'
+  );
 })();
 
 
