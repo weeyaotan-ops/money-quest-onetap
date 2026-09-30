@@ -304,6 +304,11 @@ function trend4h({ bearish = false, endTime }) {
   assert.strictEqual(Object.keys(map).length,30);
   const s=shadow.summary(state);
   assert.strictEqual(s.raw.n,30);
+  assert.strictEqual(s.fullPass.n,30);
+  assert.strictEqual(s.vwapPass.n,30);
+  assert.strictEqual(s.h4Pass.n,30);
+  const learn=shadow.learningReport(state,{minFilterResolved:10,minGroupResolved:5});
+  assert.strictEqual(learn.raw.n,30);
   const a=shadow.tpSlArenaSummary(state,30);
   assert.strictEqual(a.variants.find(x=>x.id==='LIVE_2R').resolved,30);
   assert.strictEqual(a.best.id,'LIVE_2R');
