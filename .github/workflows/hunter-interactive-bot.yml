@@ -1,4 +1,5 @@
 # Simplified Hunter v2: NOW + key levels + early heads-up
+# Reads the latest session-breakout cache so SIGNAL RECORDS stays current.
 name: Hunter Interactive Telegram Bot
 
 on:
