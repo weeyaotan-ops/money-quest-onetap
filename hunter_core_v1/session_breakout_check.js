@@ -2,6 +2,7 @@
 
 const M15_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const MAX_SIGNAL_AGE_MS = Number(process.env.HUNTER_MAX_SIGNAL_AGE_MS || 20 * 60 * 1000);
 const OKX_BASE = process.env.OKX_REST_BASE || process.env.OKX_API_BASE || 'https://www.okx.com';
 const { getHistoricalRates } = require('dukascopy-node');
 
@@ -9,6 +10,7 @@ const CRYPTO = (process.env.BREAKOUT_CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const FX = (process.env.FX_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+const CORE = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
 
 const SESSION_DEFS = {
   LONDON: { id: 'LONDON', label: 'London', tz: 'Europe/London', hour: 8, minute: 0 },
@@ -35,7 +37,10 @@ function sgt(ts) {
 function utcDate(ts) { return new Date(Number(ts)).toISOString().slice(0, 10); }
 
 async function getJson(url, headers = {}) {
-  const res = await fetch(url, { headers: { 'user-agent': 'session-breakout-check/1.0', ...headers }, signal: AbortSignal.timeout(12000) });
+  const res = await fetch(url, {
+    headers: { 'user-agent': 'session-breakout-command-center/1.0', ...headers },
+    signal: AbortSignal.timeout(12000)
+  });
   if (!res.ok) throw new Error(`HTTP_${res.status}`);
   return res.json();
 }
@@ -54,12 +59,15 @@ async function okxCandles(symbol, bar, limit) {
 }
 
 async function cryptoSnapshot(symbol) {
-  const [candles15m, candles4h] = await Promise.all([okxCandles(symbol, '15m', 300), okxCandles(symbol, '4H', 100)]);
+  const [candles15m, candles4h] = await Promise.all([
+    okxCandles(symbol, '15m', 300),
+    okxCandles(symbol, '4H', 100)
+  ]);
   return { symbol, provider: 'OKX', candles15m, candles4h };
 }
 
 async function dukascopyCandles(symbol, timeframe, lookbackDays, now = Date.now()) {
-  const interval = timeframe === 'h4' ? 4 * HOUR_MS : M15_MS;
+  const interval = timeframe === 'h4' ? 4 * HOUR_MS : timeframe === 'h1' ? HOUR_MS : M15_MS;
   const rows = await getHistoricalRates({
     instrument: String(symbol).toLowerCase(),
     dates: {
@@ -113,22 +121,24 @@ async function fxSnapshot(symbol, now = Date.now()) {
   return { symbol, provider: 'DUKASCOPY', candles15m, candles4h };
 }
 
-function ema50Bias(candles4h) {
-  const xs = [...candles4h].sort((a,b) => a.openTime - b.openTime);
-  if (xs.length < 51) return 'FLAT';
+function ema50State(candles4h) {
+  const xs = [...(candles4h || [])].sort((a,b) => a.openTime - b.openTime);
+  if (xs.length < 51) return { bias: 'FLAT', ema50: null, close: xs.at(-1)?.close ?? null };
   const alpha = 2 / 51;
-  let ema = xs[0].close, prev = ema;
-  for (let i = 1; i < xs.length; i++) { prev = ema; ema = alpha * xs[i].close + (1 - alpha) * ema; }
-  const close = xs.at(-1).close, slope = ema - prev;
-  if (close > ema && slope > 0) return 'BULLISH';
-  if (close < ema && slope < 0) return 'BEARISH';
-  return 'FLAT';
+  let ema = Number(xs[0].close);
+  for (let i = 1; i < xs.length; i++) ema = alpha * Number(xs[i].close) + (1 - alpha) * ema;
+  const close = Number(xs.at(-1).close);
+  if (close > ema) return { bias: 'BULLISH', ema50: ema, close };
+  if (close < ema) return { bias: 'BEARISH', ema50: ema, close };
+  return { bias: 'FLAT', ema50: ema, close };
 }
+
+function ema50Bias(candles4h) { return ema50State(candles4h).bias; }
 
 function dailyVwap(candles15m, targetOpenTime) {
   const day = utcDate(targetOpenTime);
   let pv = 0, v = 0;
-  for (const c of candles15m) {
+  for (const c of candles15m || []) {
     if (c.openTime > targetOpenTime || utcDate(c.openTime) !== day || !(c.volume > 0)) continue;
     pv += ((c.high + c.low + c.close) / 3) * c.volume;
     v += c.volume;
@@ -152,7 +162,7 @@ function boxFor(candles, latestOpen, session) {
   let h2 = session.hour, m2 = session.minute + 15;
   if (m2 >= 60) { m2 -= 60; h2++; }
   let a = null, b = null;
-  for (const c of candles) {
+  for (const c of candles || []) {
     const p = localParts(c.openTime, session.tz);
     if (p.date !== ld.date) continue;
     if (p.hour === session.hour && p.minute === session.minute) a = c;
@@ -168,122 +178,180 @@ function boxFor(candles, latestOpen, session) {
   };
 }
 
-function latestSignal(snap, id, now = Date.now()) {
-  const session = resolveSession(snap, id);
-  const c15 = [...snap.candles15m].sort((a,b) => a.openTime - b.openTime);
-  const latest = c15.at(-1);
-  if (!session || !latest) return null;
-  const age = now - (latest.openTime + M15_MS);
-  if (age < -60000 || age > 20 * 60 * 1000) return null;
-  const box = boxFor(c15, latest.openTime, session);
-  if (!box || latest.openTime < box.activeFrom || latest.openTime >= box.activeUntil) return null;
-  const vwap = dailyVwap(c15, latest.openTime);
-  const trend = ema50Bias(snap.candles4h);
-  if (!Number.isFinite(vwap)) return null;
-  let side = null;
-  if (latest.close > box.high && latest.close > vwap && trend === 'BULLISH') side = 'LONG';
-  if (latest.close < box.low && latest.close < vwap && trend === 'BEARISH') side = 'SHORT';
-  if (!side) return null;
-  return { symbol: snap.symbol, session: session.label, side, close: latest.close, boxHigh: box.high, boxLow: box.low, vwap, trend };
+function phaseWithoutBox(latestOpen, session) {
+  const p = localParts(latestOpen, session.tz);
+  const nowMin = p.hour * 60 + p.minute;
+  const startMin = session.hour * 60 + session.minute;
+  if (nowMin >= startMin && nowMin < startMin + 30) return 'BUILDING_BOX';
+  return 'OFF_SESSION';
 }
 
-function watchLevel(snap, id, now = Date.now()) {
+function inspectSession(snap, id, now = Date.now()) {
   const session = resolveSession(snap, id);
-  const c15 = [...snap.candles15m].sort((a,b) => a.openTime - b.openTime);
+  const c15 = [...(snap.candles15m || [])].sort((a,b) => a.openTime - b.openTime);
   const latest = c15.at(-1);
   if (!session || !latest) return null;
 
-  const age = now - (latest.openTime + M15_MS);
-  if (age < -60000 || age > 20 * 60 * 1000) return null;
-
-  const box = boxFor(c15, latest.openTime, session);
-  if (!box || latest.openTime < box.activeFrom || latest.openTime >= box.activeUntil) return null;
-
-  const vwap = dailyVwap(c15, latest.openTime);
-  const trend = ema50Bias(snap.candles4h);
-  const close = Number(latest.close);
-  const width = Number(box.high) - Number(box.low);
-  if (!Number.isFinite(vwap) || !(width > 0)) return null;
-
-  let side = null, trigger = null, invalidation = null, distance = null;
-
-  if (trend === 'BULLISH' && close > vwap && close <= box.high) {
-    side = 'LONG';
-    trigger = box.high;
-    invalidation = box.low;
-    distance = box.high - close;
-  } else if (trend === 'BEARISH' && close < vwap && close >= box.low) {
-    side = 'SHORT';
-    trigger = box.low;
-    invalidation = box.high;
-    distance = close - box.low;
-  } else {
-    return null;
+  const closeTime = latest.openTime + M15_MS;
+  const age = now - closeTime;
+  if (age < -60000 || age > MAX_SIGNAL_AGE_MS) {
+    return { symbol: snap.symbol, provider: snap.provider, session: session.label, status: 'STALE', closeTime, ageMs: age };
   }
 
-  const boxFraction = Math.max(0, distance / width);
-  const distancePct = Math.max(0, distance / close * 100);
+  const box = boxFor(c15, latest.openTime, session);
+  if (!box) {
+    return {
+      symbol: snap.symbol, provider: snap.provider, session: session.label,
+      status: phaseWithoutBox(latest.openTime, session), current: Number(latest.close), closeTime
+    };
+  }
+  if (latest.openTime < box.activeFrom) {
+    return { symbol: snap.symbol, provider: snap.provider, session: session.label, status: 'BUILDING_BOX', current: Number(latest.close), boxHigh: box.high, boxLow: box.low, closeTime };
+  }
+  if (latest.openTime >= box.activeUntil) {
+    return { symbol: snap.symbol, provider: snap.provider, session: session.label, status: 'SESSION_DONE', current: Number(latest.close), boxHigh: box.high, boxLow: box.low, closeTime };
+  }
 
-  return {
+  const current = Number(latest.close);
+  const vwap = dailyVwap(c15, latest.openTime);
+  const h4 = ema50State(snap.candles4h);
+  if (!Number.isFinite(vwap)) {
+    return { symbol: snap.symbol, provider: snap.provider, session: session.label, status: 'DATA_ERROR', reason: 'VWAP unavailable', current, boxHigh: box.high, boxLow: box.low, closeTime };
+  }
+
+  const base = {
     symbol: snap.symbol,
     provider: snap.provider,
     session: session.label,
-    side,
-    current: close,
-    trigger,
-    invalidation,
-    distance,
-    distancePct,
-    boxFraction,
-    trend,
+    current,
+    boxHigh: box.high,
+    boxLow: box.low,
     vwap,
+    h4Bias: h4.bias,
+    h4Ema50: h4.ema50,
+    h4Close: h4.close,
+    closeTime,
     date: box.date
+  };
+
+  let breakoutSide = null;
+  if (current > box.high) breakoutSide = 'LONG';
+  else if (current < box.low) breakoutSide = 'SHORT';
+
+  if (breakoutSide) {
+    const vwapPass = breakoutSide === 'LONG' ? current > vwap : current < vwap;
+    const h4Pass = breakoutSide === 'LONG' ? h4.bias === 'BULLISH' : h4.bias === 'BEARISH';
+    if (vwapPass && h4Pass) {
+      return { ...base, status: 'SIGNAL', side: breakoutSide, reason: 'All confirmations passed' };
+    }
+    const failed = [];
+    if (!vwapPass) failed.push('VWAP');
+    if (!h4Pass) failed.push('H4 EMA50');
+    return { ...base, status: 'BLOCKED', side: breakoutSide, reason: failed.join(' + ') || 'Filter mismatch' };
+  }
+
+  let side = null;
+  if (h4.bias === 'BULLISH' && current > vwap) side = 'LONG';
+  if (h4.bias === 'BEARISH' && current < vwap) side = 'SHORT';
+  if (!side) {
+    const reason = h4.bias === 'FLAT' ? 'H4 not directional' : 'VWAP and H4 disagree';
+    return { ...base, status: 'WAITING', reason };
+  }
+
+  const trigger = side === 'LONG' ? box.high : box.low;
+  const distance = side === 'LONG' ? Math.max(0, box.high - current) : Math.max(0, current - box.low);
+  const width = box.high - box.low;
+  const boxFraction = width > 0 ? distance / width : 1;
+  const distancePct = current > 0 ? distance / current * 100 : null;
+  if (boxFraction <= 0.35) {
+    return { ...base, status: 'NEAR', side, trigger, distance, distancePct, boxFraction, reason: 'Waiting M15 close through box' };
+  }
+  return { ...base, status: 'WAITING', side, trigger, distance, distancePct, boxFraction, reason: 'No breakout yet' };
+}
+
+const STATUS_PRIORITY = {
+  SIGNAL: 8,
+  BLOCKED: 7,
+  NEAR: 6,
+  BUILDING_BOX: 5,
+  WAITING: 4,
+  STALE: 3,
+  DATA_ERROR: 2,
+  SESSION_DONE: 1,
+  OFF_SESSION: 0
+};
+
+function chooseMarketStatus(rows) {
+  const xs = (rows || []).filter(Boolean);
+  if (!xs.length) return null;
+  return [...xs].sort((a,b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))[0];
+}
+
+function latestSignal(snap, id, now = Date.now()) {
+  const x = inspectSession(snap, id, now);
+  if (!x || x.status !== 'SIGNAL') return null;
+  return {
+    symbol: x.symbol, session: x.session, side: x.side, close: x.current,
+    boxHigh: x.boxHigh, boxLow: x.boxLow, vwap: x.vwap, trend: x.h4Bias
+  };
+}
+
+function watchLevel(snap, id, now = Date.now()) {
+  const x = inspectSession(snap, id, now);
+  if (!x || x.status !== 'NEAR') return null;
+  return {
+    symbol: x.symbol, provider: x.provider, session: x.session, side: x.side,
+    current: x.current, trigger: x.trigger,
+    invalidation: x.side === 'LONG' ? x.boxLow : x.boxHigh,
+    distance: x.distance, distancePct: x.distancePct, boxFraction: x.boxFraction,
+    trend: x.h4Bias, vwap: x.vwap, date: x.date,
+    boxHigh: x.boxHigh, boxLow: x.boxLow
   };
 }
 
 function nextScanAt(now = Date.now()) {
-  const q = (Math.floor(now / M15_MS) + 1) * M15_MS + 2 * 60 * 1000;
-  return q;
+  return (Math.floor(now / M15_MS) + 1) * M15_MS + 2 * 60 * 1000;
 }
 
 async function checkAll() {
   const now = Date.now();
   const cryptoSettled = await Promise.allSettled(CRYPTO.map(cryptoSnapshot));
-  const cryptoSnaps = cryptoSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
-
-  let fxSnaps = [];
-  const fxConfigured = true;
-  let fxErrors = 0;
   const fxSettled = await Promise.allSettled(FX.map(s => fxSnapshot(s, now)));
-  fxSnaps = fxSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
-  fxErrors = fxSettled.length - fxSnaps.length;
+
+  const cryptoSnaps = cryptoSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
+  const fxSnaps = fxSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
+  const errors = [];
+  cryptoSettled.forEach((x, i) => { if (x.status === 'rejected') errors.push({ symbol: CRYPTO[i], provider: 'OKX', error: String(x.reason?.message || x.reason) }); });
+  fxSettled.forEach((x, i) => { if (x.status === 'rejected') errors.push({ symbol: FX[i], provider: 'DUKASCOPY', error: String(x.reason?.message || x.reason) }); });
 
   const all = [...cryptoSnaps, ...fxSnaps];
-  const signals = [];
-  const watches = [];
+  const sessionRows = [];
+  const markets = [];
   for (const snap of all) {
-    for (const id of ['LONDON','NEW_YORK']) {
-      const s = latestSignal(snap, id, now);
-      if (s) signals.push(s);
-      else {
-        const w = watchLevel(snap, id, now);
-        if (w) watches.push(w);
-      }
-    }
+    const rows = ['LONDON','NEW_YORK'].map(id => inspectSession(snap, id, now)).filter(Boolean);
+    sessionRows.push(...rows);
+    const chosen = chooseMarketStatus(rows.filter(x => !['OFF_SESSION','SESSION_DONE'].includes(x.status))) || chooseMarketStatus(rows);
+    if (chosen) markets.push({ ...chosen, core: CORE.has(snap.symbol) });
   }
-  watches.sort((a,b) => a.boxFraction - b.boxFraction);
+  for (const e of errors) markets.push({ symbol: e.symbol, provider: e.provider, status: 'DATA_ERROR', reason: e.error, core: CORE.has(e.symbol) });
 
+  const signals = sessionRows.filter(x => x.status === 'SIGNAL');
+  const watches = sessionRows.filter(x => x.status === 'NEAR').sort((a,b) => (a.boxFraction ?? 9) - (b.boxFraction ?? 9));
+  const blocked = sessionRows.filter(x => x.status === 'BLOCKED');
   const latestTimes = all.map(s => s.candles15m.at(-1)?.openTime + M15_MS).filter(Number.isFinite);
+
   return {
     now,
     cryptoOk: cryptoSnaps.length,
     cryptoTotal: CRYPTO.length,
-    fxConfigured,
     fxOk: fxSnaps.length,
     fxTotal: FX.length,
-    fxErrors,
+    errors,
+    markets,
+    sessionRows,
     signals,
     watches,
+    blocked,
     latestClose: latestTimes.length ? Math.max(...latestTimes) : null,
     nextScan: nextScanAt(now)
   };
@@ -301,77 +369,133 @@ function p(x, symbol = '') {
   return n.toFixed(4);
 }
 
+function shortSymbol(symbol) { return String(symbol).replace(/USDT$/,''); }
+
+function statusIcon(status) {
+  return {
+    SIGNAL: '🟢', NEAR: '🟡', BLOCKED: '🟠', BUILDING_BOX: '🟣',
+    WAITING: '⚪', STALE: '🔴', DATA_ERROR: '🔴', SESSION_DONE: '🌙', OFF_SESSION: '🌙'
+  }[status] || '⚪';
+}
+
+function statusLabel(x) {
+  if (!x) return 'UNKNOWN';
+  if (x.status === 'SIGNAL') return `${x.side} SIGNAL`;
+  if (x.status === 'NEAR') return `${x.side} NEAR`;
+  if (x.status === 'BLOCKED') return `${x.side} BLOCKED`;
+  if (x.status === 'BUILDING_BOX') return 'BUILDING BOX';
+  if (x.status === 'WAITING') return 'WAITING';
+  if (x.status === 'STALE') return 'STALE DATA';
+  if (x.status === 'DATA_ERROR') return 'DATA ERROR';
+  return 'OFF SESSION';
+}
+
 function formatNow(r) {
   const lines = ['🚨 NOW', ''];
-
   if (r.signals.length) {
-    lines.push('✅ CONFIRMED SIGNALS');
-    for (const s of r.signals.slice(0, 8)) {
-      lines.push(
-        `${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} — ${s.side}`,
-        `Entry ~ ${p(s.close, s.symbol)}`,
-        `Session: ${s.session}`,
-        ''
-      );
-    }
+    lines.push('✅ VALID');
+    for (const s of r.signals.slice(0, 8)) lines.push(`${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} ${s.side} · ${s.session} · close ${p(s.current, s.symbol)}`);
   } else {
-    lines.push('⚪ No confirmed entry right now.');
+    lines.push('⚪ No confirmed entry now.');
   }
 
-  const near = (r.watches || []).filter(w => w.boxFraction <= 0.35).slice(0, 3);
+  const near = (r.watches || []).slice(0, 4);
   if (near.length) {
-    lines.push('👀 CLOSEST TO TRIGGER');
-    for (const w of near) {
-      const arrow = w.side === 'LONG' ? '↑' : '↓';
-      lines.push(`${w.symbol} ${arrow} ${p(w.trigger, w.symbol)}  | now ${p(w.current, w.symbol)}`);
-    }
+    lines.push('', '🟡 NEAR');
+    for (const w of near) lines.push(`${w.symbol} ${w.side} · need M15 close ${w.side === 'LONG' ? '>' : '<'} ${p(w.trigger, w.symbol)}`);
   }
 
-  lines.push('', `Next check ~ ${sgt(r.nextScan)} SGT`);
+  const blocked = (r.blocked || []).slice(0, 4);
+  if (blocked.length) {
+    lines.push('', '🟠 BLOCKED');
+    for (const b of blocked) lines.push(`${b.symbol} ${b.side} · ${b.reason}`);
+  }
+
+  lines.push('', `Next M15 check ~ ${sgt(r.nextScan)} SGT`);
+  return lines.join('\n');
+}
+
+function formatWhy(r) {
+  const rows = (r.markets || []).filter(x => !['SIGNAL','OFF_SESSION','SESSION_DONE'].includes(x.status));
+  const lines = ['❓ WHY NO SIGNAL', ''];
+  if (!rows.length) return lines.concat('Nothing active right now.').join('\n');
+  for (const x of rows.slice(0, 12)) {
+    if (x.status === 'BLOCKED') lines.push(`🟠 ${x.symbol} ${x.side}: breakout happened, blocked by ${x.reason}.`);
+    else if (x.status === 'NEAR') lines.push(`🟡 ${x.symbol} ${x.side}: filters agree, waiting M15 close through ${p(x.trigger, x.symbol)}.`);
+    else if (x.status === 'BUILDING_BOX') lines.push(`🟣 ${x.symbol}: building the first 30-min box.`);
+    else if (x.status === 'WAITING') lines.push(`⚪ ${x.symbol}: ${x.reason || 'no breakout yet'}.`);
+    else if (x.status === 'STALE' || x.status === 'DATA_ERROR') lines.push(`🔴 ${x.symbol}: ${x.status === 'STALE' ? 'feed is stale' : 'feed error'}.`);
+  }
+  return lines.join('\n');
+}
+
+function formatMarketBoard(r) {
+  const lines = ['🌍 MARKET BOARD', ''];
+  const core = (r.markets || []).filter(x => x.core);
+  const test = (r.markets || []).filter(x => !x.core);
+
+  lines.push('CORE');
+  for (const x of core) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}${x.session && !['OFF_SESSION','SESSION_DONE'].includes(x.status) ? ` · ${x.session}` : ''}`);
+
+  lines.push('', 'TEST / MONITOR');
+  for (const x of test) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}${x.status === 'BLOCKED' ? ` · ${x.reason}` : ''}`);
+
+  lines.push('', 'CORE = BTC / ETH / SOL validated set. Others are monitoring/test until equally validated.');
   return lines.join('\n');
 }
 
 function formatLevels(r) {
-  const watches = (r.watches || []).slice(0, 8);
+  const active = (r.markets || [])
+    .filter(x => ['SIGNAL','BLOCKED','NEAR','WAITING'].includes(x.status) && Number.isFinite(x.boxHigh) && Number.isFinite(x.boxLow))
+    .sort((a,b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))
+    .slice(0, 8);
   const lines = ['👀 KEY LEVELS', ''];
-
-  if (!watches.length) {
-    lines.push('Nothing important is close enough right now.', '', 'Wait for the next M15 close.');
-    return lines.join('\n');
+  if (!active.length) return lines.concat('No active session box right now.', 'Wait for the next session / M15 close.').join('\n');
+  for (const x of active) {
+    lines.push(`${statusIcon(x.status)} ${x.symbol} · ${x.session}`, `Box H ${p(x.boxHigh, x.symbol)} · L ${p(x.boxLow, x.symbol)} · Now ${p(x.current, x.symbol)}`);
+    if (x.status === 'NEAR') lines.push(`Trigger: M15 close ${x.side === 'LONG' ? '>' : '<'} ${p(x.trigger, x.symbol)}`);
+    if (x.status === 'BLOCKED') lines.push(`Blocked by: ${x.reason}`);
+    lines.push('');
   }
-
-  for (const w of watches) {
-    const arrow = w.side === 'LONG' ? '↑' : '↓';
-    const verb = w.side === 'LONG' ? 'ABOVE' : 'BELOW';
-    const hot = w.boxFraction <= 0.20 ? '🔥' : w.boxFraction <= 0.35 ? '🟠' : '⚪';
-    lines.push(
-      `${hot} ${w.symbol} — ${w.side}`,
-      `WATCH ${arrow} ${p(w.trigger, w.symbol)}`,
-      `Now: ${p(w.current, w.symbol)} · ${w.distancePct.toFixed(2)}% away`,
-      `Only act after M15 CLOSE ${verb} ${p(w.trigger, w.symbol)}`,
-      ''
-    );
-  }
-
-  lines.push('🔥 = very close · still NOT an entry until M15 closes through the level.');
-  return lines.join('\n');
+  return lines.join('\n').trim();
 }
 
 function formatSystem(r) {
+  const stale = (r.markets || []).filter(x => x.status === 'STALE').length;
+  const dataErrors = (r.markets || []).filter(x => x.status === 'DATA_ERROR').length;
+  const healthy = r.cryptoOk === r.cryptoTotal && r.fxOk === r.fxTotal && stale === 0 && dataErrors === 0;
+  const latestAgeMin = r.latestClose ? Math.max(0, (r.now - r.latestClose) / 60000) : null;
   return [
     '📡 SYSTEM',
     '',
-    `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto: ${r.cryptoOk}/${r.cryptoTotal}`,
-    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex: ${r.fxOk}/${r.fxTotal}`,
-    r.latestClose ? `Latest M15: ${sgt(r.latestClose)} SGT` : null,
+    `${healthy ? '🟢' : '🟠'} Self-check: ${healthy ? 'HEALTHY' : 'ATTENTION'}`,
+    `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto feed: ${r.cryptoOk}/${r.cryptoTotal}`,
+    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex feed: ${r.fxOk}/${r.fxTotal}`,
+    stale ? `🔴 Stale markets: ${stale}` : '🟢 Stale markets: 0',
+    dataErrors ? `🔴 Data errors: ${dataErrors}` : '🟢 Data errors: 0',
+    r.latestClose ? `Latest M15 close: ${sgt(r.latestClose)} SGT (${latestAgeMin.toFixed(1)}m ago)` : null,
     `Next scan: ~${sgt(r.nextScan)} SGT`,
     '',
+    'Rule: M15 box close breakout + VWAP + H4 price vs EMA50',
     'Mode: SIGNAL ONLY'
   ].filter(Boolean).join('\n');
 }
 
-function formatCheck(r) {
-  return formatNow(r);
-}
+function formatCheck(r) { return formatNow(r); }
 
-module.exports = { checkAll, formatCheck, formatNow, formatLevels, formatSystem, latestSignal, watchLevel, resolveSession };
+module.exports = {
+  checkAll,
+  formatCheck,
+  formatNow,
+  formatWhy,
+  formatMarketBoard,
+  formatLevels,
+  formatSystem,
+  latestSignal,
+  watchLevel,
+  inspectSession,
+  resolveSession,
+  ema50Bias,
+  ema50State,
+  boxFor
+};
