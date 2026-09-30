@@ -200,4 +200,78 @@ function trend4h(end, bearish = false) {
   assert.ok(s, 'price above EMA50 should be bullish even without EMA slope gate');
 })();
 
+
+(function shadowCapturesFilteredOutRawBreakout() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) bars.push(c(t, 100, 101, 99, 100));
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+
+  const snap = {
+    symbol: 'ETHUSDT',
+    provider: 'TEST',
+    candles15m: bars,
+    candles4h: trend4h(Date.parse('2026-09-30T07:30:00Z'), true)
+  };
+
+  assert.strictEqual(evaluate(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z')), null);
+
+  const shadow = evaluateShadowBreakout(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z'));
+  assert.ok(shadow, 'raw breakout should still be captured by shadow lab');
+  assert.strictEqual(shadow.side, 'LONG');
+  assert.strictEqual(shadow.filters.raw, true);
+  assert.strictEqual(shadow.filters.vwap, true);
+  assert.strictEqual(shadow.filters.h4, false);
+  assert.strictEqual(shadow.filters.both, false);
+})();
+
+(function shadowSummarySeparatesFilters() {
+  const a = shadowTradeFromCandidate({
+    key: 'SHADOW|A|LONDON|1|LONG',
+    symbol: 'A',
+    provider: 'TEST',
+    session: 'LONDON',
+    sessionLabel: 'London',
+    side: 'LONG',
+    candleOpenTime: Date.parse('2026-09-30T07:30:00Z'),
+    candleCloseTime: Date.parse('2026-09-30T07:45:00Z'),
+    entry: 100,
+    stop: 95,
+    filters: { raw: true, vwap: true, h4: false, both: false }
+  });
+  updateTradeFromCandles(a, [
+    c(Date.parse('2026-09-30T07:45:00Z'), 100, 101, 94, 95)
+  ]);
+
+  const b = shadowTradeFromCandidate({
+    key: 'SHADOW|B|LONDON|2|LONG',
+    symbol: 'B',
+    provider: 'TEST',
+    session: 'LONDON',
+    sessionLabel: 'London',
+    side: 'LONG',
+    candleOpenTime: Date.parse('2026-09-30T07:30:00Z'),
+    candleCloseTime: Date.parse('2026-09-30T07:45:00Z'),
+    entry: 100,
+    stop: 95,
+    filters: { raw: true, vwap: true, h4: true, both: true }
+  });
+  updateTradeFromCandles(b, [
+    c(Date.parse('2026-09-30T07:45:00Z'), 100, 111, 99, 110)
+  ]);
+
+  const sum = shadowSummary({ shadowTrades: { [a.key]: a, [b.key]: b } });
+  assert.strictEqual(sum.mode, 'OBSERVATIONAL_ONLY');
+  assert.strictEqual(sum.totalRawBreakouts, 2);
+  assert.strictEqual(sum.variants.raw.n, 2);
+  assert.strictEqual(sum.variants.raw.sl, 1);
+  assert.strictEqual(sum.variants.raw.tp2, 1);
+  assert.strictEqual(sum.variants.both.n, 1);
+  assert.strictEqual(sum.variants.both.tp2, 1);
+  assert.strictEqual(sum.rejectedBy.h4.n, 1);
+})();
+
+
 console.log('session_breakout_monitor tests: PASS');
