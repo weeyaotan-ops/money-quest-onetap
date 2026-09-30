@@ -43,6 +43,7 @@ const FETCH_RETRIES = Math.max(0, Math.min(3, Number(process.env.HUNTER_FETCH_RE
 const SHADOW_MIN_RESOLVED = Math.max(10, Number(process.env.SHADOW_MIN_RESOLVED || 30));
 const SHADOW_COST_R = Math.max(0, Number(process.env.SHADOW_COST_R || 0));
 const CORE_SYMBOLS = new Set(['BTCUSDT','ETHUSDT','SOLUSDT']);
+const STRATEGY_VERSION = 'SESSION_BREAKOUT_V1_LOCKED_2026-09-30';
 
 function fmtPrice(x) {
   const n = Number(x);
@@ -404,6 +405,7 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
   const quantity = Number.isFinite(riskUsd) ? riskUsd / riskDistance : null;
 
   return {
+    strategyVersion: STRATEGY_VERSION,
     key: `${snapshotData.symbol}|${session.id}|${box.date}`,
     symbol: snapshotData.symbol,
     provider: snapshotData.provider,
@@ -514,6 +516,7 @@ function rawBreakoutEvent(snapshotData, sessionId, now = Date.now()) {
   if (!(riskDistance > 0)) return null;
 
   return {
+    strategyVersion: STRATEGY_VERSION,
     key: `SHADOW|${snapshotData.symbol}|${session.id}|${box.date}|${latest.openTime}|${side}`,
     symbol: snapshotData.symbol,
     provider: snapshotData.provider,
@@ -543,6 +546,7 @@ function rawBreakoutEvent(snapshotData, sessionId, now = Date.now()) {
 function shadowTradeFromBreakout(event) {
   const t = tradeFromSignal(event);
   t.shadow = true;
+  t.strategyVersion = event.strategyVersion || STRATEGY_VERSION;
   t.filters = {
     vwapPass: Boolean(event.vwapPass),
     h4Pass: Boolean(event.h4Pass),
@@ -674,10 +678,14 @@ function shadowSummary(state) {
   const all = Object.values(state.shadow || {});
 
   function cohort(xs) {
+    const raw = summarizeShadowTrades(xs);
+    const both = summarizeShadowTrades(xs.filter(t => t.filters?.liveQualified));
+    const blocked = summarizeShadowTrades(xs.filter(t => !t.filters?.liveQualified));
     return {
-      raw: summarizeShadowTrades(xs),
-      both: summarizeShadowTrades(xs.filter(t => t.filters?.liveQualified)),
-      blocked: summarizeShadowTrades(xs.filter(t => !t.filters?.liveQualified))
+      raw,
+      both,
+      blocked,
+      filterAssessment: compareFilterEvidence(both, blocked)
     };
   }
 
@@ -702,6 +710,7 @@ function shadowSummary(state) {
   const blocked = summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified));
 
   return {
+    strategyVersion: STRATEGY_VERSION,
     mode: 'OBSERVATIONAL_ONLY',
     outcomeModel: 'HOLD_TO_2R_OR_SL',
     costRPerTrade: SHADOW_COST_R,
@@ -759,6 +768,7 @@ function buildMessage(s) {
     '',
     `Confirmed M15 close: ${sgtTime(s.candleCloseTime)} SGT`,
     `Data: ${s.provider}`,
+    `Strategy: ${s.strategyVersion || STRATEGY_VERSION}`,
     ['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol) ? 'Backtest: 2Y tested' : 'Backtest: not yet validated',
     'Mode: SIGNAL ONLY'
   ].filter(Boolean).join('\n');
@@ -788,6 +798,7 @@ function tradeFromSignal(s) {
   const tp2 = s.side === 'LONG' ? Number(s.entry) + 2 * riskDistance : Number(s.entry) - 2 * riskDistance;
   return {
     key: s.key,
+    strategyVersion: s.strategyVersion || STRATEGY_VERSION,
     symbol: s.symbol,
     provider: s.provider,
     session: s.session,
@@ -1080,6 +1091,7 @@ async function cycle() {
   };
   console.log(JSON.stringify({
     engine: 'Session Breakout Monitor V1',
+    strategyVersion: STRATEGY_VERSION,
     mode: 'SIGNAL_ONLY',
     at: health.lastCycleAt,
     symbols: SYMBOLS,
@@ -1126,6 +1138,8 @@ function startHealthServer() {
       res.end(JSON.stringify({
         ...health,
         engine: 'Session Breakout Monitor V1',
+        strategyVersion: STRATEGY_VERSION,
+        strategyVersion: STRATEGY_VERSION,
         mode: 'SIGNAL_ONLY',
         autoTrading: false,
         shadowLab: 'OBSERVATIONAL_ONLY'
@@ -1184,6 +1198,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  STRATEGY_VERSION,
   localParts,
   ema50Bias,
   dailyVwap,

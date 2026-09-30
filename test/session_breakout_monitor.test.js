@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
+const { STRATEGY_VERSION, localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
 
 const M15 = 15 * 60 * 1000;
 
@@ -283,6 +283,21 @@ function trend4h(end, bearish = false) {
   const blocked = { resolved: 10, avgRAfterCosts: -0.2, winRateCi95: { low: 0.10, high: 0.30 } };
   const x = compareFilterEvidence(pass, blocked);
   assert.strictEqual(x.status, 'INSUFFICIENT');
+})();
+
+
+
+(function strategyVersionIsStampedIntoSignalsAndEvidence() {
+  assert.ok(String(STRATEGY_VERSION).startsWith('SESSION_BREAKOUT_V1_LOCKED_'));
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) bars.push(c(t, 100, 101, 99, 100));
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+  const snap = { symbol: 'ETHUSDT', provider: 'TEST', candles15m: bars, candles4h: trend4h(Date.parse('2026-09-30T07:30:00Z')) };
+  const s = evaluate(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z'));
+  assert.strictEqual(s.strategyVersion, STRATEGY_VERSION);
 })();
 
 
