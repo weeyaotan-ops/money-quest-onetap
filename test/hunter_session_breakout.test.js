@@ -3,6 +3,7 @@
 const assert = require('assert');
 const { evaluateSession, evaluateShadowCandidate, localParts } = require('../hunter_core_v1/session_breakout_monitor');
 const shadow = require('../hunter_core_v1/session_breakout_shadow');
+const { inspectSession } = require('../hunter_core_v1/session_breakout_check');
 
 function m15(openTime, o, h, l, c, volume = 100) {
   return { openTime, open: o, high: h, low: l, close: c, volume };
@@ -133,6 +134,46 @@ function trend4h({ bearish = false, endTime }) {
   assert.strictEqual(s.fullPass.n, 0);
   assert.strictEqual(s.filteredOut.n, 1);
   assert.strictEqual(s.filteredOut.avgR, 2);
+})();
+
+
+
+(function testOldBreakoutIsNotNewSignal() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += 15 * 60_000) bars.push(m15(t, 100, 101, 99, 100, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+  bars.push(m15(Date.parse('2026-09-30T07:45:00Z'), 106, 110, 105.5, 108, 150));
+
+  const snap = { symbol: 'ETHUSDT', provider: 'OKX', candles15m: bars, candles4h: trend4h({ endTime: Date.parse('2026-09-30T07:45:00Z') }) };
+  const live = evaluateSession(snap, 'LONDON', Date.parse('2026-09-30T08:01:00Z'));
+  assert.strictEqual(live, null, 'old breakout must not become a new signal');
+
+  const status = inspectSession(snap, 'LONDON', Date.parse('2026-09-30T08:01:00Z'));
+  assert.ok(['ACTIVE','EXTENDED'].includes(status.status), 'old breakout should be marked active/extended');
+  assert.strictEqual(status.fresh, false);
+})();
+
+(function testFreshRebreakAfterReentry() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += 15 * 60_000) bars.push(m15(t, 100, 101, 99, 100, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+  bars.push(m15(Date.parse('2026-09-30T07:45:00Z'), 106, 106.5, 103, 104, 150));
+  bars.push(m15(Date.parse('2026-09-30T08:00:00Z'), 104, 109, 103.5, 107, 150));
+
+  const snap = { symbol: 'ETHUSDT', provider: 'OKX', candles15m: bars, candles4h: trend4h({ endTime: Date.parse('2026-09-30T08:00:00Z') }) };
+  const live = evaluateSession(snap, 'LONDON', Date.parse('2026-09-30T08:16:00Z'));
+  assert.ok(live, 'fresh rebreak after re-entry should signal');
+  assert.strictEqual(live.freshBreakout, true);
+
+  const status = inspectSession(snap, 'LONDON', Date.parse('2026-09-30T08:16:00Z'));
+  assert.strictEqual(status.status, 'SIGNAL');
+  assert.strictEqual(status.fresh, true);
 })();
 
 

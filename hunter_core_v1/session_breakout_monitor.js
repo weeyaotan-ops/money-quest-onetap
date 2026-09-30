@@ -128,7 +128,8 @@ function evaluateSession(snapshot, sessionId, now = Date.now(), opts = {}) {
   if (!session) return null;
   const c15 = [...(snapshot.candles15m || [])].sort((a, b) => Number(a.openTime) - Number(b.openTime));
   const latest = c15[c15.length - 1];
-  if (!latest) return null;
+  const previous = c15[c15.length - 2];
+  if (!latest || !previous) return null;
 
   const latestOpen = Number(latest.openTime);
   const inferredClose = latestOpen + M15_MS;
@@ -145,9 +146,10 @@ function evaluateSession(snapshot, sessionId, now = Date.now(), opts = {}) {
   if (!Number.isFinite(vwap)) return null;
 
   const close = Number(latest.close);
+  const prevClose = Number(previous.close);
   let side = null;
-  if (close > box.high && close > vwap && h4.bias === 'BULLISH') side = 'LONG';
-  if (close < box.low && close < vwap && h4.bias === 'BEARISH') side = 'SHORT';
+  if (prevClose <= box.high && close > box.high && close > vwap && h4.bias === 'BULLISH') side = 'LONG';
+  if (prevClose >= box.low && close < box.low && close < vwap && h4.bias === 'BEARISH') side = 'SHORT';
   if (!side) return null;
 
   const entry = close;
@@ -169,6 +171,8 @@ function evaluateSession(snapshot, sessionId, now = Date.now(), opts = {}) {
     sessionLabel: session.label,
     localSessionDate: box.date,
     side,
+    freshBreakout: true,
+    previousClose: prevClose,
     candleOpenTime: latestOpen,
     candleCloseTime: inferredClose,
     close,
@@ -261,25 +265,27 @@ function priceFmt(x) {
 
 function buildMessage(s) {
   const icon = s.side === 'LONG' ? '🟢' : '🔴';
-  const breakText = s.side === 'LONG'
-    ? `${priceFmt(s.close)} > ${priceFmt(s.boxHigh)}`
-    : `${priceFmt(s.close)} < ${priceFmt(s.boxLow)}`;
+  const direction = s.side === 'LONG' ? '做多' : '做空';
+  const risk = Math.abs(Number(s.entry) - Number(s.stop));
+  const tp1 = s.side === 'LONG' ? Number(s.entry) + risk : Number(s.entry) - risk;
+  const tp2 = s.side === 'LONG' ? Number(s.entry) + 2 * risk : Number(s.entry) - 2 * risk;
   return [
-    `${icon} SESSION BREAKOUT SIGNAL`,
+    `${icon} 刚确认信号`,
     '',
-    `${s.symbol} — ${s.side}`,
-    `Session: ${s.sessionLabel}`,
-    `M15 close: ${breakText}`,
-    `H4 trend: ${s.h4Bias}`,
-    `VWAP: ${priceFmt(s.vwap)} (${s.side === 'LONG' ? 'price above' : 'price below'})`,
+    `${s.symbol} — ${direction}`,
+    `时段：${s.sessionLabel}`,
+    `突破收盘：${priceFmt(s.close)}`,
     '',
-    `🎯 Entry: ~${priceFmt(s.entry)}`,
-    `🛑 SL: ${priceFmt(s.stop)}`,
-    `✅ TP: ${priceFmt(s.target)} (${s.tpR.toFixed(1)}R)`,
-    Number.isFinite(s.riskUsd) ? `Risk: ${(RISK_PCT * 100).toFixed(1)}% (~$${s.riskUsd.toFixed(2)})` : null,
+    '条件：突破 ✅  VWAP ✅  H4 ✅',
     '',
-    `Closed: ${singaporeTime(s.candleCloseTime)} SGT`,
-    'Mode: SIGNAL ONLY'
+    `进场：约 ${priceFmt(s.entry)}`,
+    `止损：${priceFmt(s.stop)}`,
+    `目标1：${priceFmt(tp1)}（1R）`,
+    `目标2：${priceFmt(tp2)}（2R）`,
+    Number.isFinite(s.riskUsd) ? `风险：${(RISK_PCT * 100).toFixed(1)}%（约 $${s.riskUsd.toFixed(2)}）` : null,
+    '',
+    `确认时间：${singaporeTime(s.candleCloseTime)} SGT`,
+    '只在刚突破这根 M15 发一次，旧突破不追。'
   ].filter(Boolean).join('\n');
 }
 
@@ -408,7 +414,7 @@ async function start() {
 
   if (STARTUP_NOTICE) {
     try {
-      await telegram(`✅ Session Breakout Monitor ONLINE\n\nSymbols: ${SYMBOLS.join(', ')}\nSessions: ${SESSION_IDS.join(', ')}\nRule: M15 close outside box + H4 EMA50 + VWAP\nMode: SIGNAL ONLY`);
+      await telegram(`✅ Breakout 系统已上线\n\n规则：前30分钟 Box → 刚收破 → VWAP 同向 → H4 EMA50 同向\n模式：只发信号，不自动下单`);
     } catch (err) {
       console.error(JSON.stringify({ telegram: 'STARTUP_ERROR', error: err.message }));
     }

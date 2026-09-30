@@ -56,42 +56,42 @@ function sgtTime(ts) {
 function mainKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🚨 NOW', callback_data: 'now' }],
+      [{ text: '🚨 现在', callback_data: 'now' }],
       [
-        { text: '🌍 MARKET BOARD', callback_data: 'market' },
-        { text: '👀 KEY LEVELS', callback_data: 'levels' }
+        { text: '🌍 市场', callback_data: 'market' },
+        { text: '👀 关键价位', callback_data: 'levels' }
       ],
       [
-        { text: '📌 ACTIVE', callback_data: 'active' },
-        { text: '📒 SIGNAL RECORDS', callback_data: 'records' }
+        { text: '📌 进行中', callback_data: 'active' },
+        { text: '📒 信号记录', callback_data: 'records' }
       ],
       [
-        { text: '📊 RESULTS', callback_data: 'results' },
-        { text: '📡 SYSTEM', callback_data: 'system' }
+        { text: '📊 成绩', callback_data: 'results' },
+        { text: '📡 系统', callback_data: 'system' }
       ],
-      [{ text: '🧪 SHADOW LAB', callback_data: 'shadow' }]
+      [{ text: '🧪 研究室', callback_data: 'shadow' }]
     ]
   };
 }
 
 function homeKeyboard() {
-  return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
+  return { inline_keyboard: [[{ text: '🏠 主页', callback_data: 'start' }]] };
 }
 
 function refreshKeyboard(action, extras = []) {
   return {
     inline_keyboard: [
-      [{ text: '🔄 Refresh', callback_data: action }],
+      [{ text: '🔄 刷新', callback_data: action }],
       ...extras,
-      [{ text: '🏠 Home', callback_data: 'start' }]
+      [{ text: '🏠 主页', callback_data: 'start' }]
     ]
   };
 }
 
 function nowKeyboard() {
   return refreshKeyboard('now', [
-    [{ text: '❓ WHY NO SIGNAL', callback_data: 'why' }],
-    [{ text: '🌍 MARKET BOARD', callback_data: 'market' }]
+    [{ text: '❓ 为什么没单', callback_data: 'why' }],
+    [{ text: '🌍 市场', callback_data: 'market' }]
   ]);
 }
 
@@ -109,13 +109,13 @@ function loadBreakoutState() {
 
 function signalStatusLine(t) {
   const status = String(t.status || 'OPEN');
-  if (status === 'TP2') return '🏆 TP2 HIT (+2R milestone)';
-  if (status === 'TP1_THEN_SL') return '⚠️ 1R reached → later SL';
-  if (status === 'SL') return '❌ SL HIT';
-  if (status === 'TP1') return '✅ 1R HIT · still tracking';
-  if (status === 'TP1_AND_SL_SAME_M15') return '⚠️ 1R + SL touched in same M15';
-  if (status === 'TP2_AND_SL_SAME_M15') return '⚠️ 2R + SL touched in same M15';
-  return '⏳ OPEN';
+  if (status === 'TP2') return '🏆 已到 2R';
+  if (status === 'TP1_THEN_SL') return '⚠️ 到过 1R，后来止损';
+  if (status === 'SL') return '❌ 已止损';
+  if (status === 'TP1') return '✅ 已到 1R，继续追踪';
+  if (status === 'TP1_AND_SL_SAME_M15') return '⚠️ 同一根 M15 同时碰 1R 和止损';
+  if (status === 'TP2_AND_SL_SAME_M15') return '⚠️ 同一根 M15 同时碰 2R 和止损';
+  return '⏳ 进行中';
 }
 
 function activeText() {
@@ -124,15 +124,15 @@ function activeText() {
     .filter(t => !t.terminal)
     .sort((a,b) => Number(b.signalAtMs || 0) - Number(a.signalAtMs || 0));
 
-  if (!trades.length) return ['📌 ACTIVE', '', '⚪ No open breakout signal.', '', 'New valid signals will appear here automatically.'].join('\n');
+  if (!trades.length) return ['📌 进行中', '', '⚪ 现在没有还在跑的信号。'].join('\n');
 
-  const lines = ['📌 ACTIVE', ''];
+  const lines = ['📌 进行中', ''];
   for (const t of trades.slice(0, 10)) {
     lines.push(
-      `${t.side === 'LONG' ? '🟢' : '🔴'} ${t.symbol} · ${t.sessionLabel || t.session} · ${t.side}`,
+      `${t.side === 'LONG' ? '🟢' : '🔴'} ${t.symbol} · ${t.side === 'LONG' ? '做多' : '做空'}`,
       signalStatusLine(t),
-      `Entry ${priceFmt(t.entry, t.symbol)} · SL ${priceFmt(t.stop, t.symbol)} · 1R ${priceFmt(t.tp1, t.symbol)} · 2R ${priceFmt(t.tp2, t.symbol)}`,
-      t.signalAtMs ? `Signal ${sgtTime(t.signalAtMs)} SGT` : null,
+      `进场 ${priceFmt(t.entry, t.symbol)} · 止损 ${priceFmt(t.stop, t.symbol)} · 1R ${priceFmt(t.tp1, t.symbol)} · 2R ${priceFmt(t.tp2, t.symbol)}`,
+      t.signalAtMs ? `信号时间 ${sgtTime(t.signalAtMs)} SGT` : null,
       ''
     );
   }
@@ -142,7 +142,7 @@ function activeText() {
 function signalRecordsText() {
   const state = loadBreakoutState();
   const trades = Object.values(state.trades || {}).sort((a,b) => Number(b.signalAtMs || 0) - Number(a.signalAtMs || 0));
-  if (!trades.length) return ['📒 SIGNAL RECORDS', '', 'No tracked Session Breakout signal yet.'].join('\n');
+  if (!trades.length) return ['📒 信号记录', '', '还没有记录。'].join('\n');
 
   const tp1 = trades.filter(t => t.milestones?.tp1?.hit).length;
   const tp2 = trades.filter(t => t.milestones?.tp2?.hit).length;
@@ -151,18 +151,18 @@ function signalRecordsText() {
   const ambiguous = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
 
   const lines = [
-    '📒 SIGNAL RECORDS',
+    '📒 信号记录',
     '',
-    `Tracked: ${trades.length} · 1R: ${tp1} · 2R: ${tp2} · SL touched: ${sl} · Open: ${open}`,
-    ambiguous ? `⚠️ Same-M15 ambiguous: ${ambiguous}` : null,
+    `总数 ${trades.length} · 到1R ${tp1} · 到2R ${tp2} · 碰止损 ${sl} · 进行中 ${open}`,
+    ambiguous ? `⚠️ 同一根 M15 无法判断先后：${ambiguous}` : null,
     '',
-    'RECENT'
+    '最近'
   ].filter(Boolean);
 
   for (const t of trades.slice(0, 10)) {
     lines.push(
       '',
-      `${t.symbol} · ${t.sessionLabel || t.session} · ${t.side}`,
+      `${t.symbol} · ${t.side === 'LONG' ? '做多' : '做空'}`,
       signalStatusLine(t),
       `Entry ${priceFmt(t.entry, t.symbol)} · SL ${priceFmt(t.stop, t.symbol)} · 1R ${priceFmt(t.tp1, t.symbol)} · 2R ${priceFmt(t.tp2, t.symbol)}`
     );
@@ -188,17 +188,17 @@ function resultsText() {
   const d = summarize(todayTrades);
   const all = summarize(trades);
   return [
-    '📊 SESSION BREAKOUT RESULTS',
+    '📊 成绩',
     '',
-    'TODAY',
-    `Signals ${d.total} · 1R ${d.tp1} · 2R ${d.tp2} · SL ${d.sl} · Open ${d.open}`,
-    d.ambiguous ? `Ambiguous same-M15: ${d.ambiguous}` : null,
+    '今天',
+    `信号 ${d.total} · 到1R ${d.tp1} · 到2R ${d.tp2} · 碰止损 ${d.sl} · 进行中 ${d.open}`,
+    d.ambiguous ? `⚠️ 无法判断先后 ${d.ambiguous}` : null,
     '',
-    'ALL TRACKED',
-    `Signals ${all.total} · 1R ${all.tp1} · 2R ${all.tp2} · SL ${all.sl} · Open ${all.open}`,
-    all.ambiguous ? `Ambiguous same-M15: ${all.ambiguous}` : null,
+    '全部记录',
+    `信号 ${all.total} · 到1R ${all.tp1} · 到2R ${all.tp2} · 碰止损 ${all.sl} · 进行中 ${all.open}`,
+    all.ambiguous ? `⚠️ 无法判断先后 ${all.ambiguous}` : null,
     '',
-    'This is the new Session Breakout record — old Hunter results are removed.'
+    '这里只看现在这套 Session Breakout。'
   ].filter(Boolean).join('\n');
 }
 
@@ -219,41 +219,41 @@ function shadowLabText() {
   const s = shadowSummary(state, { firstOnly: true });
   if (!s.raw.n) {
     return [
-      '🧪 SHADOW LAB',
+      '🧪 研究室',
       '',
-      'No raw breakout sample yet.',
-      'It is running silently and will compare:',
-      'RAW vs VWAP vs H4 vs FULL filter.',
+      '还没有足够样本。',
+      '系统会在后台比较：',
+      '原始突破 / VWAP / H4 / 全部条件',
       '',
-      'Live signal rules are unchanged.'
+      '不会自动改实盘规则。'
     ].join('\n');
   }
 
   const lines = [
-    '🧪 SHADOW LAB',
+    '🧪 研究室',
     '',
-    'FIRST BREAKOUT ONLY',
-    shadowLine('RAW', s.raw),
-    shadowLine('VWAP PASS', s.vwapPass),
-    shadowLine('H4 PASS', s.h4Pass),
-    shadowLine('FULL PASS', s.fullPass),
-    shadowLine('FILTERED OUT', s.filteredOut),
+    '只看第一次突破',
+    shadowLine('原始突破', s.raw),
+    shadowLine('VWAP通过', s.vwapPass),
+    shadowLine('H4通过', s.h4Pass),
+    shadowLine('全部通过', s.fullPass),
+    shadowLine('被挡掉', s.filteredOut),
     '',
-    'BY COIN'
+    '按币种'
   ];
 
   for (const [k,v] of Object.entries(s.bySymbol || {})) lines.push(`${k}: n=${v.n} · WR ${pct(v.winRate)} · avg ${rfmt(v.avgR)}`);
 
-  lines.push('', 'BY SESSION');
+  lines.push('', '按时段');
   for (const [k,v] of Object.entries(s.bySession || {})) lines.push(`${k}: n=${v.n} · WR ${pct(v.winRate)} · avg ${rfmt(v.avgR)}`);
 
   lines.push(
     '',
-    'Interpretation:',
-    'FULL PASS better than FILTERED OUT = filters are helping.',
-    'FILTERED OUT better = a filter may be blocking useful trades.',
+    '怎么看：',
+    '全部通过表现更好 = 过滤条件有帮助。',
+    '被挡掉的反而更好 = 过滤条件可能太严格。',
     '',
-    'Research only · does not change live signals.'
+    '只做研究，不会自动改信号规则。'
   );
   return lines.join('\n');
 }
@@ -294,16 +294,16 @@ async function showMenu() {
   await send([
     'HUNTER · SESSION BREAKOUT',
     '',
-    '🚨 NOW = 现在有没有确认的机会',
-    '🌍 MARKET BOARD = 全部市场现在走到哪一步',
-    '👀 KEY LEVELS = Box / trigger 价位',
-    '📌 ACTIVE = 已触发、仍在追踪的 signals',
-    '📒 SIGNAL RECORDS = SL / 1R / 2R 记录',
-    '📊 RESULTS = 这套 breakout 的 results',
-    '📡 SYSTEM = feed + scanner self-check',
-    '🧪 SHADOW LAB = filters 到底有没有帮忙',
+    '🚨 现在 = 有没有刚确认的信号',
+    '🌍 市场 = 全部市场状态',
+    '👀 关键价位 = Box 和触发价',
+    '📌 进行中 = 已发出、还在跑的信号',
+    '📒 信号记录 = 止损 / 1R / 2R',
+    '📊 成绩 = 这套策略的记录',
+    '📡 系统 = 数据有没有正常',
+    '🧪 研究室 = 看过滤条件有没有帮助',
     '',
-    '没有确认 = 不进。'
+    '只有刚突破这根 M15 才算新信号。旧突破不追。'
   ].join('\n'), mainKeyboard());
 }
 
@@ -320,16 +320,16 @@ async function handleAction(action, callbackId) {
     if (['now','why','market','levels','system'].includes(action)) {
       const r = await getCheck(true);
       if (action === 'now') return send(formatNow(r), nowKeyboard());
-      if (action === 'why') return send(formatWhy(r), refreshKeyboard('why', [[{ text: '🚨 NOW', callback_data: 'now' }]]));
-      if (action === 'market') return send(formatMarketBoard(r), refreshKeyboard('market', [[{ text: '❓ WHY NO SIGNAL', callback_data: 'why' }]]));
-      if (action === 'levels') return send(formatLevels(r), refreshKeyboard('levels', [[{ text: '🚨 NOW', callback_data: 'now' }]]));
+      if (action === 'why') return send(formatWhy(r), refreshKeyboard('why', [[{ text: '🚨 现在', callback_data: 'now' }]]));
+      if (action === 'market') return send(formatMarketBoard(r), refreshKeyboard('market', [[{ text: '❓ 为什么没单', callback_data: 'why' }]]));
+      if (action === 'levels') return send(formatLevels(r), refreshKeyboard('levels', [[{ text: '🚨 现在', callback_data: 'now' }]]));
       if (action === 'system') return send(formatSystem(r), refreshKeyboard('system'));
     }
 
     return showMenu();
   } catch (err) {
     console.error(JSON.stringify({ ok: false, action, error: err.message }));
-    return send('⚠️ Refresh failed. Try again in a moment.', homeKeyboard());
+    return send('⚠️ 刷新失败，等一下再试。', homeKeyboard());
   }
 }
 
@@ -381,16 +381,16 @@ async function getUpdates(offset) {
 async function setCommands() {
   await tg('setMyCommands', {
     commands: [
-      { command: 'start', description: 'Open Session Breakout command center' },
-      { command: 'now', description: 'Confirmed / near / blocked setups now' },
-      { command: 'market', description: 'Market board' },
-      { command: 'why', description: 'Why there is no signal' },
-      { command: 'levels', description: 'Box and trigger prices' },
-      { command: 'active', description: 'Open signal tracking' },
-      { command: 'records', description: 'Signal SL / 1R / 2R records' },
-      { command: 'results', description: 'Session Breakout results' },
-      { command: 'system', description: 'Feed and scanner self-check' },
-      { command: 'shadow', description: 'Counterfactual filter lab' }
+      { command: 'start', description: '打开主页' },
+      { command: 'now', description: '现在有没有刚确认信号' },
+      { command: 'market', description: '市场状态' },
+      { command: 'why', description: '为什么现在没单' },
+      { command: 'levels', description: '关键价位' },
+      { command: 'active', description: '进行中的信号' },
+      { command: 'records', description: '信号记录' },
+      { command: 'results', description: '策略成绩' },
+      { command: 'system', description: '系统状态' },
+      { command: 'shadow', description: '研究室' }
     ]
   });
 }
