@@ -24,7 +24,7 @@ jobs:
       - name: Checkout session breakout monitor
         uses: actions/checkout@v4
         with:
-          ref: session-breakout-live-20260930
+          ref: hunter-core-v1-clean
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
