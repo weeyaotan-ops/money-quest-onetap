@@ -8,6 +8,8 @@ const M15_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.binance.com';
 const OKX_BASE = process.env.OKX_REST_BASE || process.env.OKX_API_BASE || 'https://www.okx.com';
+const OANDA_API_BASE = process.env.OANDA_API_BASE || 'https://api-fxpractice.oanda.com';
+const OANDA_TOKEN = process.env.OANDA_TOKEN || '';
 
 const SYMBOLS = (process.env.HUNTER_SYMBOLS || process.env.CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -32,6 +34,8 @@ const PORT = Number(process.env.PORT || 3000);
 const MT5_FEED_URL = process.env.MT5_FEED_URL || '';
 const MT5_FEED_TOKEN = process.env.MT5_FEED_TOKEN || '';
 const MT5_SYMBOLS = (process.env.MT5_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD')
+  .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+const FX_SYMBOLS = (process.env.FX_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const STARTUP_NOTICE = ['1','true','yes'].includes(String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase());
 const RUN_ONCE = ['1','true','yes'].includes(String(process.env.HUNTER_RUN_ONCE || '').toLowerCase());
@@ -71,8 +75,8 @@ function utcDate(ts) {
   return new Date(Number(ts)).toISOString().slice(0, 10);
 }
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: { 'user-agent': 'money-quest-session-breakout/1.0' } });
+async function getJson(url, extraHeaders = {}) {
+  const res = await fetch(url, { headers: { 'user-agent': 'money-quest-session-breakout/1.0', ...extraHeaders } });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
   return res.json();
 }
@@ -133,6 +137,52 @@ async function snapshot(symbol, now = Date.now()) {
     ]);
     return { symbol, provider: 'OKX_FALLBACK', candles15m, candles4h };
   }
+}
+
+function oandaInstrument(symbol) {
+  if (symbol === 'XAUUSD') return 'XAU_USD';
+  return symbol.replace(/^([A-Z]{3})([A-Z]{3})$/, '$1_$2');
+}
+
+function mapOandaCandles(rows, intervalMs) {
+  return (rows || []).filter(x => x.complete === true && x.mid).map(x => {
+    const openTime = Date.parse(x.time);
+    return {
+      openTime,
+      open: Number(x.mid.o),
+      high: Number(x.mid.h),
+      low: Number(x.mid.l),
+      close: Number(x.mid.c),
+      volume: Number(x.volume || 0),
+      closeTime: openTime + intervalMs - 1
+    };
+  }).filter(x => Number.isFinite(x.openTime) && [x.open,x.high,x.low,x.close,x.volume].every(Number.isFinite))
+    .sort((a,b) => a.openTime - b.openTime);
+}
+
+async function oandaCandles(symbol, granularity, count) {
+  if (!OANDA_TOKEN) throw new Error('OANDA_TOKEN_MISSING');
+  const instrument = oandaInstrument(symbol);
+  const qs = new URLSearchParams({
+    price: 'M',
+    granularity,
+    count: String(count),
+    smooth: 'false'
+  });
+  const body = await getJson(
+    `${OANDA_API_BASE}/v3/instruments/${encodeURIComponent(instrument)}/candles?${qs.toString()}`,
+    { authorization: `Bearer ${OANDA_TOKEN}` }
+  );
+  const intervalMs = granularity === 'H4' ? 4 * HOUR_MS : M15_MS;
+  return mapOandaCandles(body.candles || [], intervalMs);
+}
+
+async function oandaSnapshot(symbol) {
+  const [candles15m, candles4h] = await Promise.all([
+    oandaCandles(symbol, 'M15', 300),
+    oandaCandles(symbol, 'H4', 100)
+  ]);
+  return { symbol, provider: 'OANDA', candles15m, candles4h };
 }
 
 function normalizeMt5Candle(x) {
@@ -227,8 +277,21 @@ function sessionBox(candles15m, latestOpenTime, session) {
   };
 }
 
+function resolveSession(snapshotData, sessionId) {
+  const base = SESSION_DEFS[sessionId];
+  if (!base) return null;
+  if (sessionId !== 'NEW_YORK') return base;
+  if (snapshotData.provider === 'OANDA') {
+    if (snapshotData.symbol === 'XAUUSD') {
+      return { ...base, id: 'NEW_YORK_GOLD', label: 'New York Gold', hour: 8, minute: 30 };
+    }
+    return { ...base, id: 'NEW_YORK_FX', label: 'New York FX', hour: 8, minute: 0 };
+  }
+  return { ...base, id: 'NEW_YORK_CRYPTO', label: 'New York', hour: 9, minute: 30 };
+}
+
 function evaluate(snapshotData, sessionId, now = Date.now()) {
-  const session = SESSION_DEFS[sessionId];
+  const session = resolveSession(snapshotData, sessionId);
   if (!session) return null;
   const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
   const latest = c15[c15.length - 1];
@@ -348,10 +411,15 @@ async function cycle() {
     if (r.status === 'fulfilled') snaps.push(r.value);
     else console.error(JSON.stringify({ symbol: SYMBOLS[i], marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
   }
-  try {
-    snaps.push(...await mt5Snapshots());
-  } catch (error) {
-    console.error(JSON.stringify({ provider: 'MT5', marketData: 'ERROR', error: error.message }));
+  if (OANDA_TOKEN) {
+    const fxResults = await Promise.allSettled(FX_SYMBOLS.map(s => oandaSnapshot(s)));
+    for (let i = 0; i < fxResults.length; i += 1) {
+      const r = fxResults[i];
+      if (r.status === 'fulfilled') snaps.push(r.value);
+      else console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'OANDA', marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
+    }
+  } else {
+    console.log(JSON.stringify({ provider: 'OANDA', status: 'NOT_CONFIGURED', reason: 'OANDA_TOKEN_MISSING' }));
   }
 
   const signals = [];
@@ -380,8 +448,8 @@ async function cycle() {
     mode: 'SIGNAL_ONLY',
     at: health.lastCycleAt,
     symbols: SYMBOLS,
-    mt5Symbols: MT5_SYMBOLS,
-    mt5FeedConfigured: Boolean(MT5_FEED_URL),
+    fxSymbols: FX_SYMBOLS,
+    oandaConfigured: Boolean(OANDA_TOKEN),
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend }))
@@ -426,7 +494,7 @@ function startHealthServer() {
 
 async function main() {
   if (!RUN_ONCE) startHealthServer();
-  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, mt5Symbols: MT5_SYMBOLS, mt5FeedConfigured: Boolean(MT5_FEED_URL), sessions: SESSION_IDS, tpR: TP_R }));
+  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, fxSymbols: FX_SYMBOLS, oandaConfigured: Boolean(OANDA_TOKEN), sessions: SESSION_IDS, tpR: TP_R }));
 
   if (STARTUP_NOTICE) {
     try {
