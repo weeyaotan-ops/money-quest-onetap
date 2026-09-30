@@ -48,6 +48,13 @@ const STRATEGY_VERSION = 'SESSION_BREAKOUT_V1_LOCKED_2026-09-30';
 const SIGNAL_VALID_MS = Number(process.env.BREAKOUT_SIGNAL_VALID_MS || 15 * 60 * 1000);
 const DAILY_SUMMARY_ENABLED = !['0','false','no'].includes(String(process.env.DAILY_SUMMARY_ENABLED || 'true').toLowerCase());
 const DAILY_SUMMARY_HOUR_SGT = Math.max(0, Math.min(23, Number(process.env.DAILY_SUMMARY_HOUR_SGT || 7)));
+const TP_SL_VARIANTS = [
+  { id: 'TP1', label: '原SL + 1R', stopFactor: 1, targetRR: 1 },
+  { id: 'TP1_5', label: '原SL + 1.5R', stopFactor: 1, targetRR: 1.5 },
+  { id: 'LIVE_2R', label: '原SL + 2R（Live）', stopFactor: 1, targetRR: 2 },
+  { id: 'TIGHT75_2R', label: 'SL收紧25% + 2R', stopFactor: 0.75, targetRR: 2 },
+  { id: 'TIGHT50_2R', label: 'SL收紧50% + 2R', stopFactor: 0.5, targetRR: 2 }
+];
 
 function fmtPrice(x) {
   const n = Number(x);
@@ -393,6 +400,46 @@ function snapshotHealth(snapshotData, now = Date.now()) {
   };
 }
 
+function atr14(candles15m, beforeOpenTime) {
+  const xs = [...(candles15m || [])]
+    .filter(x => Number(x.openTime) < Number(beforeOpenTime))
+    .sort((a,b) => Number(a.openTime) - Number(b.openTime))
+    .slice(-15);
+  if (xs.length < 15) return null;
+  const trs = [];
+  for (let i = 1; i < xs.length; i += 1) {
+    const cur = xs[i];
+    const prev = xs[i-1];
+    const h = Number(cur.high), l = Number(cur.low), pc = Number(prev.close);
+    if (![h,l,pc].every(Number.isFinite)) continue;
+    trs.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
+  }
+  if (!trs.length) return null;
+  return trs.reduce((a,b)=>a+b,0) / trs.length;
+}
+
+function structureAssessment(candles15m, latest, box, side, entry, stop) {
+  const atr = atr14(candles15m, latest.openTime);
+  const risk = Math.abs(Number(entry) - Number(stop));
+  const boxWidth = Number(box.high) - Number(box.low);
+  const trigger = side === 'LONG' ? Number(box.high) : Number(box.low);
+  const extension = Math.abs(Number(entry) - trigger);
+  if (!(atr > 0) || !(risk > 0) || !(boxWidth > 0)) {
+    return { atr:null, riskAtr:null, boxAtr:null, extensionAtr:null, tp2Atr:null, warnings:[] };
+  }
+  const riskAtr = risk / atr;
+  const boxAtr = boxWidth / atr;
+  const extensionAtr = extension / atr;
+  const tp2Atr = (2 * risk) / atr;
+  const warnings = [];
+  if (boxAtr >= 2.5) warnings.push('Box 很宽');
+  if (boxAtr <= 0.30) warnings.push('Box 很窄');
+  if (riskAtr >= 3.0) warnings.push('SL 距离很大');
+  if (extensionAtr >= 1.0) warnings.push('突破后已经冲远');
+  if (tp2Atr >= 5.0) warnings.push('2R 目标很远');
+  return { atr, riskAtr, boxAtr, extensionAtr, tp2Atr, warnings };
+}
+
 function evaluate(snapshotData, sessionId, now = Date.now()) {
   const integrity = snapshotHealth(snapshotData, now);
   if (!integrity.ok) return null;
@@ -432,6 +479,7 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
   const target = side === 'LONG' ? entry + TP_R * riskDistance : entry - TP_R * riskDistance;
   const riskUsd = EQUITY > 0 && RISK_PCT > 0 ? EQUITY * RISK_PCT : null;
   const quantity = Number.isFinite(riskUsd) ? riskUsd / riskDistance : null;
+  const structure = structureAssessment(c15, latest, box, side, entry, stop);
 
   return {
     strategyVersion: STRATEGY_VERSION,
@@ -455,7 +503,8 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
     stop,
     target,
     riskUsd,
-    quantity
+    quantity,
+    structure
   };
 }
 
@@ -545,6 +594,7 @@ function rawBreakoutEvent(snapshotData, sessionId, now = Date.now()) {
   const stop = side === 'LONG' ? box.low : box.high;
   const riskDistance = Math.abs(entry - stop);
   if (!(riskDistance > 0)) return null;
+  const structure = structureAssessment(c15, latest, box, side, entry, stop);
 
   return {
     strategyVersion: STRATEGY_VERSION,
@@ -570,7 +620,8 @@ function rawBreakoutEvent(snapshotData, sessionId, now = Date.now()) {
     blockedBy: [
       ...(vwapPass ? [] : ['VWAP']),
       ...(h4Pass ? [] : ['H4_EMA50'])
-    ]
+    ],
+    structure
   };
 }
 
@@ -590,9 +641,146 @@ function shadowTradeFromBreakout(event) {
     vwap: Number(event.vwap),
     h4Bias: event.h4Bias,
     h4Ema50: Number(event.h4Ema50),
-    emaSlope: Number(event.emaSlope)
+    emaSlope: Number(event.emaSlope),
+    structure: event.structure || null
   };
+  ensureTpSlVariants(t);
   return t;
+}
+
+function ensureTpSlVariants(trade) {
+  if (!trade || !(Number(trade.riskDistance) > 0)) return {};
+  if (!trade.challengers || typeof trade.challengers !== 'object') trade.challengers = {};
+  for (const cfg of TP_SL_VARIANTS) {
+    if (trade.challengers[cfg.id]) continue;
+    const stopDistance = Number(trade.riskDistance) * cfg.stopFactor;
+    const targetDistance = stopDistance * cfg.targetRR;
+    const stop = trade.side === 'LONG' ? Number(trade.entry) - stopDistance : Number(trade.entry) + stopDistance;
+    const target = trade.side === 'LONG' ? Number(trade.entry) + targetDistance : Number(trade.entry) - targetDistance;
+    trade.challengers[cfg.id] = {
+      id: cfg.id,
+      label: cfg.label,
+      stopFactor: cfg.stopFactor,
+      targetRR: cfg.targetRR,
+      stop,
+      target,
+      status: 'OPEN',
+      terminal: false,
+      outcomeR: null,
+      lastTrackedOpenTime: Number(trade.candleOpenTime),
+      resolvedAt: null,
+      sameBar: false
+    };
+  }
+  return trade.challengers;
+}
+
+function updateTpSlVariants(trade, candles) {
+  if (!trade) return false;
+  const variants = ensureTpSlVariants(trade);
+  let changed = false;
+  const start = Number(trade.candleOpenTime) + M15_MS;
+  const sorted = [...(candles || [])].sort((a,b) => Number(a.openTime) - Number(b.openTime));
+
+  for (const v of Object.values(variants)) {
+    if (v.terminal) continue;
+    for (const candle of sorted) {
+      const ot = Number(candle.openTime);
+      if (ot < start || ot <= Number(v.lastTrackedOpenTime || 0)) continue;
+      const high = Number(candle.high), low = Number(candle.low);
+      const stopHit = trade.side === 'LONG' ? low <= Number(v.stop) : high >= Number(v.stop);
+      const targetHit = trade.side === 'LONG' ? high >= Number(v.target) : low <= Number(v.target);
+      v.lastTrackedOpenTime = ot;
+
+      if (stopHit && targetHit) {
+        v.status = 'AMBIGUOUS';
+        v.terminal = true;
+        v.sameBar = true;
+        v.outcomeR = null;
+        v.resolvedAt = new Date(ot + M15_MS).toISOString();
+        changed = true;
+        break;
+      }
+      if (targetHit) {
+        v.status = 'WIN';
+        v.terminal = true;
+        v.outcomeR = Number(v.targetRR);
+        v.resolvedAt = new Date(ot + M15_MS).toISOString();
+        changed = true;
+        break;
+      }
+      if (stopHit) {
+        v.status = 'LOSS';
+        v.terminal = true;
+        v.outcomeR = -1;
+        v.resolvedAt = new Date(ot + M15_MS).toISOString();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return changed;
+}
+
+function tpSlVariantStats(trades, variantId) {
+  const rows = [];
+  let ambiguous = 0;
+  for (const t of trades || []) {
+    const v = t?.challengers?.[variantId];
+    if (!v) continue;
+    if (v.status === 'AMBIGUOUS') ambiguous += 1;
+    if (Number.isFinite(Number(v.outcomeR))) rows.push({ at:Number(t.signalAtMs||0), r:Number(v.outcomeR), v });
+  }
+  rows.sort((a,b)=>a.at-b.at);
+  const wins = rows.filter(x=>x.r>0).length;
+  const losses = rows.filter(x=>x.r<0).length;
+  const totalR = rows.reduce((a,x)=>a+x.r,0);
+  let equity=0, peak=0, maxDrawdownR=0;
+  for (const x of rows) {
+    equity += x.r;
+    peak = Math.max(peak,equity);
+    maxDrawdownR = Math.max(maxDrawdownR, peak-equity);
+  }
+  return {
+    resolved: rows.length,
+    wins,
+    losses,
+    ambiguous,
+    winRate: rows.length ? wins/rows.length : null,
+    avgR: rows.length ? totalR/rows.length : null,
+    totalR,
+    maxDrawdownR
+  };
+}
+
+function tpSlArenaSummary(state) {
+  state = normalizeState(state);
+  const all = Object.values(state.shadow || {}).filter(t => t?.filters?.liveQualified);
+  const variants = TP_SL_VARIANTS.map(cfg => {
+    const stats = tpSlVariantStats(all, cfg.id);
+    return { ...cfg, ...stats };
+  });
+  const live = variants.find(x=>x.id==='LIVE_2R') || null;
+  const eligible = variants
+    .filter(x => x.resolved >= SHADOW_MIN_RESOLVED && Number.isFinite(x.avgR))
+    .sort((a,b)=>b.avgR-a.avgR);
+  const best = eligible[0] || null;
+  let status = 'INSUFFICIENT';
+  let deltaVsLive = null;
+  if (live && best && live.resolved >= SHADOW_MIN_RESOLVED && Number.isFinite(live.avgR)) {
+    deltaVsLive = Number(best.avgR) - Number(live.avgR);
+    status = best.id === 'LIVE_2R' || deltaVsLive < 0.10 ? 'LIVE_STILL_BEST_OR_CLOSE' : 'CHALLENGER_AHEAD_SAMPLE';
+  }
+  return {
+    mode:'SHADOW_ONLY',
+    minResolved:SHADOW_MIN_RESOLVED,
+    liveVariant:'LIVE_2R',
+    variants,
+    best: best ? { id:best.id, label:best.label, resolved:best.resolved, avgR:best.avgR, winRate:best.winRate, maxDrawdownR:best.maxDrawdownR } : null,
+    status,
+    deltaVsLive,
+    note:'No live TP/SL change is made automatically.'
+  };
 }
 
 function captureShadowBreakouts(state, snaps, now = Date.now()) {
@@ -616,6 +804,7 @@ function trackShadowTrades(state, snaps) {
   for (const trade of Object.values(state.shadow || {})) {
     const snap = bySymbol[trade.symbol];
     if (!snap) continue;
+    if (updateTpSlVariants(trade, snap.candles15m || [])) changed = true;
     if (updateTradeFromCandles(trade, snap.candles15m || [])) changed = true;
   }
   return changed;
@@ -755,7 +944,8 @@ function shadowSummary(state) {
     bySymbol: grouped(t => t.symbol),
     bySession: grouped(t => t.sessionLabel || t.session),
     bySide: grouped(t => t.side),
-    bySymbolSession: grouped(t => `${t.symbol}|${t.sessionLabel || t.session}`)
+    bySymbolSession: grouped(t => `${t.symbol}|${t.sessionLabel || t.session}`),
+    tpSlArena: tpSlArenaSummary(state)
   };
 }
 
@@ -803,6 +993,8 @@ function buildMessage(s) {
     `目标1：${fmtPrice(tp1)}（1R）`,
     `目标2：${fmtPrice(tp2)}（2R）`,
     Number.isFinite(s.riskUsd) ? `风险：${(RISK_PCT * 100).toFixed(1)}%（约 ${s.riskUsd.toFixed(2)}）` : null,
+    s.structure?.warnings?.length ? `⚠️ 结构提醒：${s.structure.warnings.join(' / ')}` : '结构检查：没有极端异常',
+    Number.isFinite(s.structure?.riskAtr) ? `SL距离约 ${s.structure.riskAtr.toFixed(2)}× M15 ATR · 2R约 ${s.structure.tp2Atr.toFixed(2)}× ATR` : null,
     '',
     `确认时间：${sgtTime(s.candleCloseTime)} SGT`,
     `有效至：${sgtTime(Number(s.candleCloseTime) + SIGNAL_VALID_MS)} SGT`,
@@ -1380,5 +1572,11 @@ module.exports = {
   updateTradeFromCandles,
   resultSummary,
   buildDailySummary,
-  actionableHealthStatus
+  actionableHealthStatus,
+  atr14,
+  structureAssessment,
+  ensureTpSlVariants,
+  updateTpSlVariants,
+  tpSlVariantStats,
+  tpSlArenaSummary
 };

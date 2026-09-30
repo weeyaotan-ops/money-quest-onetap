@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { STRATEGY_VERSION, localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary, buildDailySummary, actionableHealthStatus } = require('../session_breakout_monitor');
+const { STRATEGY_VERSION, localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary, buildDailySummary, actionableHealthStatus, structureAssessment, updateTpSlVariants, tpSlArenaSummary } = require('../session_breakout_monitor');
 
 const M15 = 15 * 60 * 1000;
 
@@ -381,6 +381,60 @@ function trend4h(end, bearish = false) {
     actionableHealthStatus(['BTCUSDT','ETHUSDT','SOLUSDT'], [], healthyCore),
     'FAILED'
   );
+})();
+
+
+
+(function structureAssessmentFlagsExtremeRisk() {
+  const bars = [];
+  const t0 = Date.parse('2026-09-30T00:00:00Z');
+  for (let i=0;i<20;i+=1) bars.push(c(t0+i*M15, 100, 101, 99, 100));
+  const latest = c(t0+20*M15, 100, 111, 100, 110);
+  const s = structureAssessment(bars, latest, {high:105,low:95}, 'LONG', 110, 95);
+  assert.ok(Number.isFinite(s.riskAtr));
+  assert.ok(s.warnings.includes('SL 距离很大'));
+  assert.ok(s.warnings.includes('2R 目标很远'));
+})();
+
+(function tpSlVariantsResolveIndependently() {
+  const t = shadowTradeFromBreakout({
+    key:'x', symbol:'BTCUSDT', provider:'TEST', session:'LONDON', sessionLabel:'London',
+    side:'LONG', candleOpenTime:Date.parse('2026-09-30T07:30:00Z'),
+    candleCloseTime:Date.parse('2026-09-30T07:45:00Z'),
+    entry:100, stop:95, boxHigh:99, boxLow:95, vwap:98,
+    h4Bias:'BULLISH', h4Ema50:97, emaSlope:0,
+    vwapPass:true,h4Pass:true,liveQualified:true,blockedBy:[]
+  });
+  const bars = [
+    c(Date.parse('2026-09-30T07:45:00Z'),100,106,98,105),
+    c(Date.parse('2026-09-30T08:00:00Z'),105,111,104,110)
+  ];
+  assert.strictEqual(updateTpSlVariants(t,bars), true);
+  assert.strictEqual(t.challengers.TP1.status,'WIN');
+  assert.strictEqual(t.challengers.TP1_5.status,'WIN');
+  assert.strictEqual(t.challengers.LIVE_2R.status,'WIN');
+  assert.ok(['WIN','LOSS','AMBIGUOUS'].includes(t.challengers.TIGHT50_2R.status));
+})();
+
+(function tpSlArenaKeepsLiveSeparateFromResearch() {
+  const state={shadow:{}};
+  for(let i=0;i<30;i+=1){
+    const t=shadowTradeFromBreakout({
+      key:'a'+i,symbol:'ETHUSDT',provider:'TEST',session:'LONDON',sessionLabel:'London',
+      side:'LONG',candleOpenTime:1000+i,candleCloseTime:2000+i,entry:100,stop:95,
+      boxHigh:99,boxLow:95,vwap:98,h4Bias:'BULLISH',h4Ema50:97,emaSlope:0,
+      vwapPass:true,h4Pass:true,liveQualified:true,blockedBy:[]
+    });
+    for(const v of Object.values(t.challengers)){
+      v.terminal=true; v.status='WIN'; v.outcomeR=v.targetRR;
+    }
+    state.shadow[t.key]=t;
+  }
+  const a=tpSlArenaSummary(state);
+  assert.strictEqual(a.mode,'SHADOW_ONLY');
+  assert.strictEqual(a.minResolved,30);
+  assert.ok(a.variants.every(v=>v.resolved===30));
+  assert.ok(a.best);
 })();
 
 
