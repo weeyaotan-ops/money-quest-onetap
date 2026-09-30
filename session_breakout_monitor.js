@@ -377,7 +377,8 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
   if (!session) return null;
   const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
   const latest = c15[c15.length - 1];
-  if (!latest) return null;
+  const previous = c15[c15.length - 2];
+  if (!latest || !previous) return null;
 
   const expectedClose = latest.openTime + M15_MS;
   const age = now - expectedClose;
@@ -391,9 +392,14 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
   if (!Number.isFinite(vwap)) return null;
 
   const close = Number(latest.close);
+  const prevClose = Number(previous.close);
   let side = null;
-  if (close > box.high && close > vwap && trend.bias === 'BULLISH') side = 'LONG';
-  if (close < box.low && close < vwap && trend.bias === 'BEARISH') side = 'SHORT';
+
+  // Fresh signal only:
+  // LONG = previous close was not already above Box High, current close breaks above.
+  // SHORT = previous close was not already below Box Low, current close breaks below.
+  if (prevClose <= box.high && close > box.high && close > vwap && trend.bias === 'BULLISH') side = 'LONG';
+  if (prevClose >= box.low && close < box.low && close < vwap && trend.bias === 'BEARISH') side = 'SHORT';
   if (!side) return null;
 
   const entry = close;
@@ -412,6 +418,8 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
     session: session.id,
     sessionLabel: session.label,
     side,
+    freshBreakout: true,
+    previousClose: prevClose,
     candleOpenTime: latest.openTime,
     candleCloseTime: expectedClose,
     close,
@@ -729,48 +737,52 @@ function shadowSummary(state) {
 }
 
 function buildWatchMessage(w) {
-  const arrow = w.side === 'LONG' ? 'ABOVE' : 'BELOW';
+  const direction = w.side === 'LONG' ? '做多' : '做空';
+  const condition = w.side === 'LONG' ? '收在上方' : '收在下方';
   return [
-    '👀 KEY PRICE ALERT',
+    '👀 接近触发',
     '',
-    `${w.symbol} — ${w.side} BIAS`,
-    `Session: ${w.sessionLabel}`,
+    `${w.symbol} — ${direction}`,
+    `时段：${w.sessionLabel}`,
     '',
-    `🔥 WATCH: ${fmtPrice(w.trigger)}`,
-    `Now: ${fmtPrice(w.current)}`,
-    Number.isFinite(w.distancePct) ? `Distance: ${w.distancePct.toFixed(2)}%` : null,
+    `关键价：${fmtPrice(w.trigger)}`,
+    `现在：${fmtPrice(w.current)}`,
+    Number.isFinite(w.distancePct) ? `距离：${w.distancePct.toFixed(2)}%` : null,
     '',
-    `WAIT for M15 CLOSE ${arrow} ${fmtPrice(w.trigger)}`,
-    `If confirmed, opposite box side: ${fmtPrice(w.invalidation)}`,
+    `等 M15 ${condition} ${fmtPrice(w.trigger)} 才算确认`,
+    `另一边 Box：${fmtPrice(w.invalidation)}`,
     '',
-    'NOT AN ENTRY YET',
-    `Data: ${w.provider}`
+    '⚠️ 还没确认，不进场'
   ].filter(Boolean).join('\n');
 }
 
 function buildMessage(s) {
   const icon = s.side === 'LONG' ? '🟢' : '🔴';
+  const direction = s.side === 'LONG' ? '做多' : '做空';
+  const tp1 = s.side === 'LONG'
+    ? s.entry + Math.abs(s.entry - s.stop)
+    : s.entry - Math.abs(s.entry - s.stop);
+  const tp2 = s.side === 'LONG'
+    ? s.entry + 2 * Math.abs(s.entry - s.stop)
+    : s.entry - 2 * Math.abs(s.entry - s.stop);
+
   return [
-    `${icon} SESSION BREAKOUT SIGNAL`,
+    `${icon} 刚确认信号`,
     '',
-    `${s.symbol} — ${s.side}`,
-    `Session: ${s.sessionLabel}`,
-    `M15 close: ${fmtPrice(s.close)}`,
-    `Box: ${fmtPrice(s.boxLow)} - ${fmtPrice(s.boxHigh)}`,
-    `H4 trend: ${s.trend}`,
-    `VWAP: ${fmtPrice(s.vwap)}`,
+    `${s.symbol} — ${direction}`,
+    `时段：${s.sessionLabel}`,
+    `突破收盘：${fmtPrice(s.close)}`,
     '',
-    `🎯 Entry: ~${fmtPrice(s.entry)}`,
-    `🛑 SL: ${fmtPrice(s.stop)}`,
-    `✅ TP1: ${fmtPrice(s.side === 'LONG' ? s.entry + Math.abs(s.entry - s.stop) : s.entry - Math.abs(s.entry - s.stop))} (1.0R)`,
-    `✅ TP2: ${fmtPrice(s.side === 'LONG' ? s.entry + 2 * Math.abs(s.entry - s.stop) : s.entry - 2 * Math.abs(s.entry - s.stop))} (2.0R)`,
-    Number.isFinite(s.riskUsd) ? `Risk: ${(RISK_PCT * 100).toFixed(1)}% (~$${s.riskUsd.toFixed(2)})` : null,
+    '条件：突破 ✅  VWAP ✅  H4 ✅',
     '',
-    `Confirmed M15 close: ${sgtTime(s.candleCloseTime)} SGT`,
-    `Data: ${s.provider}`,
-    `Strategy: ${s.strategyVersion || STRATEGY_VERSION}`,
-    ['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol) ? 'Backtest: 2Y tested' : 'Backtest: not yet validated',
-    'Mode: SIGNAL ONLY'
+    `进场：约 ${fmtPrice(s.entry)}`,
+    `止损：${fmtPrice(s.stop)}`,
+    `目标1：${fmtPrice(tp1)}（1R）`,
+    `目标2：${fmtPrice(tp2)}（2R）`,
+    Number.isFinite(s.riskUsd) ? `风险：${(RISK_PCT * 100).toFixed(1)}%（约 ${s.riskUsd.toFixed(2)}）` : null,
+    '',
+    `确认时间：${sgtTime(s.candleCloseTime)} SGT`,
+    '只在刚突破这根 M15 发一次，不追旧突破。'
   ].filter(Boolean).join('\n');
 }
 
