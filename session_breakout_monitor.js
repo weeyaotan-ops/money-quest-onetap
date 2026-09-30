@@ -245,8 +245,8 @@ function ema50Bias(candles4h) {
   }
   const close = Number(xs[xs.length - 1].close);
   const slope = ema - prev;
-  if (close > ema && slope > 0) return { bias: 'BULLISH', ema50: ema, slope, close };
-  if (close < ema && slope < 0) return { bias: 'BEARISH', ema50: ema, slope, close };
+  if (close > ema) return { bias: 'BULLISH', ema50: ema, slope, close };
+  if (close < ema) return { bias: 'BEARISH', ema50: ema, slope, close };
   return { bias: 'FLAT', ema50: ema, slope, close };
 }
 
@@ -406,6 +406,147 @@ function evaluateWatch(snapshotData, sessionId, now = Date.now()) {
   };
 }
 
+
+function rawBreakoutEvent(snapshotData, sessionId, now = Date.now()) {
+  const session = resolveSession(snapshotData, sessionId);
+  if (!session) return null;
+  const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
+  const latest = c15[c15.length - 1];
+  const previous = c15[c15.length - 2];
+  if (!latest || !previous) return null;
+
+  const expectedClose = latest.openTime + M15_MS;
+  const age = now - expectedClose;
+  if (age < -60000 || age > MAX_SIGNAL_AGE_MS) return null;
+
+  const box = sessionBox(c15, latest.openTime, session);
+  if (!box || latest.openTime < box.activeFrom || latest.openTime >= box.activeUntil) return null;
+
+  const close = Number(latest.close);
+  const prevClose = Number(previous.close);
+  let side = null;
+  if (close > box.high && prevClose <= box.high) side = 'LONG';
+  if (close < box.low && prevClose >= box.low) side = 'SHORT';
+  if (!side) return null;
+
+  const vwap = dailyVwap(c15, latest.openTime);
+  const trend = ema50Bias(snapshotData.candles4h);
+  if (!Number.isFinite(vwap) || !Number.isFinite(trend.ema50)) return null;
+
+  const vwapPass = side === 'LONG' ? close > vwap : close < vwap;
+  const h4Pass = side === 'LONG' ? trend.bias === 'BULLISH' : trend.bias === 'BEARISH';
+  const entry = close;
+  const stop = side === 'LONG' ? box.low : box.high;
+  const riskDistance = Math.abs(entry - stop);
+  if (!(riskDistance > 0)) return null;
+
+  return {
+    key: `SHADOW|${snapshotData.symbol}|${session.id}|${box.date}|${latest.openTime}|${side}`,
+    symbol: snapshotData.symbol,
+    provider: snapshotData.provider,
+    session: session.id,
+    sessionLabel: session.label,
+    side,
+    candleOpenTime: latest.openTime,
+    candleCloseTime: expectedClose,
+    entry,
+    stop,
+    boxHigh: box.high,
+    boxLow: box.low,
+    vwap,
+    h4Bias: trend.bias,
+    h4Ema50: trend.ema50,
+    emaSlope: trend.slope,
+    vwapPass,
+    h4Pass,
+    liveQualified: vwapPass && h4Pass,
+    blockedBy: [
+      ...(vwapPass ? [] : ['VWAP']),
+      ...(h4Pass ? [] : ['H4_EMA50'])
+    ]
+  };
+}
+
+function shadowTradeFromBreakout(event) {
+  const t = tradeFromSignal(event);
+  t.shadow = true;
+  t.filters = {
+    vwapPass: Boolean(event.vwapPass),
+    h4Pass: Boolean(event.h4Pass),
+    liveQualified: Boolean(event.liveQualified)
+  };
+  t.blockedBy = [...(event.blockedBy || [])];
+  t.context = {
+    boxHigh: Number(event.boxHigh),
+    boxLow: Number(event.boxLow),
+    vwap: Number(event.vwap),
+    h4Bias: event.h4Bias,
+    h4Ema50: Number(event.h4Ema50),
+    emaSlope: Number(event.emaSlope)
+  };
+  return t;
+}
+
+function captureShadowBreakouts(state, snaps, now = Date.now()) {
+  state = normalizeState(state);
+  let added = 0;
+  for (const snap of snaps || []) {
+    for (const sessionId of SESSION_IDS) {
+      const event = rawBreakoutEvent(snap, sessionId, now);
+      if (!event || state.shadow[event.key]) continue;
+      state.shadow[event.key] = shadowTradeFromBreakout(event);
+      added += 1;
+    }
+  }
+  return added;
+}
+
+function trackShadowTrades(state, snaps) {
+  state = normalizeState(state);
+  const bySymbol = Object.fromEntries((snaps || []).map(s => [s.symbol, s]));
+  let changed = false;
+  for (const trade of Object.values(state.shadow || {})) {
+    const snap = bySymbol[trade.symbol];
+    if (!snap) continue;
+    if (updateTradeFromCandles(trade, snap.candles15m || [])) changed = true;
+  }
+  return changed;
+}
+
+function pruneShadow(state) {
+  const cutoff = Date.now() - 365 * 24 * HOUR_MS;
+  const entries = Object.entries(state.shadow || {})
+    .sort((a,b) => Number(b[1]?.signalAtMs || 0) - Number(a[1]?.signalAtMs || 0));
+  const keep = new Set(entries
+    .filter(([,t], idx) => idx < 10000 && Number(t?.signalAtMs || 0) >= cutoff)
+    .map(([k]) => k));
+  for (const key of Object.keys(state.shadow || {})) if (!keep.has(key)) delete state.shadow[key];
+}
+
+function summarizeShadowTrades(trades) {
+  const xs = trades || [];
+  return {
+    n: xs.length,
+    tp1: xs.filter(t => t.milestones?.tp1?.hit).length,
+    tp2: xs.filter(t => t.milestones?.tp2?.hit).length,
+    sl: xs.filter(t => t.milestones?.sl?.hit).length,
+    open: xs.filter(t => !t.terminal).length,
+    ambiguous: xs.filter(t => String(t.status || '').includes('SAME_M15')).length
+  };
+}
+
+function shadowSummary(state) {
+  state = normalizeState(state);
+  const all = Object.values(state.shadow || {});
+  return {
+    raw: summarizeShadowTrades(all),
+    vwapOnly: summarizeShadowTrades(all.filter(t => t.filters?.vwapPass)),
+    h4Only: summarizeShadowTrades(all.filter(t => t.filters?.h4Pass)),
+    both: summarizeShadowTrades(all.filter(t => t.filters?.liveQualified)),
+    blocked: summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified))
+  };
+}
+
 function buildWatchMessage(w) {
   const arrow = w.side === 'LONG' ? 'ABOVE' : 'BELOW';
   return [
@@ -465,6 +606,7 @@ function normalizeState(parsed) {
   const state = parsed && typeof parsed === 'object' ? parsed : {};
   if (!state.sent || typeof state.sent !== 'object') state.sent = {};
   if (!state.trades || typeof state.trades !== 'object') state.trades = {};
+  if (!state.shadow || typeof state.shadow !== 'object') state.shadow = {};
   return state;
 }
 
@@ -653,6 +795,7 @@ function saveState(state) {
     if (!v || Number(v.atMs || 0) < cutoff) delete state.sent[k];
   }
   pruneTrades(state);
+  pruneShadow(state);
   const tmp = STATE_PATH + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, STATE_PATH);
@@ -678,7 +821,9 @@ async function cycle() {
   }
 
   const outcomeChanged = trackTrades(state, snaps);
-  if (outcomeChanged) saveState(state);
+  const shadowAdded = captureShadowBreakouts(state, snaps, now);
+  const shadowChanged = trackShadowTrades(state, snaps);
+  if (outcomeChanged || shadowAdded || shadowChanged) saveState(state);
 
   const signals = [];
   const watches = [];
@@ -732,7 +877,9 @@ async function cycle() {
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     watches: watches.map(w => ({ symbol: w.symbol, session: w.session, side: w.side, current: w.current, trigger: w.trigger })),
     candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend })),
-    results: resultSummary(state)
+    results: resultSummary(state),
+    shadowAdded,
+    shadow: shadowSummary(state)
   }));
 
   saveState(state);
@@ -811,4 +958,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, mapBinanceKlines, tradeFromSignal, updateTradeFromCandles, resultSummary };
+module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, rawBreakoutEvent, shadowTradeFromBreakout, captureShadowBreakouts, trackShadowTrades, shadowSummary, mapBinanceKlines, tradeFromSignal, updateTradeFromCandles, resultSummary };
