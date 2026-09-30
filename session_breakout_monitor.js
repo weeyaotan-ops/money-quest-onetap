@@ -538,12 +538,40 @@ function summarizeShadowTrades(trades) {
 function shadowSummary(state) {
   state = normalizeState(state);
   const all = Object.values(state.shadow || {});
+
+  function cohort(xs) {
+    return {
+      raw: summarizeShadowTrades(xs),
+      both: summarizeShadowTrades(xs.filter(t => t.filters?.liveQualified)),
+      blocked: summarizeShadowTrades(xs.filter(t => !t.filters?.liveQualified))
+    };
+  }
+
+  function grouped(keyFn) {
+    const groups = {};
+    for (const trade of all) {
+      const key = String(keyFn(trade) || 'UNKNOWN');
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(trade);
+    }
+    return Object.fromEntries(
+      Object.entries(groups)
+        .sort((a,b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+        .map(([key, xs]) => [key, cohort(xs)])
+    );
+  }
+
   return {
+    mode: 'OBSERVATIONAL_ONLY',
     raw: summarizeShadowTrades(all),
     vwapOnly: summarizeShadowTrades(all.filter(t => t.filters?.vwapPass)),
     h4Only: summarizeShadowTrades(all.filter(t => t.filters?.h4Pass)),
     both: summarizeShadowTrades(all.filter(t => t.filters?.liveQualified)),
-    blocked: summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified))
+    blocked: summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified)),
+    bySymbol: grouped(t => t.symbol),
+    bySession: grouped(t => t.sessionLabel || t.session),
+    bySide: grouped(t => t.side),
+    bySymbolSession: grouped(t => `${t.symbol}|${t.sessionLabel || t.session}`)
   };
 }
 
@@ -909,7 +937,12 @@ function startHealthServer() {
   http.createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ...health, engine: 'Session Breakout Monitor V1', mode: 'SIGNAL_ONLY' }));
+      res.end(JSON.stringify({ ...health, engine: 'Session Breakout Monitor V1', mode: 'SIGNAL_ONLY', shadowLab: 'OBSERVATIONAL_ONLY' }));
+      return;
+    }
+    if (req.url === '/shadow') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(shadowSummary(loadState()), null, 2));
       return;
     }
     res.writeHead(200, { 'content-type': 'text/plain' });

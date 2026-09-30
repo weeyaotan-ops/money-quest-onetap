@@ -201,12 +201,18 @@ function trend4h(end, bearish = false) {
     c: mk('c', false, true, 'SL')
   }};
   const sum = shadowSummary(state);
+  assert.strictEqual(sum.mode, 'OBSERVATIONAL_ONLY');
   assert.strictEqual(sum.raw.n, 3);
   assert.strictEqual(sum.vwapOnly.n, 2);
   assert.strictEqual(sum.h4Only.n, 2);
   assert.strictEqual(sum.both.n, 1);
   assert.strictEqual(sum.both.tp2, 1);
   assert.strictEqual(sum.blocked.n, 2);
+  assert.strictEqual(sum.bySymbol.TEST.raw.n, 3);
+  assert.strictEqual(sum.bySymbol.TEST.both.n, 1);
+  assert.strictEqual(sum.bySession.London.blocked.n, 2);
+  assert.strictEqual(sum.bySide.LONG.raw.n, 3);
+  assert.strictEqual(sum.bySymbolSession['TEST|London'].both.tp2, 1);
 })();
 
 console.log('session_breakout_monitor tests: PASS');
