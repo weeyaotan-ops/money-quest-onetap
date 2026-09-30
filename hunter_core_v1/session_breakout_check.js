@@ -186,11 +186,46 @@ function phaseWithoutBox(latestOpen, session) {
   return 'OFF_SESSION';
 }
 
+function findLatestFreshBreakout(candles, box, side, latestOpen) {
+  const xs = [...(candles || [])].sort((a,b) => a.openTime - b.openTime);
+  let found = null;
+  for (let i = 1; i < xs.length; i += 1) {
+    const cur = xs[i];
+    const prev = xs[i - 1];
+    if (cur.openTime < box.activeFrom || cur.openTime > latestOpen) continue;
+    const cc = Number(cur.close);
+    const pc = Number(prev.close);
+    const crossed = side === 'LONG'
+      ? cc > box.high && pc <= box.high
+      : cc < box.low && pc >= box.low;
+    if (crossed) {
+      found = {
+        entry: cc,
+        openTime: cur.openTime,
+        closeTime: cur.openTime + M15_MS
+      };
+    }
+  }
+  return found;
+}
+
+function tradeLevels(side, entry, box) {
+  const stop = side === 'LONG' ? box.low : box.high;
+  const risk = Math.abs(entry - stop);
+  return {
+    stop,
+    risk,
+    tp1: side === 'LONG' ? entry + risk : entry - risk,
+    tp2: side === 'LONG' ? entry + 2 * risk : entry - 2 * risk
+  };
+}
+
 function inspectSession(snap, id, now = Date.now()) {
   const session = resolveSession(snap, id);
   const c15 = [...(snap.candles15m || [])].sort((a,b) => a.openTime - b.openTime);
   const latest = c15.at(-1);
-  if (!session || !latest) return null;
+  const previous = c15.at(-2);
+  if (!session || !latest || !previous) return null;
 
   const closeTime = latest.openTime + M15_MS;
   const age = now - closeTime;
@@ -239,15 +274,66 @@ function inspectSession(snap, id, now = Date.now()) {
   else if (current < box.low) breakoutSide = 'SHORT';
 
   if (breakoutSide) {
+    const prevClose = Number(previous.close);
+    const fresh = breakoutSide === 'LONG' ? prevClose <= box.high : prevClose >= box.low;
     const vwapPass = breakoutSide === 'LONG' ? current > vwap : current < vwap;
     const h4Pass = breakoutSide === 'LONG' ? h4.bias === 'BULLISH' : h4.bias === 'BEARISH';
-    if (vwapPass && h4Pass) {
-      return { ...base, status: 'SIGNAL', side: breakoutSide, reason: 'All confirmations passed' };
-    }
     const failed = [];
     if (!vwapPass) failed.push('VWAP');
     if (!h4Pass) failed.push('H4 EMA50');
-    return { ...base, status: 'BLOCKED', side: breakoutSide, reason: failed.join(' + ') || 'Filter mismatch' };
+
+    if (fresh) {
+      const lv = tradeLevels(breakoutSide, current, box);
+      if (vwapPass && h4Pass) {
+        return {
+          ...base,
+          status: 'SIGNAL',
+          side: breakoutSide,
+          fresh: true,
+          entry: current,
+          stop: lv.stop,
+          tp1: lv.tp1,
+          tp2: lv.tp2,
+          breakoutTime: closeTime,
+          moveR: 0,
+          reason: '刚刚第一次收破 Box，条件全部通过'
+        };
+      }
+      return {
+        ...base,
+        status: 'BLOCKED',
+        side: breakoutSide,
+        fresh: true,
+        entry: current,
+        breakoutTime: closeTime,
+        reason: failed.join(' + ') || '条件不同向'
+      };
+    }
+
+    const first = findLatestFreshBreakout(c15, box, breakoutSide, latest.openTime);
+    const entry = Number(first?.entry);
+    const lv = Number.isFinite(entry) ? tradeLevels(breakoutSide, entry, box) : null;
+    const moveR = lv && lv.risk > 0
+      ? (breakoutSide === 'LONG' ? current - entry : entry - current) / lv.risk
+      : null;
+    const status = Number.isFinite(moveR) && moveR >= 0.5 ? 'EXTENDED' : 'ACTIVE';
+
+    return {
+      ...base,
+      status,
+      side: breakoutSide,
+      fresh: false,
+      entry: Number.isFinite(entry) ? entry : null,
+      stop: lv?.stop ?? null,
+      tp1: lv?.tp1 ?? null,
+      tp2: lv?.tp2 ?? null,
+      breakoutTime: first?.closeTime ?? null,
+      moveR,
+      filtersPass: vwapPass && h4Pass,
+      reason: vwapPass && h4Pass
+        ? '之前已经突破，不是新的进场'
+        : `之前已经突破；现在 ${failed.join(' + ')} 不同向`
+    };
   }
 
   let side = null;
@@ -270,8 +356,10 @@ function inspectSession(snap, id, now = Date.now()) {
 }
 
 const STATUS_PRIORITY = {
-  SIGNAL: 8,
-  BLOCKED: 7,
+  SIGNAL: 10,
+  BLOCKED: 9,
+  EXTENDED: 8,
+  ACTIVE: 7,
   NEAR: 6,
   BUILDING_BOX: 5,
   WAITING: 4,
@@ -336,6 +424,8 @@ async function checkAll() {
   for (const e of errors) markets.push({ symbol: e.symbol, provider: e.provider, status: 'DATA_ERROR', reason: e.error, core: CORE.has(e.symbol) });
 
   const signals = sessionRows.filter(x => x.status === 'SIGNAL');
+  const active = sessionRows.filter(x => x.status === 'ACTIVE');
+  const extended = sessionRows.filter(x => x.status === 'EXTENDED');
   const watches = sessionRows.filter(x => x.status === 'NEAR').sort((a,b) => (a.boxFraction ?? 9) - (b.boxFraction ?? 9));
   const blocked = sessionRows.filter(x => x.status === 'BLOCKED');
   const latestTimes = all.map(s => s.candles15m.at(-1)?.openTime + M15_MS).filter(Number.isFinite);
@@ -350,6 +440,8 @@ async function checkAll() {
     markets,
     sessionRows,
     signals,
+    active,
+    extended,
     watches,
     blocked,
     latestClose: latestTimes.length ? Math.max(...latestTimes) : null,
@@ -373,88 +465,122 @@ function shortSymbol(symbol) { return String(symbol).replace(/USDT$/,''); }
 
 function statusIcon(status) {
   return {
-    SIGNAL: '🟢', NEAR: '🟡', BLOCKED: '🟠', BUILDING_BOX: '🟣',
-    WAITING: '⚪', STALE: '🔴', DATA_ERROR: '🔴', SESSION_DONE: '🌙', OFF_SESSION: '🌙'
+    SIGNAL: '🟢', ACTIVE: '🟡', EXTENDED: '🟠', NEAR: '👀', BLOCKED: '⛔',
+    BUILDING_BOX: '🟣', WAITING: '⚪', STALE: '🔴', DATA_ERROR: '🔴',
+    SESSION_DONE: '🌙', OFF_SESSION: '🌙'
   }[status] || '⚪';
 }
 
+function sideCn(side) { return side === 'LONG' ? '做多' : side === 'SHORT' ? '做空' : ''; }
+
 function statusLabel(x) {
-  if (!x) return 'UNKNOWN';
-  if (x.status === 'SIGNAL') return `${x.side} SIGNAL`;
-  if (x.status === 'NEAR') return `${x.side} NEAR`;
-  if (x.status === 'BLOCKED') return `${x.side} BLOCKED`;
-  if (x.status === 'BUILDING_BOX') return 'BUILDING BOX';
-  if (x.status === 'WAITING') return 'WAITING';
-  if (x.status === 'STALE') return 'STALE DATA';
-  if (x.status === 'DATA_ERROR') return 'DATA ERROR';
-  return 'OFF SESSION';
+  if (!x) return '未知';
+  if (x.status === 'SIGNAL') return `${sideCn(x.side)} · 刚确认`;
+  if (x.status === 'ACTIVE') return `${sideCn(x.side)} · 已突破`;
+  if (x.status === 'EXTENDED') return `${sideCn(x.side)} · 已走远`;
+  if (x.status === 'NEAR') return `${sideCn(x.side)} · 接近触发`;
+  if (x.status === 'BLOCKED') return `${sideCn(x.side)} · 被条件挡掉`;
+  if (x.status === 'BUILDING_BOX') return '正在形成 Box';
+  if (x.status === 'WAITING') return '等待';
+  if (x.status === 'STALE') return '数据过旧';
+  if (x.status === 'DATA_ERROR') return '数据错误';
+  return '时段已结束';
 }
 
 function formatNow(r) {
-  const lines = ['🚨 NOW', ''];
+  const lines = ['🚨 现在', ''];
+
   if (r.signals.length) {
-    lines.push('✅ VALID');
-    for (const s of r.signals.slice(0, 8)) lines.push(`${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} ${s.side} · ${s.session} · close ${p(s.current, s.symbol)}`);
+    lines.push('✅ 刚确认，可以看');
+    for (const s of r.signals.slice(0, 6)) {
+      lines.push(
+        `${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} — ${sideCn(s.side)}`,
+        `进场约 ${p(s.entry, s.symbol)} · 止损 ${p(s.stop, s.symbol)}`,
+        `1R ${p(s.tp1, s.symbol)} · 2R ${p(s.tp2, s.symbol)}`,
+        `确认时间 ${sgt(s.breakoutTime)} SGT`,
+        ''
+      );
+    }
   } else {
-    lines.push('⚪ No confirmed entry now.');
+    lines.push('⚪ 现在没有新的确认信号');
+  }
+
+  const old = [...(r.extended || []), ...(r.active || [])].slice(0, 6);
+  if (old.length) {
+    lines.push('⏳ 已经突破，但不是新进场');
+    for (const x of old) {
+      const moved = Number.isFinite(x.moveR) ? ` · 已走 ${x.moveR >= 0 ? '+' : ''}${x.moveR.toFixed(2)}R` : '';
+      lines.push(`${x.symbol} ${sideCn(x.side)} · 突破 ${x.breakoutTime ? sgt(x.breakoutTime) : '较早'}${moved} · 不追`);
+    }
   }
 
   const near = (r.watches || []).slice(0, 4);
   if (near.length) {
-    lines.push('', '🟡 NEAR');
-    for (const w of near) lines.push(`${w.symbol} ${w.side} · need M15 close ${w.side === 'LONG' ? '>' : '<'} ${p(w.trigger, w.symbol)}`);
+    lines.push('', '👀 接近触发');
+    for (const w of near) {
+      lines.push(`${w.symbol} ${sideCn(w.side)} · 等 M15 收在 ${w.side === 'LONG' ? '>' : '<'} ${p(w.trigger, w.symbol)}`);
+    }
   }
 
   const blocked = (r.blocked || []).slice(0, 4);
   if (blocked.length) {
-    lines.push('', '🟠 BLOCKED');
-    for (const b of blocked) lines.push(`${b.symbol} ${b.side} · ${b.reason}`);
+    lines.push('', '⛔ 刚突破但条件没过');
+    for (const b of blocked) lines.push(`${b.symbol} ${sideCn(b.side)} · ${b.reason}`);
   }
 
-  lines.push('', `Next M15 check ~ ${sgt(r.nextScan)} SGT`);
+  lines.push('', `下次检查约 ${sgt(r.nextScan)} SGT`);
   return lines.join('\n');
 }
 
 function formatWhy(r) {
   const rows = (r.markets || []).filter(x => !['SIGNAL','OFF_SESSION','SESSION_DONE'].includes(x.status));
-  const lines = ['❓ WHY NO SIGNAL', ''];
-  if (!rows.length) return lines.concat('Nothing active right now.').join('\n');
+  const lines = ['❓ 为什么没单', ''];
+  if (!rows.length) return lines.concat('现在没有需要特别看的市场。').join('\n');
+
   for (const x of rows.slice(0, 12)) {
-    if (x.status === 'BLOCKED') lines.push(`🟠 ${x.symbol} ${x.side}: breakout happened, blocked by ${x.reason}.`);
-    else if (x.status === 'NEAR') lines.push(`🟡 ${x.symbol} ${x.side}: filters agree, waiting M15 close through ${p(x.trigger, x.symbol)}.`);
-    else if (x.status === 'BUILDING_BOX') lines.push(`🟣 ${x.symbol}: building the first 30-min box.`);
-    else if (x.status === 'WAITING') lines.push(`⚪ ${x.symbol}: ${x.reason || 'no breakout yet'}.`);
-    else if (x.status === 'STALE' || x.status === 'DATA_ERROR') lines.push(`🔴 ${x.symbol}: ${x.status === 'STALE' ? 'feed is stale' : 'feed error'}.`);
+    if (x.status === 'ACTIVE') lines.push(`🟡 ${x.symbol}：已经突破，但不是刚突破；不追。`);
+    else if (x.status === 'EXTENDED') lines.push(`🟠 ${x.symbol}：已经走远${Number.isFinite(x.moveR) ? ` ${x.moveR.toFixed(2)}R` : ''}；不追。`);
+    else if (x.status === 'BLOCKED') lines.push(`⛔ ${x.symbol}：刚突破，但 ${x.reason}。`);
+    else if (x.status === 'NEAR') lines.push(`👀 ${x.symbol}：方向条件对，只差 M15 收破 ${p(x.trigger, x.symbol)}。`);
+    else if (x.status === 'BUILDING_BOX') lines.push(`🟣 ${x.symbol}：还在做前30分钟 Box。`);
+    else if (x.status === 'WAITING') lines.push(`⚪ ${x.symbol}：还没突破。`);
+    else if (x.status === 'STALE' || x.status === 'DATA_ERROR') lines.push(`🔴 ${x.symbol}：数据有问题，系统不会发单。`);
   }
   return lines.join('\n');
 }
 
 function formatMarketBoard(r) {
-  const lines = ['🌍 MARKET BOARD', ''];
+  const lines = ['🌍 市场状态', ''];
   const core = (r.markets || []).filter(x => x.core);
   const test = (r.markets || []).filter(x => !x.core);
 
-  lines.push('CORE');
-  for (const x of core) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}${x.session && !['OFF_SESSION','SESSION_DONE'].includes(x.status) ? ` · ${x.session}` : ''}`);
+  lines.push('重点');
+  for (const x of core) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}`);
 
-  lines.push('', 'TEST / MONITOR');
-  for (const x of test) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}${x.status === 'BLOCKED' ? ` · ${x.reason}` : ''}`);
+  lines.push('', '观察中');
+  for (const x of test) lines.push(`${statusIcon(x.status)} ${shortSymbol(x.symbol)} · ${statusLabel(x)}`);
 
-  lines.push('', 'CORE = BTC / ETH / SOL validated set. Others are monitoring/test until equally validated.');
+  lines.push('', '重点 = BTC / ETH / SOL。其他市场先观察和收集成绩。');
   return lines.join('\n');
 }
 
 function formatLevels(r) {
   const active = (r.markets || [])
-    .filter(x => ['SIGNAL','BLOCKED','NEAR','WAITING'].includes(x.status) && Number.isFinite(x.boxHigh) && Number.isFinite(x.boxLow))
+    .filter(x => ['SIGNAL','ACTIVE','EXTENDED','BLOCKED','NEAR','WAITING'].includes(x.status) && Number.isFinite(x.boxHigh) && Number.isFinite(x.boxLow))
     .sort((a,b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))
     .slice(0, 8);
-  const lines = ['👀 KEY LEVELS', ''];
-  if (!active.length) return lines.concat('No active session box right now.', 'Wait for the next session / M15 close.').join('\n');
+
+  const lines = ['👀 关键价位', ''];
+  if (!active.length) return lines.concat('现在没有正在进行的 Session Box。').join('\n');
+
   for (const x of active) {
-    lines.push(`${statusIcon(x.status)} ${x.symbol} · ${x.session}`, `Box H ${p(x.boxHigh, x.symbol)} · L ${p(x.boxLow, x.symbol)} · Now ${p(x.current, x.symbol)}`);
-    if (x.status === 'NEAR') lines.push(`Trigger: M15 close ${x.side === 'LONG' ? '>' : '<'} ${p(x.trigger, x.symbol)}`);
-    if (x.status === 'BLOCKED') lines.push(`Blocked by: ${x.reason}`);
+    lines.push(
+      `${statusIcon(x.status)} ${x.symbol} · ${x.session}`,
+      `Box 上 ${p(x.boxHigh, x.symbol)} · 下 ${p(x.boxLow, x.symbol)} · 现在 ${p(x.current, x.symbol)}`
+    );
+    if (x.status === 'NEAR') lines.push(`触发：M15 收在 ${x.side === 'LONG' ? '>' : '<'} ${p(x.trigger, x.symbol)}`);
+    if (x.status === 'ACTIVE' || x.status === 'EXTENDED') lines.push('状态：已经突破，不是新进场');
+    if (x.status === 'BLOCKED') lines.push(`被挡：${x.reason}`);
     lines.push('');
   }
   return lines.join('\n').trim();
@@ -465,19 +591,21 @@ function formatSystem(r) {
   const dataErrors = (r.markets || []).filter(x => x.status === 'DATA_ERROR').length;
   const healthy = r.cryptoOk === r.cryptoTotal && r.fxOk === r.fxTotal && stale === 0 && dataErrors === 0;
   const latestAgeMin = r.latestClose ? Math.max(0, (r.now - r.latestClose) / 60000) : null;
+
   return [
-    '📡 SYSTEM',
+    '📡 系统',
     '',
-    `${healthy ? '🟢' : '🟠'} Self-check: ${healthy ? 'HEALTHY' : 'ATTENTION'}`,
-    `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto feed: ${r.cryptoOk}/${r.cryptoTotal}`,
-    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex feed: ${r.fxOk}/${r.fxTotal}`,
-    stale ? `🔴 Stale markets: ${stale}` : '🟢 Stale markets: 0',
-    dataErrors ? `🔴 Data errors: ${dataErrors}` : '🟢 Data errors: 0',
-    r.latestClose ? `Latest M15 close: ${sgt(r.latestClose)} SGT (${latestAgeMin.toFixed(1)}m ago)` : null,
-    `Next scan: ~${sgt(r.nextScan)} SGT`,
+    `${healthy ? '🟢' : '🟠'} 状态：${healthy ? '正常' : '需要注意'}`,
+    `Crypto 数据：${r.cryptoOk}/${r.cryptoTotal}`,
+    `黄金/Forex 数据：${r.fxOk}/${r.fxTotal}`,
+    stale ? `🔴 过旧数据：${stale}` : '🟢 过旧数据：0',
+    dataErrors ? `🔴 数据错误：${dataErrors}` : '🟢 数据错误：0',
+    r.latestClose ? `最新 M15：${sgt(r.latestClose)} SGT（${latestAgeMin.toFixed(1)}分钟前）` : null,
+    `下次检查：约 ${sgt(r.nextScan)} SGT`,
     '',
-    'Rule: M15 box close breakout + VWAP + H4 price vs EMA50',
-    'Mode: SIGNAL ONLY'
+    '规则：前30分钟 Box → 刚收破 → VWAP 同向 → H4 EMA50 同向',
+    '旧突破不会再当新进场。',
+    '模式：只发信号，不自动下单'
   ].filter(Boolean).join('\n');
 }
 
