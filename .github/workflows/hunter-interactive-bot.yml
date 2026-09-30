@@ -42,6 +42,7 @@ jobs:
       - name: Syntax and analyst tests
         run: |
           node --check hunter_core_v1/interactive_bot.js
+          node --check hunter_core_v1/session_breakout_check.js
           node --check hunter_core_v1/journal.js
           node --check hunter_core_v1/advisor.js
           node test/hunter_journal.test.js
@@ -53,4 +54,8 @@ jobs:
           HUNTER_STATE_PATH: ".hunter_state/state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BREAKOUT_CRYPTO_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT
+          FX_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
+          OANDA_API_BASE: https://api-fxpractice.oanda.com
+          OANDA_TOKEN: ${{ secrets.OANDA_TOKEN }}
         run: node hunter_core_v1/interactive_bot.js
