@@ -22,8 +22,16 @@ function shadowTradeMap(state) {
   return out;
 }
 
+function vwapPassed(t) {
+  return Boolean(t?.vwapPass ?? t?.filters?.vwapPass);
+}
+
+function h4Passed(t) {
+  return Boolean(t?.h4Pass ?? t?.filters?.h4Pass);
+}
+
 function isLiveQualified(t) {
-  return Boolean(t?.fullPass || t?.filters?.liveQualified);
+  return Boolean(t?.fullPass ?? t?.filters?.liveQualified);
 }
 
 function tradeFromCandidate(c) {
@@ -177,14 +185,14 @@ function groupStats(trades, keyFn) {
 function summary(state, opts = {}) {
   const firstOnly = opts.firstOnly !== false;
   const all = Object.values(shadowTradeMap(state));
-  const xs = firstOnly ? all.filter(t => t.firstBreakout) : all;
-  const fullPass = xs.filter(t => t.fullPass);
-  const filteredOut = xs.filter(t => !t.fullPass);
+  const xs = firstOnly ? all.filter(t => t.firstBreakout !== false) : all;
+  const fullPass = xs.filter(isLiveQualified);
+  const filteredOut = xs.filter(t => !isLiveQualified(t));
   return {
     firstOnly,
     raw: stats(xs),
-    vwapPass: stats(xs.filter(t => t.vwapPass)),
-    h4Pass: stats(xs.filter(t => t.h4Pass)),
+    vwapPass: stats(xs.filter(vwapPassed)),
+    h4Pass: stats(xs.filter(h4Passed)),
     fullPass: stats(fullPass),
     filteredOut: stats(filteredOut),
     bySymbol: groupStats(xs, t => t.symbol),
@@ -430,6 +438,9 @@ function prune(state, now = Date.now()) {
 module.exports = {
   ensureShadow,
   shadowTradeMap,
+  vwapPassed,
+  h4Passed,
+  isLiveQualified,
   registerCandidate,
   updateTrade,
   trackAll,
