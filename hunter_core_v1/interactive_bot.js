@@ -11,7 +11,7 @@ const {
   watchPlan,
   marketSynthesis
 } = require('./advisor');
-const { checkAll: checkBreakouts, formatCheck: formatBreakoutCheck } = require('./session_breakout_check');
+const { checkAll: checkBreakouts, formatNow, formatLevels, formatSystem } = require('./session_breakout_check');
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -77,28 +77,34 @@ function providerText(data) {
 function mainKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: '🚨 NOW', callback_data: 'now' }],
+      [{ text: '👀 KEY LEVELS', callback_data: 'levels' }],
       [
-        { text: '📡 Breakout Check', callback_data: 'breakout_check' }
+        { text: '📡 SYSTEM', callback_data: 'system' },
+        { text: '📊 RESULTS', callback_data: 'performance' }
       ],
+      [{ text: '⋯ MORE', callback_data: 'more' }]
+    ]
+  };
+}
+
+function moreKeyboard() {
+  return {
+    inline_keyboard: [
       [
         { text: '🧠 Analyst', callback_data: 'analyst' },
-        { text: '🎯 Best Now', callback_data: 'best' }
+        { text: '🎯 Best', callback_data: 'best' }
       ],
       [
-        { text: '🌍 Market', callback_data: 'overview' }
+        { text: '🌍 Market', callback_data: 'overview' },
+        { text: '📌 Active', callback_data: 'active' }
       ],
       [
         { text: 'BTC', callback_data: 'asset:BTCUSDT' },
         { text: 'ETH', callback_data: 'asset:ETHUSDT' },
         { text: 'SOL', callback_data: 'asset:SOLUSDT' }
       ],
-      [
-        { text: '📌 Active', callback_data: 'active' },
-        { text: '📊 Performance', callback_data: 'performance' }
-      ],
-      [
-        { text: '⚙️ Status', callback_data: 'status' }
-      ]
+      [{ text: '🏠 Home', callback_data: 'start' }]
     ]
   };
 }
@@ -136,10 +142,14 @@ function backKeyboard() {
   return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
 }
 
-function breakoutKeyboard() {
+function simpleKeyboard(refreshAction) {
   return {
     inline_keyboard: [
-      [{ text: '🔄 Check Again', callback_data: 'breakout_check' }],
+      [{ text: '🔄 Refresh', callback_data: refreshAction }],
+      [
+        { text: '🚨 NOW', callback_data: 'now' },
+        { text: '👀 LEVELS', callback_data: 'levels' }
+      ],
       [{ text: '🏠 Home', callback_data: 'start' }]
     ]
   };
@@ -487,26 +497,33 @@ async function showMenu() {
   await send([
     'HUNTER',
     '',
-    '📡 Breakout Check = verify feeds + latest setup now',
-    '🧠 Analyst = whole-market answer',
-    '🎯 Best Now = strongest setup',
-    '🌍 Market = all 3 at a glance',
-    '📌 Active = open setup tracking',
-    '📊 Performance = real forward results'
+    '🚨 NOW = 有没有可以做的',
+    '👀 KEY LEVELS = 现在最需要盯的价位',
+    '📡 SYSTEM = 数据有没有正常',
+    '📊 RESULTS = 实际结果',
+    '',
+    '没有确认 = 不进。'
   ].join('\n'), mainKeyboard());
 }
 
 async function handleAction(action, callbackId) {
   await answerCallback(callbackId);
 
-  if (action === 'breakout_check') {
+  if (['now', 'levels', 'system', 'breakout_check'].includes(action)) {
     try {
       const result = await checkBreakouts();
-      await send(formatBreakoutCheck(result), breakoutKeyboard());
+      if (action === 'levels') await send(formatLevels(result), simpleKeyboard('levels'));
+      else if (action === 'system') await send(formatSystem(result), simpleKeyboard('system'));
+      else await send(formatNow(result), simpleKeyboard('now'));
     } catch (err) {
       console.error(JSON.stringify({ ok: false, action, error: err.message }));
-      await send('⚠️ Breakout check failed. Try again in a moment.', breakoutKeyboard());
+      await send('⚠️ Refresh failed. Try again in a moment.', simpleKeyboard(action === 'breakout_check' ? 'now' : action));
     }
+    return;
+  }
+
+  if (action === 'more') {
+    await send('MORE', moreKeyboard());
     return;
   }
 
@@ -565,7 +582,9 @@ function normalizeMessage(text) {
   if (t === '/active' || t === 'active') return 'active';
   if (t === '/performance' || t === 'performance') return 'performance';
   if (t === '/status' || t === 'status') return 'status';
-  if (t === '/check' || t === 'check' || t === '/breakout' || t === 'breakout') return 'breakout_check';
+  if (t === '/check' || t === 'check' || t === '/breakout' || t === 'breakout' || t === '/now' || t === 'now') return 'now';
+  if (t === '/levels' || t === 'levels') return 'levels';
+  if (t === '/system' || t === 'system') return 'system';
   return null;
 }
 
@@ -612,8 +631,10 @@ async function setCommands() {
       { command: 'sol', description: 'SOL' },
       { command: 'active', description: 'Open setup tracking' },
       { command: 'performance', description: 'Forward-test results' },
-      { command: 'status', description: 'System status' },
-      { command: 'check', description: 'Check session breakout monitor now' }
+      { command: 'now', description: 'Confirmed signal now' },
+      { command: 'levels', description: 'Key prices to watch' },
+      { command: 'system', description: 'Feed and scanner status' },
+      { command: 'status', description: 'Legacy Hunter status' }
     ]
   });
 }
