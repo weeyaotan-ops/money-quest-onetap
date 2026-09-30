@@ -1,6 +1,6 @@
-# Hunter v6: TP SL lab + production shadow compatibility
-# Reads the latest session-breakout cache so SIGNAL RECORDS stays current.
-name: Hunter Interactive Telegram Bot
+# Hunter Adaptive V1 Telegram command center
+# Minimal live UI: now, active, records, results, learn, health, system.
+name: Hunter Adaptive Telegram Bot
 
 on:
   push:
@@ -33,41 +33,20 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Restore latest Hunter journal
+      - name: Restore latest Hunter Adaptive state
         uses: actions/cache/restore@v4
         with:
           path: .hunter_state
-          key: hunter-interactive-${{ github.run_id }}
+          key: hunter-adaptive-reader-${{ github.run_id }}
           restore-keys: |
-            hunter-state-
+            hunter-adaptive-state-
 
-      - name: Restore latest breakout results
-        uses: actions/cache/restore@v4
-        with:
-          path: .hunter_state
-          key: breakout-reader-${{ github.run_id }}
-          restore-keys: |
-            session-breakout-state-
+      - name: Validate adaptive bot
+        run: node --check hunter_core_v1/adaptive_bot.js
 
-      - name: Install public market data helper
-        run: npm install --no-save dukascopy-node
-
-      - name: Syntax and analyst tests
-        run: |
-          node --check hunter_core_v1/interactive_bot.js
-          node --check hunter_core_v1/session_breakout_check.js
-          node --check hunter_core_v1/journal.js
-          node --check hunter_core_v1/advisor.js
-          node test/hunter_journal.test.js
-          node test/hunter_advisor.test.js
-          node test/hunter_market_data.test.js
-
-      - name: Run interactive bot
+      - name: Run adaptive bot
         env:
-          HUNTER_STATE_PATH: ".hunter_state/state.json"
-          BREAKOUT_STATE_PATH: ".hunter_state/session_breakout_state.json"
+          HUNTER_ADAPTIVE_STATE_PATH: ".hunter_state/hunter_adaptive_state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          BREAKOUT_CRYPTO_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT
-          FX_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
-        run: node hunter_core_v1/interactive_bot.js
+        run: node hunter_core_v1/adaptive_bot.js
