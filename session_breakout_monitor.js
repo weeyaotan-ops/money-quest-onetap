@@ -355,6 +355,77 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
   };
 }
 
+function evaluateWatch(snapshotData, sessionId, now = Date.now()) {
+  const session = resolveSession(snapshotData, sessionId);
+  if (!session) return null;
+  const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
+  const latest = c15[c15.length - 1];
+  if (!latest) return null;
+
+  const expectedClose = latest.openTime + M15_MS;
+  const age = now - expectedClose;
+  if (age < -60000 || age > MAX_SIGNAL_AGE_MS) return null;
+
+  const box = sessionBox(c15, latest.openTime, session);
+  if (!box || latest.openTime < box.activeFrom || latest.openTime >= box.activeUntil) return null;
+
+  const vwap = dailyVwap(c15, latest.openTime);
+  const trend = ema50Bias(snapshotData.candles4h);
+  const close = Number(latest.close);
+  const width = Number(box.high) - Number(box.low);
+  if (!Number.isFinite(vwap) || !(width > 0)) return null;
+
+  let side = null, trigger = null, invalidation = null, distance = null;
+  if (trend.bias === 'BULLISH' && close > vwap && close <= box.high) {
+    side = 'LONG'; trigger = box.high; invalidation = box.low; distance = box.high - close;
+  } else if (trend.bias === 'BEARISH' && close < vwap && close >= box.low) {
+    side = 'SHORT'; trigger = box.low; invalidation = box.high; distance = close - box.low;
+  } else {
+    return null;
+  }
+
+  const boxFraction = Math.max(0, distance / width);
+  if (boxFraction > 0.20) return null;
+
+  return {
+    key: `WATCH|${snapshotData.symbol}|${session.id}|${box.date}|${side}`,
+    symbol: snapshotData.symbol,
+    provider: snapshotData.provider,
+    session: session.id,
+    sessionLabel: session.label,
+    side,
+    current: close,
+    trigger,
+    invalidation,
+    boxHigh: box.high,
+    boxLow: box.low,
+    vwap,
+    trend: trend.bias,
+    distancePct: close > 0 ? distance / close * 100 : null,
+    candleCloseTime: expectedClose
+  };
+}
+
+function buildWatchMessage(w) {
+  const arrow = w.side === 'LONG' ? 'ABOVE' : 'BELOW';
+  return [
+    '👀 KEY PRICE ALERT',
+    '',
+    `${w.symbol} — ${w.side} BIAS`,
+    `Session: ${w.sessionLabel}`,
+    '',
+    `🔥 WATCH: ${fmtPrice(w.trigger)}`,
+    `Now: ${fmtPrice(w.current)}`,
+    Number.isFinite(w.distancePct) ? `Distance: ${w.distancePct.toFixed(2)}%` : null,
+    '',
+    `WAIT for M15 CLOSE ${arrow} ${fmtPrice(w.trigger)}`,
+    `If confirmed, opposite box side: ${fmtPrice(w.invalidation)}`,
+    '',
+    'NOT AN ENTRY YET',
+    `Data: ${w.provider}`
+  ].filter(Boolean).join('\n');
+}
+
 function buildMessage(s) {
   const icon = s.side === 'LONG' ? '🟢' : '🔴';
   return [
@@ -429,11 +500,30 @@ async function cycle() {
   }
 
   const signals = [];
+  const watches = [];
 
   for (const snap of snaps) {
     for (const sessionId of SESSION_IDS) {
       const signal = evaluate(snap, sessionId, now);
-      if (signal && !state.sent[signal.key]) signals.push(signal);
+      if (signal && !state.sent[signal.key]) {
+        signals.push(signal);
+        continue;
+      }
+      if (!signal) {
+        const watch = evaluateWatch(snap, sessionId, now);
+        if (watch && !state.sent[watch.key]) watches.push(watch);
+      }
+    }
+  }
+
+  for (const w of watches) {
+    try {
+      await telegram(buildWatchMessage(w));
+      state.sent[w.key] = { at: new Date().toISOString(), atMs: Date.now(), side: w.side, watch: true };
+      saveState(state);
+      console.log(JSON.stringify({ telegram: 'WATCH_SENT', key: w.key, symbol: w.symbol, session: w.session, side: w.side, trigger: w.trigger }));
+    } catch (error) {
+      console.error(JSON.stringify({ telegram: 'WATCH_ERROR', key: w.key, error: error.message }));
     }
   }
 
@@ -458,6 +548,7 @@ async function cycle() {
     publicFxFeed: 'DUKASCOPY',
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
+    watches: watches.map(w => ({ symbol: w.symbol, session: w.session, side: w.side, current: w.current, trigger: w.trigger })),
     candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend }))
   }));
 
@@ -537,4 +628,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, mapBinanceKlines };
+module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, mapBinanceKlines };
