@@ -55,9 +55,9 @@ jobs:
           HUNTER_EQUITY_USDT: "1000"
           HUNTER_STATE_PATH: ".hunter_state/session_breakout_state.json"
           HUNTER_MAX_SIGNAL_AGE_MS: "1200000"
-          MT5_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
-          MT5_FEED_URL: ${{ secrets.MT5_FEED_URL }}
-          MT5_FEED_TOKEN: ${{ secrets.MT5_FEED_TOKEN }}
+          FX_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
+          OANDA_API_BASE: https://api-fxpractice.oanda.com
+          OANDA_TOKEN: ${{ secrets.OANDA_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node session_breakout_monitor.js
