@@ -301,4 +301,41 @@ function trend4h(end, bearish = false) {
 })();
 
 
+
+(function oldBreakoutDoesNotBecomeNewSignal() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) bars.push(c(t, 100, 101, 99, 100));
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102));
+  // First breakout happened one candle ago.
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+  // Current candle is still above the box, but this must NOT be treated as a fresh entry.
+  bars.push(c(Date.parse('2026-09-30T07:45:00Z'), 106, 110, 105.5, 108, 150));
+
+  const snap = { symbol: 'ETHUSDT', provider: 'TEST', candles15m: bars, candles4h: trend4h(Date.parse('2026-09-30T07:45:00Z')) };
+  const s = evaluate(snap, 'LONDON', Date.parse('2026-09-30T08:01:00Z'));
+  assert.strictEqual(s, null, 'old breakout must not be shown as a new signal');
+})();
+
+(function reentryThenNewBreakoutCanSignalAgain() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) bars.push(c(t, 100, 101, 99, 100));
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+  // Re-enter the box.
+  bars.push(c(Date.parse('2026-09-30T07:45:00Z'), 106, 106.5, 103, 104, 150));
+  // Fresh breakout again.
+  bars.push(c(Date.parse('2026-09-30T08:00:00Z'), 104, 109, 103.5, 107, 150));
+
+  const snap = { symbol: 'ETHUSDT', provider: 'TEST', candles15m: bars, candles4h: trend4h(Date.parse('2026-09-30T08:00:00Z')) };
+  const s = evaluate(snap, 'LONDON', Date.parse('2026-09-30T08:16:00Z'));
+  assert.ok(s, 'a new breakout after re-entry should be allowed');
+  assert.strictEqual(s.side, 'LONG');
+  assert.strictEqual(s.freshBreakout, true);
+})();
+
+
 console.log('session_breakout_monitor tests: PASS');
