@@ -46,13 +46,13 @@ function h4Range(end){
   for(let t=base;t<Date.parse('2026-09-30T07:00:00Z');t+=M15)bars.push(c(t,100,101,99,100));
   bars.push(c(Date.parse('2026-09-30T07:00:00Z'),100,105,99,103));
   bars.push(c(Date.parse('2026-09-30T07:15:00Z'),103,104,100,102));
-  bars.push(c(Date.parse('2026-09-30T07:30:00Z'),102,107,101.5,106));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'),104.8,107,104.4,106));
   const snap={symbol:'BTCUSDT',provider:'TEST',candles15m:bars,candles4h:h4Trend(Date.parse('2026-09-30T07:30:00Z'))};
   const regime={...classifyRegime(snap.candles4h,snap.candles15m),atr15:2};
   const session={id:'LONDON',label:'London',tz:'Europe/London',hour:8,minute:0};
   const p=trendBreakout(snap,session,regime,Date.parse('2026-09-30T07:46:00Z'));
   assert.ok(p && !p.blocked);
-  bars.push(c(Date.parse('2026-09-30T07:45:00Z'),106,106.3,104.7,105.8));
+  bars.push(c(Date.parse('2026-09-30T07:45:00Z'),105.2,106.3,104.7,105.8));
   const out=confirmRetest(snap,p,regime,Date.parse('2026-09-30T08:01:00Z'));
   assert.ok(out && out.key);
   assert.strictEqual(out.kind,'TREND');
