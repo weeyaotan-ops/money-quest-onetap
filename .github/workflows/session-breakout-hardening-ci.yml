@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - 'session_breakout_monitor.js'
+      - 'hunter_adaptive_engine.js'
       - 'session_breakout_bot.js'
       - 'session_breakout_check.js'
       - 'test/session_breakout_monitor.test.js'
+      - 'test/hunter_adaptive_engine.test.js'
       - 'test/session_breakout_bot_status.test.js'
       - 'package.json'
       - '.github/workflows/session-breakout-hardening-ci.yml'
@@ -22,7 +24,9 @@ jobs:
           node-version: '20'
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: node --check session_breakout_monitor.js
+      - run: node --check hunter_adaptive_engine.js
       - run: node --check session_breakout_bot.js
       - run: node --check session_breakout_check.js
       - run: node test/session_breakout_monitor.test.js
+      - run: node test/hunter_adaptive_engine.test.js
       - run: node test/session_breakout_bot_status.test.js
