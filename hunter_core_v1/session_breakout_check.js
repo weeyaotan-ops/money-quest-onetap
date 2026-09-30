@@ -86,11 +86,29 @@ async function dukascopyCandles(symbol, timeframe, lookbackDays, now = Date.now(
   ).sort((a,b) => a.openTime - b.openTime);
 }
 
+function aggregateH4FromH1(rows) {
+  const groups = new Map();
+  for (const x of rows || []) {
+    const t = Math.floor(Number(x.openTime) / (4 * HOUR_MS)) * (4 * HOUR_MS);
+    if (!groups.has(t)) {
+      groups.set(t, { openTime: t, open: x.open, high: x.high, low: x.low, close: x.close, volume: x.volume, closeTime: t + 4 * HOUR_MS - 1 });
+    } else {
+      const g = groups.get(t);
+      g.high = Math.max(g.high, x.high);
+      g.low = Math.min(g.low, x.low);
+      g.close = x.close;
+      g.volume += x.volume;
+    }
+  }
+  return [...groups.values()].sort((a,b) => a.openTime - b.openTime);
+}
+
 async function fxSnapshot(symbol, now = Date.now()) {
-  const [candles15m, candles4h] = await Promise.all([
+  const [candles15m, candles1h] = await Promise.all([
     dukascopyCandles(symbol, 'm15', 5, now),
-    dukascopyCandles(symbol, 'h4', 14, now)
+    dukascopyCandles(symbol, 'h1', 14, now)
   ]);
+  const candles4h = aggregateH4FromH1(candles1h);
   if (candles15m.length < 20 || candles4h.length < 51) throw new Error('DUKASCOPY_INSUFFICIENT_DATA');
   return { symbol, provider: 'DUKASCOPY', candles15m, candles4h };
 }
