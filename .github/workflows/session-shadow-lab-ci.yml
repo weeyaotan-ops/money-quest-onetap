@@ -7,6 +7,7 @@ on:
       - 'hunter_core_v1/session_breakout_shadow.js'
       - 'hunter_core_v1/session_breakout_check.js'
       - 'hunter_core_v1/interactive_bot.js'
+      - 'hunter_core_v1/adaptive_bot.js'
       - 'test/hunter_session_breakout.test.js'
       - '.github/workflows/session-shadow-lab-ci.yml'
   workflow_dispatch:
@@ -24,4 +25,5 @@ jobs:
       - run: node --check hunter_core_v1/session_breakout_shadow.js
       - run: node --check hunter_core_v1/session_breakout_check.js
       - run: node --check hunter_core_v1/interactive_bot.js
+      - run: node --check hunter_core_v1/adaptive_bot.js
       - run: node test/hunter_session_breakout.test.js
