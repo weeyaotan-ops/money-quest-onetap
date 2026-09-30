@@ -26,6 +26,7 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const STATE_PATH = process.env.HUNTER_STATE_PATH || '/data/session_breakout_state.json';
 const MAX_SIGNAL_AGE_MS = Number(process.env.HUNTER_MAX_SIGNAL_AGE_MS || 20 * 60 * 1000);
 const STARTUP_NOTICE = String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase() === 'true' || process.env.TELEGRAM_STARTUP_NOTICE === '1';
+const ONE_SHOT = process.env.HUNTER_ONESHOT === '1';
 
 function localParts(ts, timeZone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -335,6 +336,7 @@ async function start() {
   }
 
   try { await cycle(); } catch (err) { console.error(JSON.stringify({ cycle: 'ERROR', error: err.message })); }
+  if (ONE_SHOT) return;
 
   const loop = () => {
     const wait = delayToNextQuarter();
