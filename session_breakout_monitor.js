@@ -30,6 +30,7 @@ const STATE_PATH = process.env.HUNTER_STATE_PATH || '/data/session_breakout_stat
 const MAX_SIGNAL_AGE_MS = Number(process.env.HUNTER_MAX_SIGNAL_AGE_MS || 20 * 60 * 1000);
 const PORT = Number(process.env.PORT || 3000);
 const STARTUP_NOTICE = ['1','true','yes'].includes(String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase());
+const RUN_ONCE = ['1','true','yes'].includes(String(process.env.HUNTER_RUN_ONCE || '').toLowerCase());
 
 function fmtPrice(x) {
   const n = Number(x);
@@ -367,8 +368,8 @@ function startHealthServer() {
 }
 
 async function main() {
-  startHealthServer();
-  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', symbols: SYMBOLS, sessions: SESSION_IDS, tpR: TP_R }));
+  if (!RUN_ONCE) startHealthServer();
+  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, sessions: SESSION_IDS, tpR: TP_R }));
 
   if (STARTUP_NOTICE) {
     try {
@@ -391,8 +392,10 @@ async function main() {
     health.ok = false;
     health.lastError = error.message;
     console.error(JSON.stringify({ cycle: 'ERROR', error: error.message }));
+    if (RUN_ONCE) throw error;
   }
 
+  if (RUN_ONCE) return;
   schedule();
 }
 
