@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const binance = require('./binance_public');
 const okx = require('./okx_public');
+const shadow = require('./session_breakout_shadow');
 
 const M15_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -186,6 +187,70 @@ function evaluateSession(snapshot, sessionId, now = Date.now(), opts = {}) {
   };
 }
 
+function evaluateShadowCandidate(snapshot, sessionId, now = Date.now(), opts = {}) {
+  const session = SESSION_DEFS[sessionId];
+  if (!session) return null;
+  const c15 = [...(snapshot.candles15m || [])].sort((a, b) => Number(a.openTime) - Number(b.openTime));
+  const latest = c15[c15.length - 1];
+  if (!latest) return null;
+
+  const latestOpen = Number(latest.openTime);
+  const inferredClose = latestOpen + M15_MS;
+  const age = now - inferredClose;
+  const maxAge = Number(opts.maxSignalAgeMs ?? MAX_SIGNAL_AGE_MS);
+  if (age < -60_000 || age > maxAge) return null;
+
+  const box = sessionBox(c15, latestOpen, session);
+  if (!box || latestOpen < box.activeFrom || latestOpen >= box.activeUntil) return null;
+
+  const close = Number(latest.close);
+  let side = null;
+  if (close > box.high) side = 'LONG';
+  else if (close < box.low) side = 'SHORT';
+  if (!side) return null;
+
+  const vwap = dailyVwap(c15, latestOpen);
+  const h4 = h4Bias(snapshot.candles4h || []);
+  if (!Number.isFinite(vwap)) return null;
+
+  const vwapPass = side === 'LONG' ? close > vwap : close < vwap;
+  const h4Pass = side === 'LONG' ? h4.bias === 'BULLISH' : h4.bias === 'BEARISH';
+  const prev = c15.length >= 2 ? c15[c15.length - 2] : null;
+  const prevClose = Number(prev?.close);
+  const firstBreakout = side === 'LONG'
+    ? !Number.isFinite(prevClose) || prevClose <= box.high
+    : !Number.isFinite(prevClose) || prevClose >= box.low;
+
+  const entry = close;
+  const stop = side === 'LONG' ? box.low : box.high;
+  const riskDistance = Math.abs(entry - stop);
+  if (!(riskDistance > 0)) return null;
+
+  return {
+    key: `SHADOW|${snapshot.symbol}|${session.id}|${box.date}|${side}|${latestOpen}`,
+    symbol: snapshot.symbol,
+    provider: snapshot.provider || 'UNKNOWN',
+    session: session.id,
+    sessionLabel: session.label,
+    localSessionDate: box.date,
+    side,
+    candleOpenTime: latestOpen,
+    candleCloseTime: inferredClose,
+    close,
+    entry,
+    stop,
+    boxHigh: box.high,
+    boxLow: box.low,
+    vwap,
+    h4Bias: h4.bias,
+    h4Ema50: h4.ema50,
+    vwapPass,
+    h4Pass,
+    fullPass: vwapPass && h4Pass,
+    firstBreakout
+  };
+}
+
 function priceFmt(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return 'n/a';
@@ -237,11 +302,15 @@ async function telegram(text) {
 
 function loadState(file = STATE_PATH) {
   try {
-    if (!fs.existsSync(file)) return { sent: {} };
-    const x = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return x && typeof x.sent === 'object' ? x : { sent: {} };
+    const x = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    const state = x && typeof x === 'object' ? x : {};
+    if (!state.sent || typeof state.sent !== 'object') state.sent = {};
+    shadow.ensureShadow(state);
+    return state;
   } catch {
-    return { sent: {} };
+    const state = { sent: {} };
+    shadow.ensureShadow(state);
+    return state;
   }
 }
 
@@ -251,6 +320,7 @@ function saveState(state, file = STATE_PATH) {
   for (const [k, v] of Object.entries(state.sent || {})) {
     if (!v || Number(v.atMs || 0) < cutoff) delete state.sent[k];
   }
+  shadow.prune(state);
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, file);
@@ -279,12 +349,19 @@ async function cycle() {
   const snapshots = await Promise.all(SYMBOLS.map(marketSnapshot));
   const candidates = [];
 
+  let shadowAdded = 0;
   for (const snap of snapshots) {
     for (const sessionId of SESSION_IDS) {
+      const raw = evaluateShadowCandidate(snap, sessionId, now);
+      if (raw && shadow.registerCandidate(state, raw)) shadowAdded += 1;
+
       const signal = evaluateSession(snap, sessionId, now);
       if (signal && !state.sent[signal.key]) candidates.push(signal);
     }
   }
+
+  const shadowChanged = shadow.trackAll(state, snapshots);
+  if (shadowAdded || shadowChanged) saveState(state);
 
   console.log(JSON.stringify({
     engine: 'Session Breakout Monitor V1',
@@ -293,6 +370,8 @@ async function cycle() {
     symbols: SYMBOLS,
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snapshots.map((s) => [s.symbol, s.provider])),
+    shadowAdded,
+    shadow: shadow.summary(state),
     candidates: candidates.map((s) => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, h4Bias: s.h4Bias }))
   }, null, 2));
 
@@ -364,6 +443,7 @@ module.exports = {
   dailyVwap,
   sessionBox,
   evaluateSession,
+  evaluateShadowCandidate,
   buildMessage,
   delayToNextQuarter
 };

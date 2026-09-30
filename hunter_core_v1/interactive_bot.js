@@ -10,6 +10,7 @@ const {
   formatLevels,
   formatSystem
 } = require('./session_breakout_check');
+const { summary: shadowSummary } = require('./session_breakout_shadow');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -67,7 +68,8 @@ function mainKeyboard() {
       [
         { text: '📊 RESULTS', callback_data: 'results' },
         { text: '📡 SYSTEM', callback_data: 'system' }
-      ]
+      ],
+      [{ text: '🧪 SHADOW LAB', callback_data: 'shadow' }]
     ]
   };
 }
@@ -200,6 +202,62 @@ function resultsText() {
   ].filter(Boolean).join('\n');
 }
 
+function pct(x) {
+  return Number.isFinite(Number(x)) ? (Number(x) * 100).toFixed(1) + '%' : 'n/a';
+}
+
+function rfmt(x) {
+  return Number.isFinite(Number(x)) ? (Number(x) >= 0 ? '+' : '') + Number(x).toFixed(2) + 'R' : 'n/a';
+}
+
+function shadowLine(label, s) {
+  return `${label}: n=${s.n} · done=${s.completed} · WR ${pct(s.winRate)} · avg ${rfmt(s.avgR)}`;
+}
+
+function shadowLabText() {
+  const state = loadBreakoutState();
+  const s = shadowSummary(state, { firstOnly: true });
+  if (!s.raw.n) {
+    return [
+      '🧪 SHADOW LAB',
+      '',
+      'No raw breakout sample yet.',
+      'It is running silently and will compare:',
+      'RAW vs VWAP vs H4 vs FULL filter.',
+      '',
+      'Live signal rules are unchanged.'
+    ].join('\n');
+  }
+
+  const lines = [
+    '🧪 SHADOW LAB',
+    '',
+    'FIRST BREAKOUT ONLY',
+    shadowLine('RAW', s.raw),
+    shadowLine('VWAP PASS', s.vwapPass),
+    shadowLine('H4 PASS', s.h4Pass),
+    shadowLine('FULL PASS', s.fullPass),
+    shadowLine('FILTERED OUT', s.filteredOut),
+    '',
+    'BY COIN'
+  ];
+
+  for (const [k,v] of Object.entries(s.bySymbol || {})) lines.push(`${k}: n=${v.n} · WR ${pct(v.winRate)} · avg ${rfmt(v.avgR)}`);
+
+  lines.push('', 'BY SESSION');
+  for (const [k,v] of Object.entries(s.bySession || {})) lines.push(`${k}: n=${v.n} · WR ${pct(v.winRate)} · avg ${rfmt(v.avgR)}`);
+
+  lines.push(
+    '',
+    'Interpretation:',
+    'FULL PASS better than FILTERED OUT = filters are helping.',
+    'FILTERED OUT better = a filter may be blocking useful trades.',
+    '',
+    'Research only · does not change live signals.'
+  );
+  return lines.join('\n');
+}
+
 async function tg(method, body) {
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
     method: 'POST',
@@ -243,6 +301,7 @@ async function showMenu() {
     '📒 SIGNAL RECORDS = SL / 1R / 2R 记录',
     '📊 RESULTS = 这套 breakout 的 results',
     '📡 SYSTEM = feed + scanner self-check',
+    '🧪 SHADOW LAB = filters 到底有没有帮忙',
     '',
     '没有确认 = 不进。'
   ].join('\n'), mainKeyboard());
@@ -256,6 +315,7 @@ async function handleAction(action, callbackId) {
     if (action === 'active') return send(activeText(), refreshKeyboard('active'));
     if (action === 'records') return send(signalRecordsText(), refreshKeyboard('records'));
     if (action === 'results') return send(resultsText(), refreshKeyboard('results'));
+    if (action === 'shadow') return send(shadowLabText(), refreshKeyboard('shadow'));
 
     if (['now','why','market','levels','system'].includes(action)) {
       const r = await getCheck(true);
@@ -284,6 +344,7 @@ function normalizeMessage(text) {
   if (['/records','records'].includes(t)) return 'records';
   if (['/results','results','/performance','performance'].includes(t)) return 'results';
   if (['/system','system','/status','status'].includes(t)) return 'system';
+  if (['/shadow','shadow','/lab','lab'].includes(t)) return 'shadow';
   return null;
 }
 
@@ -328,7 +389,8 @@ async function setCommands() {
       { command: 'active', description: 'Open signal tracking' },
       { command: 'records', description: 'Signal SL / 1R / 2R records' },
       { command: 'results', description: 'Session Breakout results' },
-      { command: 'system', description: 'Feed and scanner self-check' }
+      { command: 'system', description: 'Feed and scanner self-check' },
+      { command: 'shadow', description: 'Counterfactual filter lab' }
     ]
   });
 }
