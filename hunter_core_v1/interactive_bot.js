@@ -11,6 +11,7 @@ const {
   watchPlan,
   marketSynthesis
 } = require('./advisor');
+const { checkAll: checkBreakouts, formatCheck: formatBreakoutCheck } = require('./session_breakout_check');
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -77,6 +78,9 @@ function mainKeyboard() {
   return {
     inline_keyboard: [
       [
+        { text: '📡 Breakout Check', callback_data: 'breakout_check' }
+      ],
+      [
         { text: '🧠 Analyst', callback_data: 'analyst' },
         { text: '🎯 Best Now', callback_data: 'best' }
       ],
@@ -130,6 +134,15 @@ function analystKeyboard() {
 
 function backKeyboard() {
   return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
+}
+
+function breakoutKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🔄 Check Again', callback_data: 'breakout_check' }],
+      [{ text: '🏠 Home', callback_data: 'start' }]
+    ]
+  };
 }
 
 async function tg(method, body) {
@@ -474,6 +487,7 @@ async function showMenu() {
   await send([
     'HUNTER',
     '',
+    '📡 Breakout Check = verify feeds + latest setup now',
     '🧠 Analyst = whole-market answer',
     '🎯 Best Now = strongest setup',
     '🌍 Market = all 3 at a glance',
@@ -484,6 +498,17 @@ async function showMenu() {
 
 async function handleAction(action, callbackId) {
   await answerCallback(callbackId);
+
+  if (action === 'breakout_check') {
+    try {
+      const result = await checkBreakouts();
+      await send(formatBreakoutCheck(result), breakoutKeyboard());
+    } catch (err) {
+      console.error(JSON.stringify({ ok: false, action, error: err.message }));
+      await send('⚠️ Breakout check failed. Try again in a moment.', breakoutKeyboard());
+    }
+    return;
+  }
 
   if (action === 'performance') {
     await send(performanceText(), backKeyboard());
@@ -540,6 +565,7 @@ function normalizeMessage(text) {
   if (t === '/active' || t === 'active') return 'active';
   if (t === '/performance' || t === 'performance') return 'performance';
   if (t === '/status' || t === 'status') return 'status';
+  if (t === '/check' || t === 'check' || t === '/breakout' || t === 'breakout') return 'breakout_check';
   return null;
 }
 
@@ -586,7 +612,8 @@ async function setCommands() {
       { command: 'sol', description: 'SOL' },
       { command: 'active', description: 'Open setup tracking' },
       { command: 'performance', description: 'Forward-test results' },
-      { command: 'status', description: 'System status' }
+      { command: 'status', description: 'System status' },
+      { command: 'check', description: 'Check session breakout monitor now' }
     ]
   });
 }
