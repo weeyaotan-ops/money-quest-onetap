@@ -3,8 +3,7 @@
 const M15_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const OKX_BASE = process.env.OKX_REST_BASE || process.env.OKX_API_BASE || 'https://www.okx.com';
-const OANDA_API_BASE = process.env.OANDA_API_BASE || 'https://api-fxpractice.oanda.com';
-const OANDA_TOKEN = process.env.OANDA_TOKEN || '';
+const { getHistoricalRates } = require('dukascopy-node');
 
 const CRYPTO = (process.env.BREAKOUT_CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -59,31 +58,41 @@ async function cryptoSnapshot(symbol) {
   return { symbol, provider: 'OKX', candles15m, candles4h };
 }
 
-function oandaInstrument(symbol) {
-  if (symbol === 'XAUUSD') return 'XAU_USD';
-  return symbol.replace(/^([A-Z]{3})([A-Z]{3})$/, '$1_$2');
+async function dukascopyCandles(symbol, timeframe, lookbackDays, now = Date.now()) {
+  const interval = timeframe === 'h4' ? 4 * HOUR_MS : M15_MS;
+  const rows = await getHistoricalRates({
+    instrument: String(symbol).toLowerCase(),
+    dates: {
+      from: new Date(now - lookbackDays * 24 * HOUR_MS),
+      to: new Date(now + HOUR_MS)
+    },
+    timeframe,
+    format: 'json',
+    priceType: 'bid',
+    ignoreFlats: true
+  });
+  return (rows || []).map(x => ({
+    openTime: Number(x.timestamp),
+    open: Number(x.open),
+    high: Number(x.high),
+    low: Number(x.low),
+    close: Number(x.close),
+    volume: Number(x.volume || 0),
+    closeTime: Number(x.timestamp) + interval - 1
+  })).filter(x =>
+    Number.isFinite(x.openTime) &&
+    [x.open,x.high,x.low,x.close,x.volume].every(Number.isFinite) &&
+    x.openTime + interval <= now
+  ).sort((a,b) => a.openTime - b.openTime);
 }
 
-async function oandaCandles(symbol, granularity, count) {
-  if (!OANDA_TOKEN) throw new Error('OANDA_TOKEN_MISSING');
-  const qs = new URLSearchParams({ price: 'M', granularity, count: String(count), smooth: 'false' });
-  const body = await getJson(
-    `${OANDA_API_BASE}/v3/instruments/${encodeURIComponent(oandaInstrument(symbol))}/candles?${qs}`,
-    { authorization: `Bearer ${OANDA_TOKEN}` }
-  );
-  const interval = granularity === 'H4' ? 4 * HOUR_MS : M15_MS;
-  return (body.candles || []).filter(x => x.complete === true && x.mid).map(x => {
-    const openTime = Date.parse(x.time);
-    return {
-      openTime, open: Number(x.mid.o), high: Number(x.mid.h), low: Number(x.mid.l),
-      close: Number(x.mid.c), volume: Number(x.volume || 0), closeTime: openTime + interval - 1
-    };
-  }).sort((a,b) => a.openTime - b.openTime);
-}
-
-async function fxSnapshot(symbol) {
-  const [candles15m, candles4h] = await Promise.all([oandaCandles(symbol, 'M15', 300), oandaCandles(symbol, 'H4', 100)]);
-  return { symbol, provider: 'OANDA', candles15m, candles4h };
+async function fxSnapshot(symbol, now = Date.now()) {
+  const [candles15m, candles4h] = await Promise.all([
+    dukascopyCandles(symbol, 'm15', 5, now),
+    dukascopyCandles(symbol, 'h4', 14, now)
+  ]);
+  if (candles15m.length < 20 || candles4h.length < 51) throw new Error('DUKASCOPY_INSUFFICIENT_DATA');
+  return { symbol, provider: 'DUKASCOPY', candles15m, candles4h };
 }
 
 function ema50Bias(candles4h) {
@@ -113,7 +122,7 @@ function resolveSession(snap, id) {
   const base = SESSION_DEFS[id];
   if (!base) return null;
   if (id !== 'NEW_YORK') return base;
-  if (snap.provider === 'OANDA') {
+  if (snap.provider === 'DUKASCOPY') {
     if (snap.symbol === 'XAUUSD') return { ...base, id: 'NEW_YORK_GOLD', label: 'NY Gold', hour: 8, minute: 30 };
     return { ...base, id: 'NEW_YORK_FX', label: 'NY FX', hour: 8, minute: 0 };
   }
@@ -171,13 +180,11 @@ async function checkAll() {
   const cryptoSnaps = cryptoSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
 
   let fxSnaps = [];
-  let fxConfigured = Boolean(OANDA_TOKEN);
+  const fxConfigured = true;
   let fxErrors = 0;
-  if (fxConfigured) {
-    const fxSettled = await Promise.allSettled(FX.map(fxSnapshot));
-    fxSnaps = fxSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
-    fxErrors = fxSettled.length - fxSnaps.length;
-  }
+  const fxSettled = await Promise.allSettled(FX.map(s => fxSnapshot(s, now)));
+  fxSnaps = fxSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
+  fxErrors = fxSettled.length - fxSnaps.length;
 
   const all = [...cryptoSnaps, ...fxSnaps];
   const signals = [];
@@ -216,10 +223,7 @@ function formatCheck(r) {
     '📡 BREAKOUT CHECK',
     '',
     `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto feed: ${r.cryptoOk}/${r.cryptoTotal} OK`,
-    r.fxConfigured
-      ? `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex feed: ${r.fxOk}/${r.fxTotal} OANDA`
-      : '🔴 Gold/Forex feed: NOT CONNECTED',
-    r.fxConfigured ? null : '   OANDA token is still missing.',
+    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex feed: ${r.fxOk}/${r.fxTotal} public feed`,
     '',
     'Rule: 2×M15 box + CLOSE breakout + VWAP + H4 EMA50',
     'Sessions: London + New York',
