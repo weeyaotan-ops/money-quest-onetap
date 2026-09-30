@@ -11,7 +11,7 @@ const {
   formatSystem,
   correlationWarnings
 } = require('./session_breakout_check');
-const { summary: shadowSummary } = require('./session_breakout_shadow');
+const { summary: shadowSummary, learningReport, liveHealth } = require('./session_breakout_shadow');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -68,11 +68,15 @@ function mainKeyboard() {
       ],
       [
         { text: '📊 成绩', callback_data: 'results' },
-        { text: '📡 系统', callback_data: 'system' }
+        { text: '📅 今日总结', callback_data: 'daily' }
       ],
       [
-        { text: '📅 今日总结', callback_data: 'daily' },
-        { text: '🧪 研究室', callback_data: 'shadow' }
+        { text: '🧠 一键学习', callback_data: 'learn' },
+        { text: '🩺 策略体检', callback_data: 'health' }
+      ],
+      [
+        { text: '🧪 研究室', callback_data: 'shadow' },
+        { text: '📡 系统', callback_data: 'system' }
       ]
     ]
   };
@@ -255,6 +259,111 @@ function dailySummaryText(date = sgtDate()) {
   return lines.join('\n');
 }
 
+function learningStatusLabel(status) {
+  if (status === 'READY_FOR_SHADOW_TEST') return '🟡 有候选可以做影子测试';
+  if (status === 'NO_CHANGE_NEEDED') return '🟢 暂时不用改';
+  return '⚪ 继续收集样本';
+}
+
+function filterStatusText(report) {
+  const n1 = Number(report?.fullPass?.completed || 0);
+  const n2 = Number(report?.filteredOut?.completed || 0);
+  if (report.filterStatus === 'FILTERS_SUPPORTED') {
+    return `现有过滤暂时占优（通过组 ${n1}单 vs 被挡组 ${n2}单）`;
+  }
+  if (report.filterStatus === 'FILTERS_QUESTIONED') {
+    return `过滤条件值得继续质疑（通过组 ${n1}单 vs 被挡组 ${n2}单）`;
+  }
+  if (report.filterStatus === 'NO_CLEAR_DIFFERENCE') {
+    return `目前看不出过滤条件有明显差别（${n1} vs ${n2}）`;
+  }
+  return `过滤比较样本还不够（通过 ${n1} · 被挡 ${n2}）`;
+}
+
+function groupName(x) {
+  if (!x) return '';
+  if (x.dimension === 'SYMBOL') return x.key;
+  if (x.dimension === 'SESSION') return `${x.key} Session`;
+  if (x.dimension === 'SIDE') return x.key === 'LONG' ? '全部做多' : x.key === 'SHORT' ? '全部做空' : x.key;
+  return x.key;
+}
+
+function learnText() {
+  const state = loadBreakoutState();
+  const report = learningReport(state);
+  const lines = [
+    '🧠 一键学习',
+    '',
+    learningStatusLabel(report.status),
+    `原始突破：${report.raw.completed}/${report.raw.n} 已完成`,
+    `正式条件通过：${report.fullPass.completed}/${report.fullPass.n} 已完成`,
+    '',
+    '过滤条件',
+    filterStatusText(report)
+  ];
+
+  if (report.strongest?.length) {
+    lines.push('', '💪 当前强项');
+    for (const x of report.strongest.slice(0, 2)) {
+      lines.push(`${groupName(x)} · ${x.completed}单 · 平均 ${x.avgR >= 0 ? '+' : ''}${x.avgR.toFixed(2)}R`);
+    }
+  }
+
+  if (report.weakest?.length) {
+    lines.push('', '🪫 当前拖累');
+    for (const x of report.weakest.slice(0, 2)) {
+      lines.push(`${groupName(x)} · ${x.completed}单 · 平均 ${x.avgR.toFixed(2)}R`);
+    }
+  }
+
+  lines.push(
+    '',
+    '下一步',
+    `${report.suggestedTest.label}`,
+    report.suggestedTest.reason,
+    '',
+    'Live 没有被改。只会先收证据 / 做 Shadow 测试。'
+  );
+  return lines.join('\n');
+}
+
+function healthStatusText(status) {
+  if (status === 'HEALTHY_SAMPLE') return '🟢 最近样本正常';
+  if (status === 'WATCH') return '🟡 仍为正，但优势变薄';
+  if (status === 'WEAKENING_SAMPLE') return '🟠 最近样本转弱';
+  if (status === 'WEAK_SAMPLE') return '🔴 当前样本偏弱';
+  return '⚪ 样本不足';
+}
+
+function strategyHealthText() {
+  const state = loadBreakoutState();
+  const trades = Object.values(state.trades || {});
+  const h = liveHealth(trades, { recentN: 20 });
+
+  const lines = [
+    '🩺 策略体检',
+    '',
+    healthStatusText(h.status),
+    `已完成：${h.resolved}单`,
+    Number.isFinite(h.allAvgR) ? `全部平均：${h.allAvgR >= 0 ? '+' : ''}${h.allAvgR.toFixed(2)}R` : '全部平均：样本不足',
+    Number.isFinite(h.recentAvgR) ? `最近${h.recentN}单：${h.recentAvgR >= 0 ? '+' : ''}${h.recentAvgR.toFixed(2)}R` : '最近样本：不足',
+    Number.isFinite(h.allWinRate) ? `全部胜率：${(h.allWinRate * 100).toFixed(1)}%` : null,
+    Number.isFinite(h.recentWinRate) ? `最近胜率：${(h.recentWinRate * 100).toFixed(1)}%` : null,
+    `最大回撤：${h.maxDrawdownR.toFixed(1)}R`,
+    `最长连亏：${h.maxLossStreak}单`,
+    '',
+    h.status === 'COLLECTING'
+      ? '结论：先继续收集，暂时不要因为几单输赢改策略。'
+      : h.status === 'HEALTHY_SAMPLE'
+        ? '结论：目前没有明显需要动 Live 的证据。'
+        : h.status === 'WATCH'
+          ? '结论：继续观察，暂时不改。'
+          : '结论：进入观察区，优先让 Shadow / Challenger 找原因，不直接改 Live。'
+  ].filter(Boolean);
+
+  return lines.join('\n');
+}
+
 function pct(x) {
   return Number.isFinite(Number(x)) ? (Number(x) * 100).toFixed(1) + '%' : 'n/a';
 }
@@ -364,6 +473,8 @@ async function showMenu() {
     '📊 成绩 = 这套策略的记录',
     '📡 系统 = 数据有没有正常',
     '📅 今日总结 = 今天发生了什么',
+    '🧠 一键学习 = Bot 自动找强项和拖累',
+    '🩺 策略体检 = 看 edge 有没有变弱',
     '🧪 研究室 = 看过滤条件有没有帮助',
     '',
     '只有刚突破这根 M15 才算新信号。旧突破不追。'
@@ -379,6 +490,8 @@ async function handleAction(action, callbackId) {
     if (action === 'records') return send(signalRecordsText(), refreshKeyboard('records'));
     if (action === 'results') return send(resultsText(), refreshKeyboard('results'));
     if (action === 'daily') return send(dailySummaryText(), refreshKeyboard('daily'));
+    if (action === 'learn') return send(learnText(), refreshKeyboard('learn', [[{ text: '🧪 看研究室', callback_data: 'shadow' }], [{ text: '🩺 策略体检', callback_data: 'health' }]]));
+    if (action === 'health') return send(strategyHealthText(), refreshKeyboard('health', [[{ text: '🧠 一键学习', callback_data: 'learn' }]]));
     if (action === 'shadow') return send(shadowLabText(), refreshKeyboard('shadow'));
 
     if (['now','why','market','levels','system'].includes(action)) {
@@ -409,6 +522,8 @@ function normalizeMessage(text) {
   if (['/results','results','/performance','performance'].includes(t)) return 'results';
   if (['/system','system','/status','status'].includes(t)) return 'system';
   if (['/daily','daily','/today','today'].includes(t)) return 'daily';
+  if (['/learn','learn','学习','一键学习'].includes(t)) return 'learn';
+  if (['/health','health','体检','策略体检'].includes(t)) return 'health';
   if (['/shadow','shadow','/lab','lab'].includes(t)) return 'shadow';
   return null;
 }
@@ -456,6 +571,8 @@ async function setCommands() {
       { command: 'results', description: '策略成绩' },
       { command: 'system', description: '系统状态' },
       { command: 'daily', description: '今日总结' },
+      { command: 'learn', description: '一键学习' },
+      { command: 'health', description: '策略体检' },
       { command: 'shadow', description: '研究室' }
     ]
   });
