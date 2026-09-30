@@ -66,7 +66,7 @@ function h4Range(end){
   for(let t=base;t<Date.parse('2026-09-30T07:00:00Z');t+=M15)bars.push(c(t,100,101,99,100));
   bars.push(c(Date.parse('2026-09-30T07:00:00Z'),100,105,99,102));
   bars.push(c(Date.parse('2026-09-30T07:15:00Z'),102,104,100,101));
-  bars.push(c(Date.parse('2026-09-30T07:30:00Z'),101,102,98.5,101.5));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'),99.8,101.5,98.7,100.4));
   const snap={symbol:'XAUUSD',provider:'TEST',candles15m:bars,candles4h:h4Range(Date.parse('2026-09-30T07:30:00Z'))};
   const regime={type:'RANGE',label:'区间',atr15:2,adx:15};
   const session={id:'LONDON',label:'London',tz:'Europe/London',hour:8,minute:0};
