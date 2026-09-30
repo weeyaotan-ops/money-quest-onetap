@@ -301,6 +301,7 @@ function buildMessage(s) {
     '',
     `Confirmed M15 close: ${sgtTime(s.candleCloseTime)} SGT`,
     `Data: ${s.provider}`,
+    ['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol) ? 'Backtest: 2Y tested' : 'Backtest: not yet validated',
     'Mode: SIGNAL ONLY'
   ].filter(Boolean).join('\n');
 }
