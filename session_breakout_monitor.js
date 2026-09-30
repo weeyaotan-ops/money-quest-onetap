@@ -9,7 +9,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.binance.com';
 const OKX_BASE = process.env.OKX_REST_BASE || process.env.OKX_API_BASE || 'https://www.okx.com';
 
-const SYMBOLS = (process.env.HUNTER_SYMBOLS || process.env.CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT')
+const SYMBOLS = (process.env.HUNTER_SYMBOLS || process.env.CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
 const SESSION_DEFS = {
@@ -29,6 +29,10 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const STATE_PATH = process.env.HUNTER_STATE_PATH || '/data/session_breakout_state.json';
 const MAX_SIGNAL_AGE_MS = Number(process.env.HUNTER_MAX_SIGNAL_AGE_MS || 20 * 60 * 1000);
 const PORT = Number(process.env.PORT || 3000);
+const MT5_FEED_URL = process.env.MT5_FEED_URL || '';
+const MT5_FEED_TOKEN = process.env.MT5_FEED_TOKEN || '';
+const MT5_SYMBOLS = (process.env.MT5_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD')
+  .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const STARTUP_NOTICE = ['1','true','yes'].includes(String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase());
 const RUN_ONCE = ['1','true','yes'].includes(String(process.env.HUNTER_RUN_ONCE || '').toLowerCase());
 
@@ -129,6 +133,44 @@ async function snapshot(symbol, now = Date.now()) {
     ]);
     return { symbol, provider: 'OKX_FALLBACK', candles15m, candles4h };
   }
+}
+
+function normalizeMt5Candle(x) {
+  const openTime = Number(x.openTime ?? x.time ?? x.timestamp);
+  return {
+    openTime,
+    open: Number(x.open),
+    high: Number(x.high),
+    low: Number(x.low),
+    close: Number(x.close),
+    volume: Number(x.volume ?? x.tickVolume ?? 0),
+    closeTime: Number(x.closeTime ?? (openTime + M15_MS - 1))
+  };
+}
+
+async function mt5Snapshots() {
+  if (!MT5_FEED_URL) return [];
+  const headers = { 'user-agent': 'money-quest-session-breakout/1.0' };
+  if (MT5_FEED_TOKEN) headers.authorization = `Bearer ${MT5_FEED_TOKEN}`;
+  const res = await fetch(MT5_FEED_URL, { headers });
+  if (!res.ok) throw new Error(`MT5 feed HTTP ${res.status}`);
+  const body = await res.json();
+  const root = body.symbols || body.data || body;
+  const out = [];
+  for (const symbol of MT5_SYMBOLS) {
+    const row = root[symbol];
+    if (!row) continue;
+    const candles15m = (row.candles15m || row.m15 || []).map(normalizeMt5Candle)
+      .filter(x => Number.isFinite(x.openTime) && [x.open,x.high,x.low,x.close].every(Number.isFinite))
+      .sort((a,b)=>a.openTime-b.openTime);
+    const candles4h = (row.candles4h || row.h4 || []).map(normalizeMt5Candle)
+      .filter(x => Number.isFinite(x.openTime) && [x.open,x.high,x.low,x.close].every(Number.isFinite))
+      .sort((a,b)=>a.openTime-b.openTime);
+    if (candles15m.length >= 20 && candles4h.length >= 51) {
+      out.push({ symbol, provider: 'MT5', candles15m, candles4h });
+    }
+  }
+  return out;
 }
 
 function ema50Bias(candles4h) {
@@ -298,7 +340,19 @@ let health = { ok: true, lastCycleAt: null, lastError: null, lastCandidates: 0 }
 async function cycle() {
   const now = Date.now();
   const state = loadState();
-  const snaps = await Promise.all(SYMBOLS.map(s => snapshot(s, now)));
+  const cryptoResults = await Promise.allSettled(SYMBOLS.map(s => snapshot(s, now)));
+  const snaps = [];
+  for (let i = 0; i < cryptoResults.length; i += 1) {
+    const r = cryptoResults[i];
+    if (r.status === 'fulfilled') snaps.push(r.value);
+    else console.error(JSON.stringify({ symbol: SYMBOLS[i], marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
+  }
+  try {
+    snaps.push(...await mt5Snapshots());
+  } catch (error) {
+    console.error(JSON.stringify({ provider: 'MT5', marketData: 'ERROR', error: error.message }));
+  }
+
   const signals = [];
 
   for (const snap of snaps) {
@@ -325,6 +379,8 @@ async function cycle() {
     mode: 'SIGNAL_ONLY',
     at: health.lastCycleAt,
     symbols: SYMBOLS,
+    mt5Symbols: MT5_SYMBOLS,
+    mt5FeedConfigured: Boolean(MT5_FEED_URL),
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend }))
@@ -369,7 +425,7 @@ function startHealthServer() {
 
 async function main() {
   if (!RUN_ONCE) startHealthServer();
-  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, sessions: SESSION_IDS, tpR: TP_R }));
+  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, mt5Symbols: MT5_SYMBOLS, mt5FeedConfigured: Boolean(MT5_FEED_URL), sessions: SESSION_IDS, tpR: TP_R }));
 
   if (STARTUP_NOTICE) {
     try {
