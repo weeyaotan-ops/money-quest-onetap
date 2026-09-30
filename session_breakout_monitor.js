@@ -8,8 +8,7 @@ const M15_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.binance.com';
 const OKX_BASE = process.env.OKX_REST_BASE || process.env.OKX_API_BASE || 'https://www.okx.com';
-const OANDA_API_BASE = process.env.OANDA_API_BASE || 'https://api-fxpractice.oanda.com';
-const OANDA_TOKEN = process.env.OANDA_TOKEN || '';
+const { getHistoricalRates } = require('dukascopy-node');
 
 const SYMBOLS = (process.env.HUNTER_SYMBOLS || process.env.CRYPTO_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -139,50 +138,43 @@ async function snapshot(symbol, now = Date.now()) {
   }
 }
 
-function oandaInstrument(symbol) {
-  if (symbol === 'XAUUSD') return 'XAU_USD';
-  return symbol.replace(/^([A-Z]{3})([A-Z]{3})$/, '$1_$2');
-}
-
-function mapOandaCandles(rows, intervalMs) {
-  return (rows || []).filter(x => x.complete === true && x.mid).map(x => {
-    const openTime = Date.parse(x.time);
-    return {
-      openTime,
-      open: Number(x.mid.o),
-      high: Number(x.mid.h),
-      low: Number(x.mid.l),
-      close: Number(x.mid.c),
-      volume: Number(x.volume || 0),
-      closeTime: openTime + intervalMs - 1
-    };
-  }).filter(x => Number.isFinite(x.openTime) && [x.open,x.high,x.low,x.close,x.volume].every(Number.isFinite))
-    .sort((a,b) => a.openTime - b.openTime);
-}
-
-async function oandaCandles(symbol, granularity, count) {
-  if (!OANDA_TOKEN) throw new Error('OANDA_TOKEN_MISSING');
-  const instrument = oandaInstrument(symbol);
-  const qs = new URLSearchParams({
-    price: 'M',
-    granularity,
-    count: String(count),
-    smooth: 'false'
+async function dukascopyCandles(symbol, timeframe, lookbackDays, now = Date.now()) {
+  const intervalMs = timeframe === 'h4' ? 4 * HOUR_MS : M15_MS;
+  const rows = await getHistoricalRates({
+    instrument: String(symbol).toLowerCase(),
+    dates: {
+      from: new Date(now - lookbackDays * 24 * HOUR_MS),
+      to: new Date(now + HOUR_MS)
+    },
+    timeframe,
+    format: 'json',
+    priceType: 'bid',
+    ignoreFlats: true
   });
-  const body = await getJson(
-    `${OANDA_API_BASE}/v3/instruments/${encodeURIComponent(instrument)}/candles?${qs.toString()}`,
-    { authorization: `Bearer ${OANDA_TOKEN}` }
-  );
-  const intervalMs = granularity === 'H4' ? 4 * HOUR_MS : M15_MS;
-  return mapOandaCandles(body.candles || [], intervalMs);
+  return (rows || []).map(x => ({
+    openTime: Number(x.timestamp),
+    open: Number(x.open),
+    high: Number(x.high),
+    low: Number(x.low),
+    close: Number(x.close),
+    volume: Number(x.volume || 0),
+    closeTime: Number(x.timestamp) + intervalMs - 1
+  })).filter(x =>
+    Number.isFinite(x.openTime) &&
+    [x.open,x.high,x.low,x.close,x.volume].every(Number.isFinite) &&
+    x.openTime + intervalMs <= now
+  ).sort((a,b) => a.openTime - b.openTime);
 }
 
-async function oandaSnapshot(symbol) {
+async function publicFxSnapshot(symbol, now = Date.now()) {
   const [candles15m, candles4h] = await Promise.all([
-    oandaCandles(symbol, 'M15', 300),
-    oandaCandles(symbol, 'H4', 100)
+    dukascopyCandles(symbol, 'm15', 5, now),
+    dukascopyCandles(symbol, 'h4', 14, now)
   ]);
-  return { symbol, provider: 'OANDA', candles15m, candles4h };
+  if (candles15m.length < 20 || candles4h.length < 51) {
+    throw new Error(`DUKASCOPY_INSUFFICIENT_DATA ${symbol} m15=${candles15m.length} h4=${candles4h.length}`);
+  }
+  return { symbol, provider: 'DUKASCOPY', candles15m, candles4h };
 }
 
 function normalizeMt5Candle(x) {
@@ -281,7 +273,7 @@ function resolveSession(snapshotData, sessionId) {
   const base = SESSION_DEFS[sessionId];
   if (!base) return null;
   if (sessionId !== 'NEW_YORK') return base;
-  if (snapshotData.provider === 'OANDA') {
+  if (snapshotData.provider === 'DUKASCOPY') {
     if (snapshotData.symbol === 'XAUUSD') {
       return { ...base, id: 'NEW_YORK_GOLD', label: 'New York Gold', hour: 8, minute: 30 };
     }
@@ -411,15 +403,11 @@ async function cycle() {
     if (r.status === 'fulfilled') snaps.push(r.value);
     else console.error(JSON.stringify({ symbol: SYMBOLS[i], marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
   }
-  if (OANDA_TOKEN) {
-    const fxResults = await Promise.allSettled(FX_SYMBOLS.map(s => oandaSnapshot(s)));
-    for (let i = 0; i < fxResults.length; i += 1) {
-      const r = fxResults[i];
-      if (r.status === 'fulfilled') snaps.push(r.value);
-      else console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'OANDA', marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
-    }
-  } else {
-    console.log(JSON.stringify({ provider: 'OANDA', status: 'NOT_CONFIGURED', reason: 'OANDA_TOKEN_MISSING' }));
+  const fxResults = await Promise.allSettled(FX_SYMBOLS.map(s => publicFxSnapshot(s, now)));
+  for (let i = 0; i < fxResults.length; i += 1) {
+    const r = fxResults[i];
+    if (r.status === 'fulfilled') snaps.push(r.value);
+    else console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'DUKASCOPY', marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
   }
 
   const signals = [];
@@ -449,7 +437,7 @@ async function cycle() {
     at: health.lastCycleAt,
     symbols: SYMBOLS,
     fxSymbols: FX_SYMBOLS,
-    oandaConfigured: Boolean(OANDA_TOKEN),
+    publicFxFeed: 'DUKASCOPY',
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend }))
@@ -494,7 +482,7 @@ function startHealthServer() {
 
 async function main() {
   if (!RUN_ONCE) startHealthServer();
-  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, fxSymbols: FX_SYMBOLS, oandaConfigured: Boolean(OANDA_TOKEN), sessions: SESSION_IDS, tpR: TP_R }));
+  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, fxSymbols: FX_SYMBOLS, publicFxFeed: 'DUKASCOPY', sessions: SESSION_IDS, tpR: TP_R }));
 
   if (STARTUP_NOTICE) {
     try {
