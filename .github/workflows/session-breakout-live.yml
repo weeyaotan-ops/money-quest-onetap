@@ -1,0 +1,56 @@
+name: Session Breakout Live Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "2,17,32,47 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-breakout-live
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout signal engine
+        uses: actions/checkout@v4
+        with:
+          ref: exact-mirror-resting-v2
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore breakout state
+        uses: actions/cache@v4
+        with:
+          path: .hunter_state
+          key: session-breakout-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            session-breakout-state-
+
+      - name: Validate engine
+        run: |
+          node --check session_breakout_monitor.js
+          node test/session_breakout_monitor.test.js
+
+      - name: Scan latest closed M15 candle
+        env:
+          HUNTER_RUN_ONCE: "true"
+          HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT
+          HUNTER_SESSIONS: LONDON,NEW_YORK
+          HUNTER_TP_R: "2"
+          HUNTER_RISK_PCT: "0.005"
+          HUNTER_EQUITY_USDT: "1000"
+          HUNTER_STATE_PATH: ".hunter_state/session_breakout_state.json"
+          HUNTER_MAX_SIGNAL_AGE_MS: "1200000"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node session_breakout_monitor.js
