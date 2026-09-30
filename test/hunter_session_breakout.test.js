@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { evaluateSession, evaluateShadowCandidate, localParts } = require('../hunter_core_v1/session_breakout_monitor');
 const shadow = require('../hunter_core_v1/session_breakout_shadow');
-const { inspectSession, correlationWarnings, sessionClocks } = require('../hunter_core_v1/session_breakout_check');
+const { inspectSession, correlationWarnings, sessionClocks, structureAssessment } = require('../hunter_core_v1/session_breakout_check');
 
 function m15(openTime, o, h, l, c, volume = 100) {
   return { openTime, open: o, high: h, low: l, close: c, volume };
@@ -263,6 +263,55 @@ function trend4h({ bearish = false, endTime }) {
 (function testDrawdownAndLossStreakHelpers() {
   assert.strictEqual(shadow.maxLossStreak([2,-1,-1,-1,2,-1]), 3);
   assert.strictEqual(shadow.maxDrawdownR([2,-1,-1,2]), 2);
+})();
+
+
+
+(function testStructureWarningInCommandCenter() {
+  const bars = [];
+  const t0 = Date.parse('2026-09-30T00:00:00Z');
+  for (let i=0;i<20;i+=1) bars.push(m15(t0+i*15*60_000,100,101,99,100,100));
+  const latest = m15(t0+20*15*60_000,100,111,100,110,100);
+  const s = structureAssessment(bars, latest, {high:105,low:95}, 'LONG', 110, 95);
+  assert.ok(s.warnings.includes('SL 距离很大'));
+  assert.ok(s.warnings.includes('2R 目标很远'));
+})();
+
+(function testProductionShadowCompatibilityAndTpSlArena() {
+  const direct = {};
+  for (let i=0;i<30;i+=1) {
+    direct['SHADOW|'+i] = {
+      key:'SHADOW|'+i,
+      symbol:'ETHUSDT',
+      sessionLabel:'New York',
+      side:'LONG',
+      signalAtMs:1000+i,
+      filters:{ liveQualified:true, vwapPass:true, h4Pass:true },
+      terminal:true,
+      status:'TP2',
+      milestones:{ tp1:{hit:true}, tp2:{hit:true}, sl:{hit:false} },
+      challengers:{
+        TP1:{status:'WIN',outcomeR:1},
+        TP1_5:{status:'WIN',outcomeR:1.5},
+        LIVE_2R:{status:'WIN',outcomeR:2},
+        TIGHT75_2R:{status:'LOSS',outcomeR:-1},
+        TIGHT50_2R:{status:'LOSS',outcomeR:-1}
+      }
+    };
+  }
+  const state={shadow:direct};
+  const map=shadow.shadowTradeMap(state);
+  assert.strictEqual(Object.keys(map).length,30);
+  const s=shadow.summary(state);
+  assert.strictEqual(s.raw.n,30);
+  assert.strictEqual(s.fullPass.n,30);
+  assert.strictEqual(s.vwapPass.n,30);
+  assert.strictEqual(s.h4Pass.n,30);
+  const learn=shadow.learningReport(state,{minFilterResolved:10,minGroupResolved:5});
+  assert.strictEqual(learn.raw.n,30);
+  const a=shadow.tpSlArenaSummary(state,30);
+  assert.strictEqual(a.variants.find(x=>x.id==='LIVE_2R').resolved,30);
+  assert.strictEqual(a.best.id,'LIVE_2R');
 })();
 
 

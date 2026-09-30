@@ -11,7 +11,7 @@ const {
   formatSystem,
   correlationWarnings
 } = require('./session_breakout_check');
-const { summary: shadowSummary, learningReport, liveHealth } = require('./session_breakout_shadow');
+const { summary: shadowSummary, learningReport, liveHealth, tpSlArenaSummary } = require('./session_breakout_shadow');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -75,9 +75,10 @@ function mainKeyboard() {
         { text: '🩺 策略体检', callback_data: 'health' }
       ],
       [
-        { text: '🧪 研究室', callback_data: 'shadow' },
-        { text: '📡 系统', callback_data: 'system' }
-      ]
+        { text: '🎯 TP/SL实验', callback_data: 'tpsl' },
+        { text: '🧪 研究室', callback_data: 'shadow' }
+      ],
+      [{ text: '📡 系统', callback_data: 'system' }]
     ]
   };
 }
@@ -364,6 +365,34 @@ function strategyHealthText() {
   return lines.join('\n');
 }
 
+function tpSlLabText() {
+  const state = loadBreakoutState();
+  const a = tpSlArenaSummary(state, 30);
+  const lines = ['🎯 TP/SL 实验室', '', '同一批正式条件通过的 breakout，后台比较不同出场法。', 'Live 不会自动改。', ''];
+
+  for (const v of a.variants) {
+    const wr = Number.isFinite(v.winRate) ? (v.winRate * 100).toFixed(1) + '%' : '样本不足';
+    const avg = Number.isFinite(v.avgR) ? (v.avgR >= 0 ? '+' : '') + v.avgR.toFixed(2) + 'R' : 'n/a';
+    const dd = Number.isFinite(v.maxDrawdownR) ? v.maxDrawdownR.toFixed(1) + 'R' : 'n/a';
+    lines.push(`${v.id === 'LIVE_2R' ? '🏆' : '🧪'} ${v.label}`);
+    lines.push(`完成 ${v.resolved} · 胜率 ${wr} · 平均 ${avg} · 回撤 ${dd}`);
+  }
+
+  lines.push('');
+  if (a.status === 'INSUFFICIENT') {
+    lines.push(`⚪ 样本不足：每个方案至少要有 ${a.minResolved} 个完成样本才比较。`);
+  } else if (a.status === 'CHALLENGER_AHEAD_SAMPLE') {
+    lines.push(`🟡 当前样本：${a.best?.label || 'Challenger'} 暂时领先。`);
+    if (Number.isFinite(a.deltaVsLive)) lines.push(`比 Live 平均高 ${a.deltaVsLive >= 0 ? '+' : ''}${a.deltaVsLive.toFixed(2)}R/单。`);
+    lines.push('先继续 Shadow，不会自动换 Live。');
+  } else {
+    lines.push('🟢 当前样本：Live 仍然最好，或差距还不够大。');
+  }
+
+  lines.push('', '实验目的：找出更合理的 TP / SL，不靠感觉乱改。');
+  return lines.join('\n');
+}
+
 function pct(x) {
   return Number.isFinite(Number(x)) ? (Number(x) * 100).toFixed(1) + '%' : 'n/a';
 }
@@ -475,6 +504,7 @@ async function showMenu() {
     '📅 今日总结 = 今天发生了什么',
     '🧠 一键学习 = Bot 自动找强项和拖累',
     '🩺 策略体检 = 看 edge 有没有变弱',
+    '🎯 TP/SL实验 = 比较不同止盈止损',
     '🧪 研究室 = 看过滤条件有没有帮助',
     '',
     '只有刚突破这根 M15 才算新信号。旧突破不追。'
@@ -492,6 +522,7 @@ async function handleAction(action, callbackId) {
     if (action === 'daily') return send(dailySummaryText(), refreshKeyboard('daily'));
     if (action === 'learn') return send(learnText(), refreshKeyboard('learn', [[{ text: '🧪 看研究室', callback_data: 'shadow' }], [{ text: '🩺 策略体检', callback_data: 'health' }]]));
     if (action === 'health') return send(strategyHealthText(), refreshKeyboard('health', [[{ text: '🧠 一键学习', callback_data: 'learn' }]]));
+    if (action === 'tpsl') return send(tpSlLabText(), refreshKeyboard('tpsl', [[{ text: '🧠 一键学习', callback_data: 'learn' }]]));
     if (action === 'shadow') return send(shadowLabText(), refreshKeyboard('shadow'));
 
     if (['now','why','market','levels','system'].includes(action)) {
@@ -524,6 +555,7 @@ function normalizeMessage(text) {
   if (['/daily','daily','/today','today'].includes(t)) return 'daily';
   if (['/learn','learn','学习','一键学习'].includes(t)) return 'learn';
   if (['/health','health','体检','策略体检'].includes(t)) return 'health';
+  if (['/tpsl','tpsl','tp/sl','止盈止损'].includes(t)) return 'tpsl';
   if (['/shadow','shadow','/lab','lab'].includes(t)) return 'shadow';
   return null;
 }
@@ -573,6 +605,7 @@ async function setCommands() {
       { command: 'daily', description: '今日总结' },
       { command: 'learn', description: '一键学习' },
       { command: 'health', description: '策略体检' },
+      { command: 'tpsl', description: 'TP/SL实验室' },
       { command: 'shadow', description: '研究室' }
     ]
   });

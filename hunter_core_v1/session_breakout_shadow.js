@@ -10,6 +10,30 @@ function ensureShadow(state) {
   return state.shadow;
 }
 
+function shadowTradeMap(state) {
+  const s = state?.shadow;
+  if (!s || typeof s !== 'object') return {};
+  if (s.trades && typeof s.trades === 'object') return s.trades;
+  const out = {};
+  for (const [k,v] of Object.entries(s)) {
+    if (k === 'version' || k === 'trades') continue;
+    if (v && typeof v === 'object' && v.symbol && v.side) out[k] = v;
+  }
+  return out;
+}
+
+function vwapPassed(t) {
+  return Boolean(t?.vwapPass ?? t?.filters?.vwapPass);
+}
+
+function h4Passed(t) {
+  return Boolean(t?.h4Pass ?? t?.filters?.h4Pass);
+}
+
+function isLiveQualified(t) {
+  return Boolean(t?.fullPass ?? t?.filters?.liveQualified);
+}
+
 function tradeFromCandidate(c) {
   const risk = Math.abs(Number(c.entry) - Number(c.stop));
   const tp1 = c.side === 'LONG' ? Number(c.entry) + risk : Number(c.entry) - risk;
@@ -159,17 +183,16 @@ function groupStats(trades, keyFn) {
 }
 
 function summary(state, opts = {}) {
-  const shadow = ensureShadow(state);
   const firstOnly = opts.firstOnly !== false;
-  const all = Object.values(shadow.trades);
-  const xs = firstOnly ? all.filter(t => t.firstBreakout) : all;
-  const fullPass = xs.filter(t => t.fullPass);
-  const filteredOut = xs.filter(t => !t.fullPass);
+  const all = Object.values(shadowTradeMap(state));
+  const xs = firstOnly ? all.filter(t => t.firstBreakout !== false) : all;
+  const fullPass = xs.filter(isLiveQualified);
+  const filteredOut = xs.filter(t => !isLiveQualified(t));
   return {
     firstOnly,
     raw: stats(xs),
-    vwapPass: stats(xs.filter(t => t.vwapPass)),
-    h4Pass: stats(xs.filter(t => t.h4Pass)),
+    vwapPass: stats(xs.filter(vwapPassed)),
+    h4Pass: stats(xs.filter(h4Passed)),
     fullPass: stats(fullPass),
     filteredOut: stats(filteredOut),
     bySymbol: groupStats(xs, t => t.symbol),
@@ -332,6 +355,75 @@ function liveHealth(trades, opts = {}) {
   };
 }
 
+const TP_SL_VARIANTS = [
+  { id: 'TP1', label: '原SL + 1R' },
+  { id: 'TP1_5', label: '原SL + 1.5R' },
+  { id: 'LIVE_2R', label: '原SL + 2R（Live）' },
+  { id: 'TIGHT75_2R', label: 'SL收紧25% + 2R' },
+  { id: 'TIGHT50_2R', label: 'SL收紧50% + 2R' }
+];
+
+function arenaVariantStats(trades, variantId) {
+  const rows = [];
+  let ambiguous = 0;
+  for (const t of trades || []) {
+    const v = t?.challengers?.[variantId];
+    if (!v) continue;
+    if (v.status === 'AMBIGUOUS') ambiguous += 1;
+    if (Number.isFinite(Number(v.outcomeR))) {
+      rows.push({ at:Number(t.signalAtMs || 0), r:Number(v.outcomeR) });
+    }
+  }
+  rows.sort((a,b)=>a.at-b.at);
+  const wins = rows.filter(x=>x.r>0).length;
+  const losses = rows.filter(x=>x.r<0).length;
+  const totalR = rows.reduce((a,x)=>a+x.r,0);
+  let eq=0, peak=0, dd=0;
+  for (const x of rows) {
+    eq += x.r;
+    peak = Math.max(peak, eq);
+    dd = Math.max(dd, peak-eq);
+  }
+  return {
+    resolved: rows.length,
+    wins,
+    losses,
+    ambiguous,
+    winRate: rows.length ? wins/rows.length : null,
+    avgR: rows.length ? totalR/rows.length : null,
+    totalR,
+    maxDrawdownR: dd
+  };
+}
+
+function tpSlArenaSummary(state, minResolved = 30) {
+  const all = Object.values(shadowTradeMap(state)).filter(isLiveQualified);
+  const variants = TP_SL_VARIANTS.map(cfg => ({ ...cfg, ...arenaVariantStats(all, cfg.id) }));
+  const live = variants.find(x=>x.id==='LIVE_2R') || null;
+  const eligible = variants
+    .filter(x=>x.resolved >= minResolved && Number.isFinite(x.avgR))
+    .sort((a,b)=>b.avgR-a.avgR);
+  const best = eligible[0] || null;
+  let status = 'INSUFFICIENT';
+  let deltaVsLive = null;
+  if (live && best && live.resolved >= minResolved && Number.isFinite(live.avgR)) {
+    deltaVsLive = Number(best.avgR) - Number(live.avgR);
+    status = best.id === 'LIVE_2R' || deltaVsLive < 0.10
+      ? 'LIVE_STILL_BEST_OR_CLOSE'
+      : 'CHALLENGER_AHEAD_SAMPLE';
+  }
+  return {
+    mode:'SHADOW_ONLY',
+    minResolved,
+    liveVariant:'LIVE_2R',
+    variants,
+    best,
+    status,
+    deltaVsLive,
+    note:'No live TP/SL change is made automatically.'
+  };
+}
+
 function prune(state, now = Date.now()) {
   const shadow = ensureShadow(state);
   const cutoff = now - 180 * DAY_MS;
@@ -345,6 +437,10 @@ function prune(state, now = Date.now()) {
 
 module.exports = {
   ensureShadow,
+  shadowTradeMap,
+  vwapPassed,
+  h4Passed,
+  isLiveQualified,
   registerCandidate,
   updateTrade,
   trackAll,
@@ -353,6 +449,7 @@ module.exports = {
   summary,
   learningReport,
   liveHealth,
+  tpSlArenaSummary,
   rankGroupStats,
   maxDrawdownR,
   maxLossStreak,
