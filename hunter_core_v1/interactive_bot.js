@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { snapshot } = require('./market_data');
 const { rankSnapshots } = require('./core');
@@ -19,6 +20,7 @@ const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
 const EQUITY = Number(process.env.HUNTER_EQUITY_USDT || 1000);
 const RISK_PCT = Number(process.env.HUNTER_RISK_PCT || 0.005);
 const STATE_PATH = process.env.HUNTER_STATE_PATH || path.join('.hunter_state', 'state.json');
+const BREAKOUT_STATE_PATH = process.env.BREAKOUT_STATE_PATH || path.join('.hunter_state', 'session_breakout_state.json');
 
 if (!BOT_TOKEN || !CHAT_ID) {
   console.error('Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID');
@@ -83,6 +85,7 @@ function mainKeyboard() {
         { text: '📡 SYSTEM', callback_data: 'system' },
         { text: '📊 RESULTS', callback_data: 'performance' }
       ],
+      [{ text: '📒 SIGNAL RECORDS', callback_data: 'signal_results' }],
       [{ text: '⋯ MORE', callback_data: 'more' }]
     ]
   };
@@ -140,6 +143,85 @@ function analystKeyboard() {
 
 function backKeyboard() {
   return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
+}
+
+function signalResultsKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🔄 Refresh Records', callback_data: 'signal_results' }],
+      [{ text: '🏠 Home', callback_data: 'start' }]
+    ]
+  };
+}
+
+function loadBreakoutState() {
+  try {
+    const x = JSON.parse(fs.readFileSync(BREAKOUT_STATE_PATH, 'utf8'));
+    return x && typeof x === 'object' ? x : { trades: {} };
+  } catch {
+    return { trades: {} };
+  }
+}
+
+function signalStatusLine(t) {
+  const status = String(t.status || 'OPEN');
+  if (status === 'TP2') return '🏆 TP2 HIT (+2R)';
+  if (status === 'TP1_THEN_SL') return '⚠️ TP1 HIT → later SL';
+  if (status === 'SL') return '❌ SL HIT (-1R)';
+  if (status === 'TP1') return '✅ TP1 HIT (+1R reached) · still tracking';
+  if (status === 'TP1_AND_SL_SAME_M15') return '⚠️ TP1 + SL touched in same M15';
+  if (status === 'TP2_AND_SL_SAME_M15') return '⚠️ TP2 + SL touched in same M15';
+  return '⏳ OPEN';
+}
+
+function breakoutResultsText() {
+  const state = loadBreakoutState();
+  const trades = Object.values(state.trades || {}).sort((a,b) => Number(b.signalAtMs || 0) - Number(a.signalAtMs || 0));
+  if (!trades.length) {
+    return [
+      '📒 SIGNAL RECORDS',
+      '',
+      'No tracked signal yet.',
+      'From now on every sent breakout signal will be checked for SL / 1R / 2R.'
+    ].join('\n');
+  }
+
+  const tp1 = trades.filter(t => t.milestones?.tp1?.hit).length;
+  const tp2 = trades.filter(t => t.milestones?.tp2?.hit).length;
+  const sl = trades.filter(t => t.milestones?.sl?.hit).length;
+  const open = trades.filter(t => !t.terminal).length;
+  const sameBar = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
+
+  const lines = [
+    '📒 SIGNAL RECORDS',
+    '',
+    `Signals tracked: ${trades.length}`,
+    `✅ Reached 1R: ${tp1}`,
+    `🏆 Reached 2R: ${tp2}`,
+    `❌ Touched SL: ${sl}`,
+    `⏳ Still open: ${open}`,
+    sameBar ? `⚠️ Same-M15 ambiguous: ${sameBar}` : null,
+    '',
+    'RECENT'
+  ].filter(Boolean);
+
+  for (const t of trades.slice(0, 10)) {
+    lines.push(
+      '',
+      `${t.symbol} · ${t.sessionLabel || t.session} · ${t.side}`,
+      signalStatusLine(t),
+      `Entry ${priceFmt(t.entry)} · SL ${priceFmt(t.stop)} · 1R ${priceFmt(t.tp1)} · 2R ${priceFmt(t.tp2)}`,
+      t.signalAt ? `Signal: ${localTime(new Date(t.signalAt))} SGT` : null
+    );
+  }
+
+  lines.push(
+    '',
+    'Note: 1R / 2R / SL are milestone counts, not mutually exclusive.',
+    'If TP and SL are both touched inside one M15 candle, order is marked unknown instead of guessed.'
+  );
+
+  return lines.filter(Boolean).join('\n');
 }
 
 function simpleKeyboard(refreshAction) {
@@ -500,7 +582,8 @@ async function showMenu() {
     '🚨 NOW = 有没有可以做的',
     '👀 KEY LEVELS = 现在最需要盯的价位',
     '📡 SYSTEM = 数据有没有正常',
-    '📊 RESULTS = 实际结果',
+    '📊 RESULTS = 旧 Hunter forward results',
+    '📒 SIGNAL RECORDS = 这套 breakout 的 SL / 1R / 2R',
     '',
     '没有确认 = 不进。'
   ].join('\n'), mainKeyboard());
@@ -524,6 +607,11 @@ async function handleAction(action, callbackId) {
 
   if (action === 'more') {
     await send('MORE', moreKeyboard());
+    return;
+  }
+
+  if (action === 'signal_results') {
+    await send(breakoutResultsText(), signalResultsKeyboard());
     return;
   }
 
@@ -585,6 +673,7 @@ function normalizeMessage(text) {
   if (t === '/check' || t === 'check' || t === '/breakout' || t === 'breakout' || t === '/now' || t === 'now') return 'now';
   if (t === '/levels' || t === 'levels') return 'levels';
   if (t === '/system' || t === 'system') return 'system';
+  if (t === '/records' || t === 'records' || t === '/signalresults' || t === 'signalresults') return 'signal_results';
   return null;
 }
 
@@ -634,6 +723,7 @@ async function setCommands() {
       { command: 'now', description: 'Confirmed signal now' },
       { command: 'levels', description: 'Key prices to watch' },
       { command: 'system', description: 'Feed and scanner status' },
+      { command: 'records', description: 'Breakout signal SL / 1R / 2R records' },
       { command: 'status', description: 'Legacy Hunter status' }
     ]
   });
