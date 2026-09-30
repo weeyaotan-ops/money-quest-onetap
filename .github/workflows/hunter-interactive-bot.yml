@@ -1,4 +1,4 @@
-# Hunter v3: simple Chinese + fresh-breakout-only command center
+# Hunter v4: expiry + countdown + correlation + daily summary + evidence grades
 # Reads the latest session-breakout cache so SIGNAL RECORDS stays current.
 name: Hunter Interactive Telegram Bot
 
