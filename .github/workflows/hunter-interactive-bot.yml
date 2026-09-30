@@ -1,4 +1,4 @@
-# Hunter v4: expiry + countdown + correlation + daily summary + evidence grades
+# Hunter v5: one-tap learning + strategy health
 # Reads the latest session-breakout cache so SIGNAL RECORDS stays current.
 name: Hunter Interactive Telegram Bot
 
