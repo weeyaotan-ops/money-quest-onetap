@@ -1,4 +1,4 @@
-# Session Breakout v3: fresh-breakout-only live monitor
+# Session Breakout v4: daily summary + anomaly alerts + signal validity
 # Tracks every sent signal through SL, 1R and 2R milestones.
 name: Session Breakout Live Monitor
 
