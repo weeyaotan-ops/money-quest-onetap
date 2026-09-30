@@ -1,0 +1,22 @@
+name: Session Breakout Hardening CI
+
+on:
+  pull_request:
+    paths:
+      - 'session_breakout_monitor.js'
+      - 'test/session_breakout_monitor.test.js'
+      - 'package.json'
+      - '.github/workflows/session-breakout-hardening-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: node --check session_breakout_monitor.js
+      - run: node test/session_breakout_monitor.test.js

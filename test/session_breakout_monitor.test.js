@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { localParts, ema50Bias, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
+const { localParts, ema50Bias, snapshotHealth, evaluate, rawBreakoutEvent, shadowTradeFromBreakout, shadowSummary, summarizeShadowTrades, compareFilterEvidence, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
 
 const M15 = 15 * 60 * 1000;
 
@@ -214,5 +214,76 @@ function trend4h(end, bearish = false) {
   assert.strictEqual(sum.bySide.LONG.raw.n, 3);
   assert.strictEqual(sum.bySymbolSession['TEST|London'].both.tp2, 1);
 })();
+
+
+(function snapshotHealthBlocksStaleData() {
+  const now = Date.parse('2026-09-30T08:30:00Z');
+  const latestOpen = now - 60 * 60_000;
+  const snap = {
+    symbol: 'BTCUSDT',
+    provider: 'BINANCE',
+    candles15m: [c(latestOpen, 100, 101, 99, 100)],
+    candles4h: trend4h(now)
+  };
+  const h = snapshotHealth(snap, now);
+  assert.strictEqual(h.ok, false);
+  assert.ok(h.issues.includes('M15_STALE'));
+})();
+
+(function snapshotHealthAcceptsFreshSaneData() {
+  const now = Date.parse('2026-09-30T08:01:00Z');
+  const bars = [];
+  for (let i = 0; i < 24; i += 1) {
+    const t = Date.parse('2026-09-30T02:00:00Z') + i * M15;
+    bars.push(c(t, 100, 101, 99, 100));
+  }
+  const snap = {
+    symbol: 'BTCUSDT',
+    provider: 'BINANCE',
+    candles15m: bars,
+    candles4h: trend4h(now)
+  };
+  const h = snapshotHealth(snap, now);
+  assert.strictEqual(h.ok, true);
+  assert.strictEqual(h.status, 'HEALTHY');
+})();
+
+(function evidenceEngineUsesResolved2RHoldModel() {
+  function terminal(status) {
+    const t = {
+      status,
+      terminal: true,
+      milestones: {
+        tp1: { hit: status === 'TP2' || status === 'TP1_THEN_SL' },
+        tp2: { hit: status === 'TP2' },
+        sl: { hit: status === 'SL' || status === 'TP1_THEN_SL' }
+      }
+    };
+    return t;
+  }
+  const xs = [
+    terminal('TP2'),
+    terminal('TP2'),
+    terminal('SL'),
+    terminal('TP1_THEN_SL'),
+    { status: 'OPEN', terminal: false, milestones: { tp1:{hit:false},tp2:{hit:false},sl:{hit:false} } },
+    terminal('TP1_AND_SL_SAME_M15')
+  ];
+  const s = summarizeShadowTrades(xs);
+  assert.strictEqual(s.resolved, 4);
+  assert.strictEqual(s.wins, 2);
+  assert.strictEqual(s.losses, 2);
+  assert.strictEqual(s.avgRBeforeCosts, 0.5);
+  assert.strictEqual(s.ambiguous, 1);
+  assert.strictEqual(s.evidenceStatus, 'INSUFFICIENT');
+})();
+
+(function filterComparisonNeedsRealSampleBeforeJudging() {
+  const pass = { resolved: 10, avgRAfterCosts: 0.4, winRateCi95: { low: 0.40, high: 0.70 } };
+  const blocked = { resolved: 10, avgRAfterCosts: -0.2, winRateCi95: { low: 0.10, high: 0.30 } };
+  const x = compareFilterEvidence(pass, blocked);
+  assert.strictEqual(x.status, 'INSUFFICIENT');
+})();
+
 
 console.log('session_breakout_monitor tests: PASS');

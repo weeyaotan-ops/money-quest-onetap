@@ -38,6 +38,11 @@ const FX_SYMBOLS = (process.env.FX_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUS
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const STARTUP_NOTICE = ['1','true','yes'].includes(String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase());
 const RUN_ONCE = ['1','true','yes'].includes(String(process.env.HUNTER_RUN_ONCE || '').toLowerCase());
+const FETCH_TIMEOUT_MS = Number(process.env.HUNTER_FETCH_TIMEOUT_MS || 12000);
+const FETCH_RETRIES = Math.max(0, Math.min(3, Number(process.env.HUNTER_FETCH_RETRIES || 2)));
+const SHADOW_MIN_RESOLVED = Math.max(10, Number(process.env.SHADOW_MIN_RESOLVED || 30));
+const SHADOW_COST_R = Math.max(0, Number(process.env.SHADOW_COST_R || 0));
+const CORE_SYMBOLS = new Set(['BTCUSDT','ETHUSDT','SOLUSDT']);
 
 function fmtPrice(x) {
   const n = Number(x);
@@ -74,10 +79,31 @@ function utcDate(ts) {
   return new Date(Number(ts)).toISOString().slice(0, 10);
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function getJson(url, extraHeaders = {}) {
-  const res = await fetch(url, { headers: { 'user-agent': 'money-quest-session-breakout/1.0', ...extraHeaders } });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
-  return res.json();
+  let lastError = null;
+  for (let attempt = 0; attempt <= FETCH_RETRIES; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'user-agent': 'money-quest-session-breakout/1.0', ...extraHeaders },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      });
+      if (!res.ok) {
+        const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+        if (!retryable) throw new Error(`HTTP ${res.status} ${url}`);
+        throw new Error(`RETRYABLE_HTTP_${res.status} ${url}`);
+      }
+      return await res.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= FETCH_RETRIES) break;
+      await sleep(250 * (2 ** attempt));
+    }
+  }
+  throw lastError || new Error(`FETCH_FAILED ${url}`);
 }
 
 function mapBinanceKlines(rows, now = Date.now()) {
@@ -300,7 +326,52 @@ function resolveSession(snapshotData, sessionId) {
   return { ...base, id: 'NEW_YORK_CRYPTO', label: 'New York', hour: 9, minute: 30 };
 }
 
+function snapshotHealth(snapshotData, now = Date.now()) {
+  const c15 = [...(snapshotData?.candles15m || [])].sort((a,b) => Number(a.openTime) - Number(b.openTime));
+  const c4h = [...(snapshotData?.candles4h || [])].sort((a,b) => Number(a.openTime) - Number(b.openTime));
+  const latest = c15.at(-1);
+  const issues = [];
+  if (!latest) issues.push('NO_M15');
+  if (c4h.length < 51) issues.push('H4_HISTORY_SHORT');
+
+  let lagMs = null;
+  if (latest) {
+    lagMs = now - (Number(latest.openTime) + M15_MS);
+    if (lagMs > MAX_SIGNAL_AGE_MS) issues.push('M15_STALE');
+    if (lagMs < -60_000) issues.push('M15_FUTURE');
+    const o=Number(latest.open), h=Number(latest.high), l=Number(latest.low), cl=Number(latest.close);
+    if (![o,h,l,cl].every(Number.isFinite)) issues.push('M15_INVALID_OHLC');
+    if (Number.isFinite(h) && Number.isFinite(l) && h < l) issues.push('M15_HIGH_LT_LOW');
+    if (Number.isFinite(h) && Number.isFinite(l) && Number.isFinite(o) && (o > h || o < l)) issues.push('M15_OPEN_OUTSIDE');
+    if (Number.isFinite(h) && Number.isFinite(l) && Number.isFinite(cl) && (cl > h || cl < l)) issues.push('M15_CLOSE_OUTSIDE');
+  }
+
+  let gapCount = 0;
+  const recent = c15.slice(-24);
+  for (let i=1;i<recent.length;i+=1) {
+    const gap = Number(recent[i].openTime) - Number(recent[i-1].openTime);
+    if (gap > M15_MS * 2.1) gapCount += 1;
+  }
+  if (gapCount > 0 && snapshotData?.provider !== 'DUKASCOPY') issues.push('M15_GAPS');
+
+  const fatal = issues.some(x => ['NO_M15','H4_HISTORY_SHORT','M15_STALE','M15_FUTURE','M15_INVALID_OHLC','M15_HIGH_LT_LOW','M15_OPEN_OUTSIDE','M15_CLOSE_OUTSIDE'].includes(x));
+  return {
+    symbol: snapshotData?.symbol || 'UNKNOWN',
+    provider: snapshotData?.provider || 'UNKNOWN',
+    ok: !fatal,
+    status: fatal ? 'ERROR' : issues.length ? 'WARN' : 'HEALTHY',
+    lagMs,
+    lagMinutes: Number.isFinite(lagMs) ? lagMs / 60000 : null,
+    m15Bars: c15.length,
+    h4Bars: c4h.length,
+    gapCount,
+    issues
+  };
+}
+
 function evaluate(snapshotData, sessionId, now = Date.now()) {
+  const integrity = snapshotHealth(snapshotData, now);
+  if (!integrity.ok) return null;
   const session = resolveSession(snapshotData, sessionId);
   if (!session) return null;
   const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
@@ -356,6 +427,8 @@ function evaluate(snapshotData, sessionId, now = Date.now()) {
 }
 
 function evaluateWatch(snapshotData, sessionId, now = Date.now()) {
+  const integrity = snapshotHealth(snapshotData, now);
+  if (!integrity.ok) return null;
   const session = resolveSession(snapshotData, sessionId);
   if (!session) return null;
   const c15 = [...(snapshotData.candles15m || [])].sort((a, b) => a.openTime - b.openTime);
@@ -523,16 +596,77 @@ function pruneShadow(state) {
   for (const key of Object.keys(state.shadow || {})) if (!keep.has(key)) delete state.shadow[key];
 }
 
+function shadowFinalR(trade) {
+  if (!trade?.terminal || String(trade.status || '').includes('SAME_M15')) return null;
+  if (trade.status === 'TP2') return 2;
+  if (trade.status === 'SL' || trade.status === 'TP1_THEN_SL') return -1;
+  return null;
+}
+
+function wilsonInterval(wins, n, z = 1.96) {
+  if (!(n > 0)) return { low: null, high: null };
+  const p = wins / n;
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const center = (p + z2 / (2*n)) / denom;
+  const margin = z * Math.sqrt((p * (1-p) / n) + z2 / (4*n*n)) / denom;
+  return { low: Math.max(0, center - margin), high: Math.min(1, center + margin) };
+}
+
+function evidenceStatus(resolved, wins, interval, breakEvenWinRate) {
+  if (resolved < SHADOW_MIN_RESOLVED) return 'INSUFFICIENT';
+  if (Number.isFinite(interval.low) && interval.low > breakEvenWinRate) return 'SUPPORTED_SAMPLE';
+  if (Number.isFinite(interval.high) && interval.high < breakEvenWinRate) return 'WEAK_SAMPLE';
+  return 'INCONCLUSIVE';
+}
+
 function summarizeShadowTrades(trades) {
   const xs = trades || [];
+  const resolvedRows = xs.map(t => ({ trade: t, r: shadowFinalR(t) })).filter(x => Number.isFinite(x.r));
+  const wins = resolvedRows.filter(x => x.r > 0).length;
+  const losses = resolvedRows.filter(x => x.r < 0).length;
+  const resolved = resolvedRows.length;
+  const totalRBeforeCosts = resolvedRows.reduce((sum,x) => sum + x.r, 0);
+  const totalRAfterCosts = totalRBeforeCosts - resolved * SHADOW_COST_R;
+  const avgRBeforeCosts = resolved ? totalRBeforeCosts / resolved : null;
+  const avgRAfterCosts = resolved ? totalRAfterCosts / resolved : null;
+  const winRate = resolved ? wins / resolved : null;
+  const breakEvenWinRate = (1 + SHADOW_COST_R) / 3;
+  const ci95 = wilsonInterval(wins, resolved);
   return {
     n: xs.length,
+    resolved,
+    wins,
+    losses,
+    winRate,
+    winRateCi95: ci95,
+    breakEvenWinRate,
+    avgRBeforeCosts,
+    avgRAfterCosts,
+    totalRBeforeCosts,
+    totalRAfterCosts,
+    evidenceStatus: evidenceStatus(resolved, wins, ci95, breakEvenWinRate),
     tp1: xs.filter(t => t.milestones?.tp1?.hit).length,
     tp2: xs.filter(t => t.milestones?.tp2?.hit).length,
     sl: xs.filter(t => t.milestones?.sl?.hit).length,
     open: xs.filter(t => !t.terminal).length,
     ambiguous: xs.filter(t => String(t.status || '').includes('SAME_M15')).length
   };
+}
+
+function compareFilterEvidence(passStats, blockedStats) {
+  if ((passStats?.resolved || 0) < SHADOW_MIN_RESOLVED || (blockedStats?.resolved || 0) < SHADOW_MIN_RESOLVED) {
+    return { status: 'INSUFFICIENT', deltaAvgR: null };
+  }
+  const deltaAvgR = Number(passStats.avgRAfterCosts) - Number(blockedStats.avgRAfterCosts);
+  const passLow = passStats.winRateCi95?.low;
+  const passHigh = passStats.winRateCi95?.high;
+  const blockLow = blockedStats.winRateCi95?.low;
+  const blockHigh = blockedStats.winRateCi95?.high;
+  let status = 'INCONCLUSIVE';
+  if (Number.isFinite(passLow) && Number.isFinite(blockHigh) && passLow > blockHigh) status = 'FILTERS_HELPING_SAMPLE';
+  if (Number.isFinite(passHigh) && Number.isFinite(blockLow) && passHigh < blockLow) status = 'FILTERS_HURTING_SAMPLE';
+  return { status, deltaAvgR };
 }
 
 function shadowSummary(state) {
@@ -561,13 +695,23 @@ function shadowSummary(state) {
     );
   }
 
+  const raw = summarizeShadowTrades(all);
+  const vwapOnly = summarizeShadowTrades(all.filter(t => t.filters?.vwapPass));
+  const h4Only = summarizeShadowTrades(all.filter(t => t.filters?.h4Pass));
+  const both = summarizeShadowTrades(all.filter(t => t.filters?.liveQualified));
+  const blocked = summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified));
+
   return {
     mode: 'OBSERVATIONAL_ONLY',
-    raw: summarizeShadowTrades(all),
-    vwapOnly: summarizeShadowTrades(all.filter(t => t.filters?.vwapPass)),
-    h4Only: summarizeShadowTrades(all.filter(t => t.filters?.h4Pass)),
-    both: summarizeShadowTrades(all.filter(t => t.filters?.liveQualified)),
-    blocked: summarizeShadowTrades(all.filter(t => !t.filters?.liveQualified)),
+    outcomeModel: 'HOLD_TO_2R_OR_SL',
+    costRPerTrade: SHADOW_COST_R,
+    minResolvedForEvidence: SHADOW_MIN_RESOLVED,
+    raw,
+    vwapOnly,
+    h4Only,
+    both,
+    blocked,
+    filterAssessment: compareFilterEvidence(both, blocked),
     bySymbol: grouped(t => t.symbol),
     bySession: grouped(t => t.sessionLabel || t.session),
     bySide: grouped(t => t.side),
@@ -829,24 +973,46 @@ function saveState(state) {
   fs.renameSync(tmp, STATE_PATH);
 }
 
-let health = { ok: true, lastCycleAt: null, lastError: null, lastCandidates: 0 };
+let health = {
+  ok: true,
+  status: 'STARTING',
+  lastCycleAt: null,
+  lastError: null,
+  lastCandidates: 0,
+  lastWatches: 0,
+  dataErrors: [],
+  feeds: []
+};
 
 async function cycle() {
   const now = Date.now();
   const state = loadState();
   const cryptoResults = await Promise.allSettled(SYMBOLS.map(s => snapshot(s, now)));
   const snaps = [];
+  const dataErrors = [];
   for (let i = 0; i < cryptoResults.length; i += 1) {
     const r = cryptoResults[i];
     if (r.status === 'fulfilled') snaps.push(r.value);
-    else console.error(JSON.stringify({ symbol: SYMBOLS[i], marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
+    else {
+      const error = String(r.reason?.message || r.reason);
+      dataErrors.push({ symbol: SYMBOLS[i], provider: 'CRYPTO', error });
+      console.error(JSON.stringify({ symbol: SYMBOLS[i], marketData: 'ERROR', error }));
+    }
   }
   const fxResults = await Promise.allSettled(FX_SYMBOLS.map(s => publicFxSnapshot(s, now)));
   for (let i = 0; i < fxResults.length; i += 1) {
     const r = fxResults[i];
     if (r.status === 'fulfilled') snaps.push(r.value);
-    else console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'DUKASCOPY', marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
+    else {
+      const error = String(r.reason?.message || r.reason);
+      dataErrors.push({ symbol: FX_SYMBOLS[i], provider: 'DUKASCOPY', error });
+      console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'DUKASCOPY', marketData: 'ERROR', error }));
+    }
   }
+
+  const feedHealth = snaps.map(s => snapshotHealth(s, now));
+  const healthySymbols = new Set(feedHealth.filter(x => x.ok).map(x => x.symbol));
+  const coreMissing = [...CORE_SYMBOLS].filter(s => !healthySymbols.has(s));
 
   const outcomeChanged = trackTrades(state, snaps);
   const shadowAdded = captureShadowBreakouts(state, snaps, now);
@@ -857,6 +1023,11 @@ async function cycle() {
   const watches = [];
 
   for (const snap of snaps) {
+    const integrity = snapshotHealth(snap, now);
+    if (!integrity.ok) {
+      console.warn(JSON.stringify({ symbol: snap.symbol, provider: snap.provider, signalIntegrity: 'BLOCKED', issues: integrity.issues }));
+      continue;
+    }
     for (const sessionId of SESSION_IDS) {
       const signal = evaluate(snap, sessionId, now);
       if (signal && !state.sent[signal.key]) {
@@ -893,7 +1064,20 @@ async function cycle() {
     }
   }
 
-  health = { ok: true, lastCycleAt: new Date(now).toISOString(), lastError: null, lastCandidates: signals.length };
+  const healthStatus = snaps.length === 0 || coreMissing.length === CORE_SYMBOLS.size
+    ? 'FAILED'
+    : (dataErrors.length || coreMissing.length || feedHealth.some(x => x.status !== 'HEALTHY') ? 'DEGRADED' : 'HEALTHY');
+  health = {
+    ok: healthStatus !== 'FAILED',
+    status: healthStatus,
+    lastCycleAt: new Date(now).toISOString(),
+    lastError: null,
+    lastCandidates: signals.length,
+    lastWatches: watches.length,
+    dataErrors,
+    coreMissing,
+    feeds: feedHealth
+  };
   console.log(JSON.stringify({
     engine: 'Session Breakout Monitor V1',
     mode: 'SIGNAL_ONLY',
@@ -901,6 +1085,7 @@ async function cycle() {
     symbols: SYMBOLS,
     fxSymbols: FX_SYMBOLS,
     publicFxFeed: 'DUKASCOPY',
+    health: { status: health.status, coreMissing: health.coreMissing, dataErrors: dataErrors.length },
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     watches: watches.map(w => ({ symbol: w.symbol, session: w.session, side: w.side, current: w.current, trigger: w.trigger })),
@@ -936,11 +1121,18 @@ function schedule() {
 function startHealthServer() {
   http.createServer((req, res) => {
     if (req.url === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ...health, engine: 'Session Breakout Monitor V1', mode: 'SIGNAL_ONLY', shadowLab: 'OBSERVATIONAL_ONLY' }));
+      const code = health.status === 'FAILED' ? 503 : 200;
+      res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({
+        ...health,
+        engine: 'Session Breakout Monitor V1',
+        mode: 'SIGNAL_ONLY',
+        autoTrading: false,
+        shadowLab: 'OBSERVATIONAL_ONLY'
+      }, null, 2));
       return;
     }
-    if (req.url === '/shadow') {
+    if (req.url === '/shadow' || req.url === '/evidence') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify(shadowSummary(loadState()), null, 2));
       return;
@@ -991,4 +1183,25 @@ if (require.main === module) {
   });
 }
 
-module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, rawBreakoutEvent, shadowTradeFromBreakout, captureShadowBreakouts, trackShadowTrades, shadowSummary, mapBinanceKlines, tradeFromSignal, updateTradeFromCandles, resultSummary };
+module.exports = {
+  localParts,
+  ema50Bias,
+  dailyVwap,
+  sessionBox,
+  snapshotHealth,
+  evaluate,
+  evaluateWatch,
+  rawBreakoutEvent,
+  shadowTradeFromBreakout,
+  captureShadowBreakouts,
+  trackShadowTrades,
+  shadowFinalR,
+  wilsonInterval,
+  summarizeShadowTrades,
+  compareFilterEvidence,
+  shadowSummary,
+  mapBinanceKlines,
+  tradeFromSignal,
+  updateTradeFromCandles,
+  resultSummary
+};
