@@ -216,4 +216,54 @@ function trend4h({ bearish = false, endTime }) {
 })();
 
 
+
+(function testLearningReportFindsWeakGroupWithoutChangingLive() {
+  const state = {};
+  shadow.ensureShadow(state);
+  for (let i = 0; i < 12; i += 1) {
+    state.shadow.trades['sol'+i] = {
+      key:'sol'+i, symbol:'SOLUSDT', sessionLabel:'London', side:'SHORT',
+      firstBreakout:true, fullPass:true, vwapPass:true, h4Pass:true,
+      terminal:true, status:'SL', signalAtMs:1000+i,
+      milestones:{ tp1:{hit:false}, tp2:{hit:false}, sl:{hit:true} }
+    };
+  }
+  for (let i = 0; i < 12; i += 1) {
+    state.shadow.trades['eth'+i] = {
+      key:'eth'+i, symbol:'ETHUSDT', sessionLabel:'New York', side:'LONG',
+      firstBreakout:true, fullPass:true, vwapPass:true, h4Pass:true,
+      terminal:true, status:'TP2', signalAtMs:2000+i,
+      milestones:{ tp1:{hit:true}, tp2:{hit:true}, sl:{hit:false} }
+    };
+  }
+  const r = shadow.learningReport(state, { minFilterResolved: 30, minGroupResolved: 12 });
+  assert.strictEqual(r.status, 'COLLECTING');
+  assert.ok(r.strongest.some(x => x.key === 'ETHUSDT'));
+  assert.ok(r.weakest.some(x => x.key === 'SOLUSDT'));
+  assert.strictEqual(r.suggestedTest.type, 'TEST_EXCLUSION');
+})();
+
+(function testLiveHealthDetectsRecentWeakeningSample() {
+  const trades = [];
+  let t = 1;
+  for (let i = 0; i < 20; i += 1) {
+    trades.push({ signalAtMs:t++, terminal:true, status:'TP2' });
+  }
+  for (let i = 0; i < 20; i += 1) {
+    trades.push({ signalAtMs:t++, terminal:true, status:i < 12 ? 'SL' : 'TP2' });
+  }
+  const h = shadow.liveHealth(trades, { recentN:20 });
+  assert.strictEqual(h.resolved, 40);
+  assert.ok(h.allAvgR > 0);
+  assert.ok(h.recentAvgR <= 0.2);
+  assert.ok(['WATCH','WEAKENING_SAMPLE','HEALTHY_SAMPLE'].includes(h.status));
+  assert.ok(h.maxDrawdownR >= 1);
+})();
+
+(function testDrawdownAndLossStreakHelpers() {
+  assert.strictEqual(shadow.maxLossStreak([2,-1,-1,-1,2,-1]), 3);
+  assert.strictEqual(shadow.maxDrawdownR([2,-1,-1,2]), 2);
+})();
+
+
 console.log('hunter_session_breakout tests: PASS');
