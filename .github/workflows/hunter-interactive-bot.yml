@@ -8,7 +8,7 @@ on:
       - ".github/workflows/hunter-interactive-bot.yml"
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "5,20,35,50 * * * *"
 
 concurrency:
   group: hunter-interactive-telegram-bot
@@ -40,6 +40,14 @@ jobs:
           restore-keys: |
             hunter-state-
 
+      - name: Restore latest breakout results
+        uses: actions/cache/restore@v4
+        with:
+          path: .hunter_state
+          key: breakout-reader-${{ github.run_id }}
+          restore-keys: |
+            session-breakout-state-
+
       - name: Install public market data helper
         run: npm install --no-save dukascopy-node
 
@@ -56,6 +64,7 @@ jobs:
       - name: Run interactive bot
         env:
           HUNTER_STATE_PATH: ".hunter_state/state.json"
+          BREAKOUT_STATE_PATH: ".hunter_state/session_breakout_state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BREAKOUT_CRYPTO_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT
