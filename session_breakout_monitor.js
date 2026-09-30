@@ -38,6 +38,7 @@ const FX_SYMBOLS = (process.env.FX_SYMBOLS || 'XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUS
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const STARTUP_NOTICE = ['1','true','yes'].includes(String(process.env.TELEGRAM_STARTUP_NOTICE || '').toLowerCase());
 const RUN_ONCE = ['1','true','yes'].includes(String(process.env.HUNTER_RUN_ONCE || '').toLowerCase());
+const COMMAND_CENTER_ENABLED = !['0','false','no'].includes(String(process.env.TELEGRAM_COMMAND_CENTER_ENABLED || 'true').toLowerCase());
 const FETCH_TIMEOUT_MS = Number(process.env.HUNTER_FETCH_TIMEOUT_MS || 12000);
 const FETCH_RETRIES = Math.max(0, Math.min(3, Number(process.env.HUNTER_FETCH_RETRIES || 2)));
 const SHADOW_MIN_RESOLVED = Math.max(10, Number(process.env.SHADOW_MIN_RESOLVED || 30));
@@ -1151,7 +1152,6 @@ function startHealthServer() {
         ...health,
         engine: 'Session Breakout Monitor V1',
         strategyVersion: STRATEGY_VERSION,
-        strategyVersion: STRATEGY_VERSION,
         mode: 'SIGNAL_ONLY',
         autoTrading: false,
         shadowLab: 'OBSERVATIONAL_ONLY'
@@ -1171,19 +1171,29 @@ function startHealthServer() {
 }
 
 async function main() {
-  if (!RUN_ONCE) startHealthServer();
-  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, symbols: SYMBOLS, fxSymbols: FX_SYMBOLS, publicFxFeed: 'DUKASCOPY', sessions: SESSION_IDS, tpR: TP_R }));
+  if (!RUN_ONCE) {
+    startHealthServer();
+    if (COMMAND_CENTER_ENABLED) {
+      try {
+        const commandBot = require('./session_breakout_bot');
+        commandBot.run().catch(error => {
+          console.error(JSON.stringify({ commandCenter: 'ERROR', error: error.message }));
+        });
+      } catch (error) {
+        console.error(JSON.stringify({ commandCenter: 'START_ERROR', error: error.message }));
+      }
+    }
+  }
+  console.log(JSON.stringify({ engine: 'Session Breakout Monitor V1', status: 'STARTING', runOnce: RUN_ONCE, commandCenter: COMMAND_CENTER_ENABLED, symbols: SYMBOLS, fxSymbols: FX_SYMBOLS, publicFxFeed: 'DUKASCOPY', sessions: SESSION_IDS, tpR: TP_R }));
 
   if (STARTUP_NOTICE) {
     try {
       await telegram([
-        '✅ Session Breakout Monitor ONLINE',
+        '✅ Breakout 系统已上线',
         '',
-        `Symbols: ${SYMBOLS.join(', ')}`,
-        `Sessions: ${SESSION_IDS.join(', ')}`,
-        'Rule: first 2×M15 box → M15 close breakout → VWAP + H4 EMA50 confirmation',
-        `TP: ${TP_R.toFixed(1)}R`,
-        'Mode: SIGNAL ONLY'
+        '规则：前30分钟 Box → 刚收破 → VWAP 同向 → H4 EMA50 同向',
+        `目标：${TP_R.toFixed(1)}R`,
+        '模式：只发信号，不自动下单'
       ].join('\n'));
     } catch (error) {
       console.error(JSON.stringify({ startupTelegram: 'ERROR', error: error.message }));
