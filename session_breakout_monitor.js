@@ -45,6 +45,9 @@ const SHADOW_MIN_RESOLVED = Math.max(10, Number(process.env.SHADOW_MIN_RESOLVED 
 const SHADOW_COST_R = Math.max(0, Number(process.env.SHADOW_COST_R || 0));
 const CORE_SYMBOLS = new Set(['BTCUSDT','ETHUSDT','SOLUSDT']);
 const STRATEGY_VERSION = 'SESSION_BREAKOUT_V1_LOCKED_2026-09-30';
+const SIGNAL_VALID_MS = Number(process.env.BREAKOUT_SIGNAL_VALID_MS || 15 * 60 * 1000);
+const DAILY_SUMMARY_ENABLED = !['0','false','no'].includes(String(process.env.DAILY_SUMMARY_ENABLED || 'true').toLowerCase());
+const DAILY_SUMMARY_HOUR_SGT = Math.max(0, Math.min(23, Number(process.env.DAILY_SUMMARY_HOUR_SGT || 7)));
 
 function fmtPrice(x) {
   const n = Number(x);
@@ -75,6 +78,25 @@ function sgtTime(ts) {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false
   }).format(new Date(ts));
+}
+
+function sgtParts(ts = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Singapore',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(ts));
+  const o = {};
+  for (const p of parts) if (p.type !== 'literal') o[p.type] = p.value;
+  return {
+    date: `${o.year}-${o.month}-${o.day}`,
+    hour: Number(o.hour),
+    minute: Number(o.minute)
+  };
+}
+
+function sgtDate(ts = Date.now()) {
+  return sgtParts(ts).date;
 }
 
 function utcDate(ts) {
@@ -783,7 +805,8 @@ function buildMessage(s) {
     Number.isFinite(s.riskUsd) ? `风险：${(RISK_PCT * 100).toFixed(1)}%（约 ${s.riskUsd.toFixed(2)}）` : null,
     '',
     `确认时间：${sgtTime(s.candleCloseTime)} SGT`,
-    '只在刚突破这根 M15 发一次，不追旧突破。'
+    `有效至：${sgtTime(Number(s.candleCloseTime) + SIGNAL_VALID_MS)} SGT`,
+    '超过有效时间就不追。'
   ].filter(Boolean).join('\n');
 }
 
@@ -802,6 +825,7 @@ function normalizeState(parsed) {
   if (!state.sent || typeof state.sent !== 'object') state.sent = {};
   if (!state.trades || typeof state.trades !== 'object') state.trades = {};
   if (!state.shadow || typeof state.shadow !== 'object') state.shadow = {};
+  if (!state.ops || typeof state.ops !== 'object') state.ops = {};
   return state;
 }
 
@@ -975,6 +999,96 @@ function resultSummary(state) {
   };
 }
 
+function tradeFinalR(trade) {
+  const status = String(trade?.status || '');
+  if (status.includes('SAME_M15')) return null;
+  if (status === 'TP2') return 2;
+  if (status === 'SL' || status === 'TP1_THEN_SL') return -1;
+  return null;
+}
+
+function buildDailySummary(state, targetDate) {
+  state = normalizeState(state);
+  const trades = Object.values(state.trades || {})
+    .filter(t => Number.isFinite(Number(t.signalAtMs)) && sgtDate(Number(t.signalAtMs)) === targetDate);
+
+  const resolved = trades.map(tradeFinalR).filter(Number.isFinite);
+  const totalR = resolved.reduce((a,b) => a + b, 0);
+  const tp1 = trades.filter(t => t.milestones?.tp1?.hit).length;
+  const tp2 = trades.filter(t => t.milestones?.tp2?.hit).length;
+  const sl = trades.filter(t => t.milestones?.sl?.hit).length;
+  const open = trades.filter(t => !t.terminal).length;
+  const ambiguous = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
+
+  const shadowDay = Object.values(state.shadow || {})
+    .filter(t => Number.isFinite(Number(t.signalAtMs)) && sgtDate(Number(t.signalAtMs)) === targetDate);
+  const fullPass = shadowDay.filter(t => t.filters?.liveQualified).length;
+  const blocked = shadowDay.filter(t => !t.filters?.liveQualified).length;
+
+  return [
+    '📅 每日总结',
+    targetDate,
+    '',
+    `正式信号：${trades.length}`,
+    `到1R：${tp1} · 到2R：${tp2} · 碰止损：${sl} · 还在跑：${open}`,
+    resolved.length ? `已完成净结果：${totalR >= 0 ? '+' : ''}${totalR.toFixed(1)}R（${resolved.length}单）` : '已完成净结果：还没有',
+    ambiguous ? `⚠️ 同根M15无法判断先后：${ambiguous}` : null,
+    '',
+    `Shadow：全部条件通过 ${fullPass} · 被条件挡掉 ${blocked}`,
+    '研究数据只做比较，不会自动改策略。'
+  ].filter(Boolean).join('\n');
+}
+
+async function maybeSendDailySummary(state, now = Date.now()) {
+  if (!DAILY_SUMMARY_ENABLED) return false;
+  state = normalizeState(state);
+  const p = sgtParts(now);
+  if (p.hour !== DAILY_SUMMARY_HOUR_SGT || p.minute >= 45) return false;
+
+  const targetDate = sgtDate(now - 24 * HOUR_MS);
+  if (state.ops.lastDailySummaryDate === targetDate) return false;
+
+  await telegram(buildDailySummary(state, targetDate));
+  state.ops.lastDailySummaryDate = targetDate;
+  state.ops.lastDailySummaryAt = new Date(now).toISOString();
+  return true;
+}
+
+function actionableHealthStatus(coreMissing, dataErrors, feedHealth) {
+  const cryptoErrors = (dataErrors || []).filter(x => x.provider === 'CRYPTO');
+  const coreBad = (feedHealth || []).filter(x => CORE_SYMBOLS.has(x.symbol) && x.status !== 'HEALTHY');
+  if ((coreMissing || []).length === CORE_SYMBOLS.size) return 'FAILED';
+  if ((coreMissing || []).length || cryptoErrors.length || coreBad.length) return 'DEGRADED';
+  return 'HEALTHY';
+}
+
+async function maybeSendHealthAlert(state, status, details = {}, now = Date.now()) {
+  state = normalizeState(state);
+  const prev = state.ops.lastActionHealthStatus || null;
+  state.ops.lastActionHealthStatus = status;
+  state.ops.lastHealthCheckedAt = new Date(now).toISOString();
+
+  if (!prev && status === 'HEALTHY') return false;
+  if (prev === status) return false;
+
+  if (status === 'HEALTHY') {
+    await telegram(['✅ 系统恢复正常', '', '核心数据源已经恢复，扫描继续。'].join('\n'));
+  } else {
+    const core = (details.coreMissing || []).join(', ');
+    const errors = (details.cryptoErrors || []).map(x => x.symbol).join(', ');
+    await telegram([
+      status === 'FAILED' ? '🚨 系统异常' : '⚠️ 系统需要注意',
+      '',
+      core ? `核心数据异常：${core}` : null,
+      errors ? `Crypto feed 错误：${errors}` : null,
+      '为安全起见，有问题的数据不会发信号。'
+    ].filter(Boolean).join('\n'));
+  }
+
+  state.ops.lastHealthAlertAt = new Date(now).toISOString();
+  return true;
+}
+
 function loadState() {
   try {
     return normalizeState(JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')));
@@ -1102,6 +1216,16 @@ async function cycle() {
     coreMissing,
     feeds: feedHealth
   };
+
+  const actionStatus = actionableHealthStatus(coreMissing, dataErrors, feedHealth);
+  const cryptoErrors = dataErrors.filter(x => x.provider === 'CRYPTO');
+  try {
+    const healthAlerted = await maybeSendHealthAlert(state, actionStatus, { coreMissing, cryptoErrors }, now);
+    const dailySent = await maybeSendDailySummary(state, now);
+    if (healthAlerted || dailySent) saveState(state);
+  } catch (error) {
+    console.error(JSON.stringify({ opsTelegram: 'ERROR', error: error.message }));
+  }
   console.log(JSON.stringify({
     engine: 'Session Breakout Monitor V1',
     strategyVersion: STRATEGY_VERSION,
@@ -1203,8 +1327,22 @@ async function main() {
   try { await cycle(); }
   catch (error) {
     health.ok = false;
+    health.status = 'FAILED';
     health.lastError = error.message;
     console.error(JSON.stringify({ cycle: 'ERROR', error: error.message }));
+    try {
+      const state = loadState();
+      const prev = state.ops?.lastFatalCycleError || null;
+      const sig = String(error.message || error).slice(0, 160);
+      if (prev !== sig) {
+        await telegram(['🚨 扫描失败', '', sig, '', '这一轮不会发任何信号。'].join('\n'));
+        state.ops.lastFatalCycleError = sig;
+        state.ops.lastFatalCycleAt = new Date().toISOString();
+        saveState(state);
+      }
+    } catch (notifyError) {
+      console.error(JSON.stringify({ fatalTelegram: 'ERROR', error: notifyError.message }));
+    }
     if (RUN_ONCE) throw error;
   }
 
@@ -1240,5 +1378,7 @@ module.exports = {
   mapBinanceKlines,
   tradeFromSignal,
   updateTradeFromCandles,
-  resultSummary
+  resultSummary,
+  buildDailySummary,
+  actionableHealthStatus
 };
