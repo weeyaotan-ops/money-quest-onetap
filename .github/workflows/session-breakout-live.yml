@@ -2,6 +2,10 @@ name: Session Breakout Live Monitor
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/session-breakout-live.yml"
   schedule:
     - cron: "2,17,32,47 * * * *"
 
