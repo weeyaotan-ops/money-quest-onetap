@@ -8,7 +8,8 @@ const {
   formatWhy,
   formatMarketBoard,
   formatLevels,
-  formatSystem
+  formatSystem,
+  correlationWarnings
 } = require('./session_breakout_check');
 const { summary: shadowSummary } = require('./session_breakout_shadow');
 
@@ -69,7 +70,10 @@ function mainKeyboard() {
         { text: '📊 成绩', callback_data: 'results' },
         { text: '📡 系统', callback_data: 'system' }
       ],
-      [{ text: '🧪 研究室', callback_data: 'shadow' }]
+      [
+        { text: '📅 今日总结', callback_data: 'daily' },
+        { text: '🧪 研究室', callback_data: 'shadow' }
+      ]
     ]
   };
 }
@@ -127,6 +131,13 @@ function activeText() {
   if (!trades.length) return ['📌 进行中', '', '⚪ 现在没有还在跑的信号。'].join('\n');
 
   const lines = ['📌 进行中', ''];
+  const riskNotes = correlationWarnings(trades);
+  if (riskNotes.length) {
+    lines.push('⚠️ 相关风险');
+    for (const w of riskNotes.slice(0, 3)) lines.push(w.text);
+    lines.push('');
+  }
+
   for (const t of trades.slice(0, 10)) {
     lines.push(
       `${t.side === 'LONG' ? '🟢' : '🔴'} ${t.symbol} · ${t.side === 'LONG' ? '做多' : '做空'}`,
@@ -202,6 +213,48 @@ function resultsText() {
   ].filter(Boolean).join('\n');
 }
 
+function tradeFinalR(t) {
+  const status = String(t?.status || '');
+  if (status.includes('SAME_M15')) return null;
+  if (status === 'TP2') return 2;
+  if (status === 'SL' || status === 'TP1_THEN_SL') return -1;
+  return null;
+}
+
+function dailySummaryText(date = sgtDate()) {
+  const state = loadBreakoutState();
+  const trades = Object.values(state.trades || {})
+    .filter(t => Number.isFinite(Number(t.signalAtMs)) && sgtDate(Number(t.signalAtMs)) === date)
+    .sort((a,b) => Number(a.signalAtMs || 0) - Number(b.signalAtMs || 0));
+
+  const resolved = trades.map(t => tradeFinalR(t)).filter(Number.isFinite);
+  const totalR = resolved.reduce((a,b) => a + b, 0);
+  const tp1 = trades.filter(t => t.milestones?.tp1?.hit).length;
+  const tp2 = trades.filter(t => t.milestones?.tp2?.hit).length;
+  const sl = trades.filter(t => t.milestones?.sl?.hit).length;
+  const open = trades.filter(t => !t.terminal).length;
+  const ambiguous = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
+  const risks = correlationWarnings(trades);
+
+  const lines = [
+    '📅 今日总结',
+    date,
+    '',
+    `信号：${trades.length}`,
+    `到1R：${tp1} · 到2R：${tp2} · 碰止损：${sl} · 进行中：${open}`,
+    resolved.length ? `已完成净结果：${totalR >= 0 ? '+' : ''}${totalR.toFixed(1)}R（${resolved.length}单）` : '已完成净结果：还没有',
+    ambiguous ? `⚠️ 同根M15无法判断先后：${ambiguous}` : null
+  ].filter(Boolean);
+
+  if (risks.length) {
+    lines.push('', '⚠️ 今天有相关性重叠');
+    for (const w of risks.slice(0, 3)) lines.push(w.text);
+  }
+
+  if (!trades.length) lines.push('', '今天暂时没有信号。');
+  return lines.join('\n');
+}
+
 function pct(x) {
   return Number.isFinite(Number(x)) ? (Number(x) * 100).toFixed(1) + '%' : 'n/a';
 }
@@ -210,8 +263,17 @@ function rfmt(x) {
   return Number.isFinite(Number(x)) ? (Number(x) >= 0 ? '+' : '') + Number(x).toFixed(2) + 'R' : 'n/a';
 }
 
+function evidenceGrade(s) {
+  const n = Number(s?.completed || 0);
+  const avg = Number(s?.avgR);
+  if (n < 30) return '⚪ 样本不足';
+  if (!Number.isFinite(avg)) return '⚪ 样本不足';
+  if (n < 60) return avg > 0 ? '🟡 样本初步支持' : '🟠 样本偏弱';
+  return avg > 0 ? '🟢 样本较稳定' : '🔴 样本偏弱';
+}
+
 function shadowLine(label, s) {
-  return `${label}: n=${s.n} · done=${s.completed} · WR ${pct(s.winRate)} · avg ${rfmt(s.avgR)}`;
+  return `${label}: 完成${s.completed}/${s.n} · 胜率 ${pct(s.winRate)} · 平均 ${rfmt(s.avgR)} · ${evidenceGrade(s)}`;
 }
 
 function shadowLabText() {
@@ -249,9 +311,9 @@ function shadowLabText() {
 
   lines.push(
     '',
-    '怎么看：',
-    '全部通过表现更好 = 过滤条件有帮助。',
-    '被挡掉的反而更好 = 过滤条件可能太严格。',
+    '证据等级：',
+    '少于30单 = 样本不足；30–59单 = 初步；60单以上才看稳定性。',
+    '全部通过表现更好，才说明过滤条件在当前样本中有帮助。',
     '',
     '只做研究，不会自动改信号规则。'
   );
@@ -301,6 +363,7 @@ async function showMenu() {
     '📒 信号记录 = 止损 / 1R / 2R',
     '📊 成绩 = 这套策略的记录',
     '📡 系统 = 数据有没有正常',
+    '📅 今日总结 = 今天发生了什么',
     '🧪 研究室 = 看过滤条件有没有帮助',
     '',
     '只有刚突破这根 M15 才算新信号。旧突破不追。'
@@ -315,6 +378,7 @@ async function handleAction(action, callbackId) {
     if (action === 'active') return send(activeText(), refreshKeyboard('active'));
     if (action === 'records') return send(signalRecordsText(), refreshKeyboard('records'));
     if (action === 'results') return send(resultsText(), refreshKeyboard('results'));
+    if (action === 'daily') return send(dailySummaryText(), refreshKeyboard('daily'));
     if (action === 'shadow') return send(shadowLabText(), refreshKeyboard('shadow'));
 
     if (['now','why','market','levels','system'].includes(action)) {
@@ -344,6 +408,7 @@ function normalizeMessage(text) {
   if (['/records','records'].includes(t)) return 'records';
   if (['/results','results','/performance','performance'].includes(t)) return 'results';
   if (['/system','system','/status','status'].includes(t)) return 'system';
+  if (['/daily','daily','/today','today'].includes(t)) return 'daily';
   if (['/shadow','shadow','/lab','lab'].includes(t)) return 'shadow';
   return null;
 }
@@ -390,6 +455,7 @@ async function setCommands() {
       { command: 'records', description: '信号记录' },
       { command: 'results', description: '策略成绩' },
       { command: 'system', description: '系统状态' },
+      { command: 'daily', description: '今日总结' },
       { command: 'shadow', description: '研究室' }
     ]
   });

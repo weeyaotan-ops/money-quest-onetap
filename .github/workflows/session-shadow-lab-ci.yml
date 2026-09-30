@@ -5,6 +5,7 @@ on:
     paths:
       - 'hunter_core_v1/session_breakout_monitor.js'
       - 'hunter_core_v1/session_breakout_shadow.js'
+      - 'hunter_core_v1/session_breakout_check.js'
       - 'hunter_core_v1/interactive_bot.js'
       - 'test/hunter_session_breakout.test.js'
       - '.github/workflows/session-shadow-lab-ci.yml'
@@ -21,5 +22,6 @@ jobs:
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: node --check hunter_core_v1/session_breakout_monitor.js
       - run: node --check hunter_core_v1/session_breakout_shadow.js
+      - run: node --check hunter_core_v1/session_breakout_check.js
       - run: node --check hunter_core_v1/interactive_bot.js
       - run: node test/hunter_session_breakout.test.js

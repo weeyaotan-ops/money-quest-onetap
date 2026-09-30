@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { evaluateSession, evaluateShadowCandidate, localParts } = require('../hunter_core_v1/session_breakout_monitor');
 const shadow = require('../hunter_core_v1/session_breakout_shadow');
-const { inspectSession } = require('../hunter_core_v1/session_breakout_check');
+const { inspectSession, correlationWarnings, sessionClocks } = require('../hunter_core_v1/session_breakout_check');
 
 function m15(openTime, o, h, l, c, volume = 100) {
   return { openTime, open: o, high: h, low: l, close: c, volume };
@@ -174,6 +174,45 @@ function trend4h({ bearish = false, endTime }) {
   const status = inspectSession(snap, 'LONDON', Date.parse('2026-09-30T08:16:00Z'));
   assert.strictEqual(status.status, 'SIGNAL');
   assert.strictEqual(status.fresh, true);
+})();
+
+
+
+(function testSignalExpiresAfterOneM15() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += 15 * 60_000) bars.push(m15(t, 100, 101, 99, 100, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102, 100));
+  bars.push(m15(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+
+  const snap = { symbol: 'ETHUSDT', provider: 'OKX', candles15m: bars, candles4h: trend4h({ endTime: Date.parse('2026-09-30T07:30:00Z') }) };
+  const fresh = inspectSession(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z'));
+  assert.strictEqual(fresh.status, 'SIGNAL');
+  assert.strictEqual(fresh.validUntil, Date.parse('2026-09-30T08:00:00Z'));
+
+  const expired = inspectSession(snap, 'LONDON', Date.parse('2026-09-30T08:01:00Z'));
+  assert.strictEqual(expired.status, 'EXPIRED');
+})();
+
+(function testUsdCorrelationWarning() {
+  const warnings = correlationWarnings([
+    { symbol: 'EURUSD', side: 'SHORT' },
+    { symbol: 'GBPUSD', side: 'SHORT' },
+    { symbol: 'USDCHF', side: 'LONG' }
+  ]);
+  assert.strictEqual(warnings.length, 1);
+  assert.strictEqual(warnings[0].type, 'USD_STRONG');
+  assert.strictEqual(warnings[0].symbols.length, 3);
+})();
+
+(function testSessionCountdown() {
+  const now = Date.parse('2026-09-30T06:55:00Z'); // 07:55 London (BST)
+  const clocks = sessionClocks(now);
+  const london = clocks.find(x => x.name === 'London');
+  assert.ok(london);
+  assert.strictEqual(london.phase, 'NEXT');
+  assert.ok(london.remainingMs >= 4 * 60_000 && london.remainingMs <= 6 * 60_000);
 })();
 
 
