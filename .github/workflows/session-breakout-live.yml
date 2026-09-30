@@ -40,6 +40,9 @@ jobs:
           restore-keys: |
             session-breakout-state-
 
+      - name: Install public market data helper
+        run: npm install --no-save dukascopy-node
+
       - name: Validate engine
         run: |
           node --check session_breakout_monitor.js
@@ -56,8 +59,6 @@ jobs:
           HUNTER_STATE_PATH: ".hunter_state/session_breakout_state.json"
           HUNTER_MAX_SIGNAL_AGE_MS: "1200000"
           FX_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
-          OANDA_API_BASE: https://api-fxpractice.oanda.com
-          OANDA_TOKEN: ${{ secrets.OANDA_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node session_breakout_monitor.js
