@@ -1,7 +1,16 @@
 'use strict';
 
 const assert = require('assert');
-const { localParts, evaluate, tradeFromSignal, updateTradeFromCandles, resultSummary } = require('../session_breakout_monitor');
+const {
+  localParts,
+  evaluate,
+  evaluateShadowBreakout,
+  tradeFromSignal,
+  shadowTradeFromCandidate,
+  updateTradeFromCandles,
+  shadowSummary,
+  resultSummary
+} = require('../session_breakout_monitor');
 
 const M15 = 15 * 60 * 1000;
 
@@ -107,6 +116,88 @@ function trend4h(end, bearish = false) {
   assert.strictEqual(t.milestones.sl.hit, true);
   assert.strictEqual(t.status, 'TP1_AND_SL_SAME_M15');
   assert.strictEqual(t.terminal, true);
+})();
+
+
+
+(function shadowLabRecordsFilteredBreakout() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  // Heavy earlier volume at higher prices forces VWAP above the eventual breakout close.
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) {
+    bars.push(c(t, 120, 121, 119, 120, 1000));
+  }
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103, 100));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102, 100));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 100));
+
+  const snap = {
+    symbol: 'ETHUSDT',
+    provider: 'TEST',
+    candles15m: bars,
+    candles4h: trend4h(Date.parse('2026-09-30T07:30:00Z'))
+  };
+
+  const shadow = evaluateShadowBreakout(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z'));
+  assert.ok(shadow, 'raw breakout should be recorded');
+  assert.strictEqual(shadow.side, 'LONG');
+  assert.strictEqual(shadow.filters.raw, true);
+  assert.strictEqual(shadow.filters.vwap, false);
+  assert.strictEqual(shadow.filters.h4, true);
+  assert.strictEqual(shadow.filters.both, false);
+
+  // Live strategy must remain blocked by VWAP.
+  assert.strictEqual(evaluate(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z')), null);
+})();
+
+(function shadowLabOutcomeSummary() {
+  const s = {
+    key: 'SHADOW|ETHUSDT|LONDON|1|LONG',
+    symbol: 'ETHUSDT',
+    provider: 'TEST',
+    session: 'LONDON',
+    sessionLabel: 'London',
+    side: 'LONG',
+    candleOpenTime: Date.parse('2026-09-30T07:30:00Z'),
+    candleCloseTime: Date.parse('2026-09-30T07:45:00Z'),
+    entry: 100,
+    stop: 95,
+    filters: { raw: true, vwap: false, h4: true, both: false }
+  };
+  const t = shadowTradeFromCandidate(s);
+  updateTradeFromCandles(t, [
+    c(Date.parse('2026-09-30T07:45:00Z'), 100, 111, 99, 109)
+  ]);
+
+  const summary = shadowSummary({ shadowTrades: { [t.key]: t } });
+  assert.strictEqual(summary.mode, 'OBSERVATIONAL_ONLY');
+  assert.strictEqual(summary.variants.raw.n, 1);
+  assert.strictEqual(summary.variants.raw.tp2, 1);
+  assert.strictEqual(summary.variants.h4.n, 1);
+  assert.strictEqual(summary.variants.vwap.n, 0);
+  assert.strictEqual(summary.variants.both.n, 0);
+  assert.strictEqual(summary.rejectedBy.vwap.tp2, 1);
+  assert.strictEqual(summary.rejectedBy.both.tp2, 1);
+})();
+
+(function h4RuleIsPriceVsEmaOnly() {
+  const d0 = Date.parse('2026-09-30T00:00:00Z');
+  const bars = [];
+  for (let t = d0; t < Date.parse('2026-09-30T07:00:00Z'); t += M15) bars.push(c(t, 100, 101, 99, 100));
+  bars.push(c(Date.parse('2026-09-30T07:00:00Z'), 100, 105, 99, 103));
+  bars.push(c(Date.parse('2026-09-30T07:15:00Z'), 103, 104, 100, 102));
+  bars.push(c(Date.parse('2026-09-30T07:30:00Z'), 102, 108, 101, 106, 150));
+
+  // Construct H4 closes above EMA50 while the last EMA step is slightly down.
+  const h4 = [];
+  const end = Date.parse('2026-09-30T07:30:00Z');
+  for (let i = 0; i < 60; i += 1) {
+    const close = i < 58 ? 100 + i * 0.2 : (i === 58 ? 112 : 111.9);
+    h4.push({ openTime: end - (60 - i) * 4 * 3600_000, close });
+  }
+  const snap = { symbol: 'ETHUSDT', provider: 'TEST', candles15m: bars, candles4h: h4 };
+  const s = evaluate(snap, 'LONDON', Date.parse('2026-09-30T07:46:00Z'));
+  assert.ok(s, 'price above EMA50 should be bullish even without EMA slope gate');
 })();
 
 console.log('session_breakout_monitor tests: PASS');
