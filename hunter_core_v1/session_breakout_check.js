@@ -221,6 +221,39 @@ function tradeLevels(side, entry, box) {
   };
 }
 
+function atr14(candles15m, beforeOpenTime) {
+  const xs = [...(candles15m || [])]
+    .filter(x => Number(x.openTime) < Number(beforeOpenTime))
+    .sort((a,b) => Number(a.openTime) - Number(b.openTime))
+    .slice(-15);
+  if (xs.length < 15) return null;
+  const trs = [];
+  for (let i=1;i<xs.length;i+=1) {
+    const cur=xs[i], prev=xs[i-1];
+    const h=Number(cur.high), l=Number(cur.low), pc=Number(prev.close);
+    if (![h,l,pc].every(Number.isFinite)) continue;
+    trs.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));
+  }
+  return trs.length ? trs.reduce((a,b)=>a+b,0)/trs.length : null;
+}
+
+function structureAssessment(candles15m, latest, box, side, entry, stop) {
+  const atr=atr14(candles15m,latest.openTime);
+  const risk=Math.abs(Number(entry)-Number(stop));
+  const boxWidth=Number(box.high)-Number(box.low);
+  const trigger=side==='LONG'?Number(box.high):Number(box.low);
+  const extension=Math.abs(Number(entry)-trigger);
+  if (!(atr>0)||!(risk>0)||!(boxWidth>0)) return {atr:null,riskAtr:null,boxAtr:null,extensionAtr:null,tp2Atr:null,warnings:[]};
+  const riskAtr=risk/atr, boxAtr=boxWidth/atr, extensionAtr=extension/atr, tp2Atr=2*risk/atr;
+  const warnings=[];
+  if (boxAtr>=2.5) warnings.push('Box 很宽');
+  if (boxAtr<=0.30) warnings.push('Box 很窄');
+  if (riskAtr>=3.0) warnings.push('SL 距离很大');
+  if (extensionAtr>=1.0) warnings.push('突破后已经冲远');
+  if (tp2Atr>=5.0) warnings.push('2R 目标很远');
+  return {atr,riskAtr,boxAtr,extensionAtr,tp2Atr,warnings};
+}
+
 function inspectSession(snap, id, now = Date.now()) {
   const session = resolveSession(snap, id);
   const c15 = [...(snap.candles15m || [])].sort((a,b) => a.openTime - b.openTime);
@@ -285,6 +318,7 @@ function inspectSession(snap, id, now = Date.now()) {
 
     if (fresh) {
       const lv = tradeLevels(breakoutSide, current, box);
+      const structure = structureAssessment(c15, latest, box, breakoutSide, current, lv.stop);
       if (vwapPass && h4Pass) {
         const validUntil = closeTime + SIGNAL_VALID_MS;
         return {
@@ -299,6 +333,7 @@ function inspectSession(snap, id, now = Date.now()) {
           breakoutTime: closeTime,
           validUntil,
           moveR: 0,
+          structure,
           reason: now <= validUntil ? '刚刚第一次收破 Box，条件全部通过' : '信号已经超过有效时间，不追'
         };
       }
@@ -583,6 +618,8 @@ function formatNow(r) {
         `进场约 ${p(x.entry, x.symbol)} · 止损 ${p(x.stop, x.symbol)}`,
         `1R ${p(x.tp1, x.symbol)} · 2R ${p(x.tp2, x.symbol)}`,
         `确认 ${sgt(x.breakoutTime)} · 有效至 ${sgt(x.validUntil)} SGT`,
+        x.structure?.warnings?.length ? `⚠️ ${x.structure.warnings.join(' / ')}` : '结构：没有极端异常',
+        Number.isFinite(x.structure?.riskAtr) ? `SL约 ${x.structure.riskAtr.toFixed(2)}× ATR · 2R约 ${x.structure.tp2Atr.toFixed(2)}× ATR` : null,
         ''
       );
     }
@@ -733,6 +770,8 @@ module.exports = {
   latestSignal,
   watchLevel,
   inspectSession,
+  atr14,
+  structureAssessment,
   sessionClocks,
   correlationWarnings,
   usdTheme,
