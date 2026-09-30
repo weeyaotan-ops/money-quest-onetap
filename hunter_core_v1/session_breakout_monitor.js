@@ -70,8 +70,8 @@ function h4Bias(candles4h) {
   if (!e || !closes.length) return { bias: 'FLAT', ema50: null, slope: null, close: closes.at(-1) ?? null };
   const close = closes[closes.length - 1];
   const slope = e.current - e.previous;
-  if (close > e.current && slope > 0) return { bias: 'BULLISH', ema50: e.current, slope, close };
-  if (close < e.current && slope < 0) return { bias: 'BEARISH', ema50: e.current, slope, close };
+  if (close > e.current) return { bias: 'BULLISH', ema50: e.current, slope, close };
+  if (close < e.current) return { bias: 'BEARISH', ema50: e.current, slope, close };
   return { bias: 'FLAT', ema50: e.current, slope, close };
 }
 

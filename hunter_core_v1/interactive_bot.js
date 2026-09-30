@@ -2,205 +2,157 @@
 
 const fs = require('fs');
 const path = require('path');
-const { snapshot } = require('./market_data');
-const { rankSnapshots } = require('./core');
-const { loadState, performance, performanceBreakdown } = require('./journal');
 const {
-  shortSymbol,
-  stageVisual,
-  regimeVisual,
-  watchPlan,
-  marketSynthesis
-} = require('./advisor');
-const { checkAll: checkBreakouts, formatNow, formatLevels, formatSystem } = require('./session_breakout_check');
+  checkAll,
+  formatNow,
+  formatWhy,
+  formatMarketBoard,
+  formatLevels,
+  formatSystem
+} = require('./session_breakout_check');
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
-const EQUITY = Number(process.env.HUNTER_EQUITY_USDT || 1000);
-const RISK_PCT = Number(process.env.HUNTER_RISK_PCT || 0.005);
-const STATE_PATH = process.env.HUNTER_STATE_PATH || path.join('.hunter_state', 'state.json');
-const BREAKOUT_STATE_PATH = process.env.BREAKOUT_STATE_PATH || path.join('.hunter_state', 'session_breakout_state.json');
+const BREAKOUT_STATE_PATH = process.env.BREAKOUT_STATE_PATH || process.env.HUNTER_STATE_PATH || '/data/session_breakout_state.json';
+const CHECK_CACHE_MS = Number(process.env.BREAKOUT_CHECK_CACHE_MS || 12000);
 
 if (!BOT_TOKEN || !CHAT_ID) {
   console.error('Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID');
   process.exit(1);
 }
 
-let cache = null;
-let previousData = null;
-let cacheAt = 0;
-const CACHE_MS = 12000;
+let checkCache = null;
+let checkCacheAt = 0;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const fmt = (x, d = 2) => Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
-
-function priceFmt(x) {
+function priceFmt(x, symbol = '') {
   const n = Number(x);
   if (!Number.isFinite(n)) return 'n/a';
+  const s = String(symbol).toUpperCase();
+  if (s === 'XAUUSD') return n.toFixed(2);
+  if (s.includes('JPY')) return n.toFixed(3);
+  if (s.endsWith('USD') && !s.endsWith('USDT')) return n.toFixed(5);
   if (n >= 1000) return n.toFixed(2);
   if (n >= 10) return n.toFixed(3);
   return n.toFixed(4);
 }
 
-function localTime(date = new Date()) {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Singapore',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  }).format(date);
+function sgtDate(ts = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date(ts));
+  const o = {};
+  for (const p of parts) if (p.type !== 'literal') o[p.type] = p.value;
+  return `${o.year}-${o.month}-${o.day}`;
 }
 
-function currentPrice(snapshot) {
-  return Number(snapshot?.lastPrice || snapshot?.candles15m?.[snapshot.candles15m.length - 1]?.close);
-}
-
-function directionText(x) {
-  const t = Number(x.components?.trend || 0);
-  if (t > 0.12) return '↗ UP';
-  if (t < -0.12) return '↘ DOWN';
-  return '→ MIXED';
-}
-
-function componentVisual(v, positive, negative) {
-  const n = Number(v || 0);
-  if (n > 0.15) return `🟢 ${positive}`;
-  if (n < -0.15) return `🔴 ${negative}`;
-  return '⚪ Neutral';
-}
-
-function providerText(data) {
-  const values = [...new Set(Object.values(data?.snapBySymbol || {}).map((s) => s.provider).filter(Boolean))];
-  return values.length ? values.join(' / ') : 'n/a';
+function sgtTime(ts) {
+  return new Intl.DateTimeFormat('en-SG', {
+    timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit', hour12: false
+  }).format(new Date(ts));
 }
 
 function mainKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '🚨 NOW', callback_data: 'now' }],
-      [{ text: '👀 KEY LEVELS', callback_data: 'levels' }],
       [
-        { text: '📡 SYSTEM', callback_data: 'system' },
-        { text: '📊 RESULTS', callback_data: 'performance' }
-      ],
-      [{ text: '📒 SIGNAL RECORDS', callback_data: 'signal_results' }],
-      [{ text: '⋯ MORE', callback_data: 'more' }]
-    ]
-  };
-}
-
-function moreKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: '🧠 Analyst', callback_data: 'analyst' },
-        { text: '🎯 Best', callback_data: 'best' }
+        { text: '🌍 MARKET BOARD', callback_data: 'market' },
+        { text: '👀 KEY LEVELS', callback_data: 'levels' }
       ],
       [
-        { text: '🌍 Market', callback_data: 'overview' },
-        { text: '📌 Active', callback_data: 'active' }
+        { text: '📌 ACTIVE', callback_data: 'active' },
+        { text: '📒 SIGNAL RECORDS', callback_data: 'records' }
       ],
       [
-        { text: 'BTC', callback_data: 'asset:BTCUSDT' },
-        { text: 'ETH', callback_data: 'asset:ETHUSDT' },
-        { text: 'SOL', callback_data: 'asset:SOLUSDT' }
-      ],
-      [{ text: '🏠 Home', callback_data: 'start' }]
-    ]
-  };
-}
-
-function assetKeyboard(symbol) {
-  return {
-    inline_keyboard: [
-      [
-        { text: '🔄 Refresh', callback_data: `refresh:${symbol}` },
-        { text: '🧠 Why?', callback_data: `why:${symbol}` }
-      ],
-      [
-        { text: '🏠 Home', callback_data: 'start' }
+        { text: '📊 RESULTS', callback_data: 'results' },
+        { text: '📡 SYSTEM', callback_data: 'system' }
       ]
     ]
   };
 }
 
-function analystKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: '🔄 Refresh', callback_data: 'analyst' },
-        { text: '⚡ Changes', callback_data: 'changes' }
-      ],
-      [
-        { text: '🎯 Best Now', callback_data: 'best' },
-        { text: '🏠 Home', callback_data: 'start' }
-      ]
-    ]
-  };
-}
-
-function backKeyboard() {
+function homeKeyboard() {
   return { inline_keyboard: [[{ text: '🏠 Home', callback_data: 'start' }]] };
 }
 
-function signalResultsKeyboard() {
+function refreshKeyboard(action, extras = []) {
   return {
     inline_keyboard: [
-      [{ text: '🔄 Refresh Records', callback_data: 'signal_results' }],
+      [{ text: '🔄 Refresh', callback_data: action }],
+      ...extras,
       [{ text: '🏠 Home', callback_data: 'start' }]
     ]
   };
+}
+
+function nowKeyboard() {
+  return refreshKeyboard('now', [
+    [{ text: '❓ WHY NO SIGNAL', callback_data: 'why' }],
+    [{ text: '🌍 MARKET BOARD', callback_data: 'market' }]
+  ]);
 }
 
 function loadBreakoutState() {
   try {
     const x = JSON.parse(fs.readFileSync(BREAKOUT_STATE_PATH, 'utf8'));
-    return x && typeof x === 'object' ? x : { trades: {} };
+    if (!x || typeof x !== 'object') return { sent: {}, trades: {} };
+    if (!x.sent || typeof x.sent !== 'object') x.sent = {};
+    if (!x.trades || typeof x.trades !== 'object') x.trades = {};
+    return x;
   } catch {
-    return { trades: {} };
+    return { sent: {}, trades: {} };
   }
 }
 
 function signalStatusLine(t) {
   const status = String(t.status || 'OPEN');
-  if (status === 'TP2') return '🏆 TP2 HIT (+2R)';
-  if (status === 'TP1_THEN_SL') return '⚠️ TP1 HIT → later SL';
-  if (status === 'SL') return '❌ SL HIT (-1R)';
-  if (status === 'TP1') return '✅ TP1 HIT (+1R reached) · still tracking';
-  if (status === 'TP1_AND_SL_SAME_M15') return '⚠️ TP1 + SL touched in same M15';
-  if (status === 'TP2_AND_SL_SAME_M15') return '⚠️ TP2 + SL touched in same M15';
+  if (status === 'TP2') return '🏆 TP2 HIT (+2R milestone)';
+  if (status === 'TP1_THEN_SL') return '⚠️ 1R reached → later SL';
+  if (status === 'SL') return '❌ SL HIT';
+  if (status === 'TP1') return '✅ 1R HIT · still tracking';
+  if (status === 'TP1_AND_SL_SAME_M15') return '⚠️ 1R + SL touched in same M15';
+  if (status === 'TP2_AND_SL_SAME_M15') return '⚠️ 2R + SL touched in same M15';
   return '⏳ OPEN';
 }
 
-function breakoutResultsText() {
+function activeText() {
+  const state = loadBreakoutState();
+  const trades = Object.values(state.trades || {})
+    .filter(t => !t.terminal)
+    .sort((a,b) => Number(b.signalAtMs || 0) - Number(a.signalAtMs || 0));
+
+  if (!trades.length) return ['📌 ACTIVE', '', '⚪ No open breakout signal.', '', 'New valid signals will appear here automatically.'].join('\n');
+
+  const lines = ['📌 ACTIVE', ''];
+  for (const t of trades.slice(0, 10)) {
+    lines.push(
+      `${t.side === 'LONG' ? '🟢' : '🔴'} ${t.symbol} · ${t.sessionLabel || t.session} · ${t.side}`,
+      signalStatusLine(t),
+      `Entry ${priceFmt(t.entry, t.symbol)} · SL ${priceFmt(t.stop, t.symbol)} · 1R ${priceFmt(t.tp1, t.symbol)} · 2R ${priceFmt(t.tp2, t.symbol)}`,
+      t.signalAtMs ? `Signal ${sgtTime(t.signalAtMs)} SGT` : null,
+      ''
+    );
+  }
+  return lines.filter(Boolean).join('\n');
+}
+
+function signalRecordsText() {
   const state = loadBreakoutState();
   const trades = Object.values(state.trades || {}).sort((a,b) => Number(b.signalAtMs || 0) - Number(a.signalAtMs || 0));
-  if (!trades.length) {
-    return [
-      '📒 SIGNAL RECORDS',
-      '',
-      'No tracked signal yet.',
-      'From now on every sent breakout signal will be checked for SL / 1R / 2R.'
-    ].join('\n');
-  }
+  if (!trades.length) return ['📒 SIGNAL RECORDS', '', 'No tracked Session Breakout signal yet.'].join('\n');
 
   const tp1 = trades.filter(t => t.milestones?.tp1?.hit).length;
   const tp2 = trades.filter(t => t.milestones?.tp2?.hit).length;
   const sl = trades.filter(t => t.milestones?.sl?.hit).length;
   const open = trades.filter(t => !t.terminal).length;
-  const sameBar = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
+  const ambiguous = trades.filter(t => String(t.status || '').includes('SAME_M15')).length;
 
   const lines = [
     '📒 SIGNAL RECORDS',
     '',
-    `Signals tracked: ${trades.length}`,
-    `✅ Reached 1R: ${tp1}`,
-    `🏆 Reached 2R: ${tp2}`,
-    `❌ Touched SL: ${sl}`,
-    `⏳ Still open: ${open}`,
-    sameBar ? `⚠️ Same-M15 ambiguous: ${sameBar}` : null,
+    `Tracked: ${trades.length} · 1R: ${tp1} · 2R: ${tp2} · SL touched: ${sl} · Open: ${open}`,
+    ambiguous ? `⚠️ Same-M15 ambiguous: ${ambiguous}` : null,
     '',
     'RECENT'
   ].filter(Boolean);
@@ -210,31 +162,42 @@ function breakoutResultsText() {
       '',
       `${t.symbol} · ${t.sessionLabel || t.session} · ${t.side}`,
       signalStatusLine(t),
-      `Entry ${priceFmt(t.entry)} · SL ${priceFmt(t.stop)} · 1R ${priceFmt(t.tp1)} · 2R ${priceFmt(t.tp2)}`,
-      t.signalAt ? `Signal: ${localTime(new Date(t.signalAt))} SGT` : null
+      `Entry ${priceFmt(t.entry, t.symbol)} · SL ${priceFmt(t.stop, t.symbol)} · 1R ${priceFmt(t.tp1, t.symbol)} · 2R ${priceFmt(t.tp2, t.symbol)}`
     );
   }
-
-  lines.push(
-    '',
-    'Note: 1R / 2R / SL are milestone counts, not mutually exclusive.',
-    'If TP and SL are both touched inside one M15 candle, order is marked unknown instead of guessed.'
-  );
-
-  return lines.filter(Boolean).join('\n');
+  return lines.join('\n');
 }
 
-function simpleKeyboard(refreshAction) {
-  return {
-    inline_keyboard: [
-      [{ text: '🔄 Refresh', callback_data: refreshAction }],
-      [
-        { text: '🚨 NOW', callback_data: 'now' },
-        { text: '👀 LEVELS', callback_data: 'levels' }
-      ],
-      [{ text: '🏠 Home', callback_data: 'start' }]
-    ]
-  };
+function resultsText() {
+  const state = loadBreakoutState();
+  const trades = Object.values(state.trades || {});
+  const today = sgtDate();
+  const todayTrades = trades.filter(t => Number.isFinite(Number(t.signalAtMs)) && sgtDate(Number(t.signalAtMs)) === today);
+
+  const summarize = xs => ({
+    total: xs.length,
+    tp1: xs.filter(t => t.milestones?.tp1?.hit).length,
+    tp2: xs.filter(t => t.milestones?.tp2?.hit).length,
+    sl: xs.filter(t => t.milestones?.sl?.hit).length,
+    open: xs.filter(t => !t.terminal).length,
+    ambiguous: xs.filter(t => String(t.status || '').includes('SAME_M15')).length
+  });
+
+  const d = summarize(todayTrades);
+  const all = summarize(trades);
+  return [
+    '📊 SESSION BREAKOUT RESULTS',
+    '',
+    'TODAY',
+    `Signals ${d.total} · 1R ${d.tp1} · 2R ${d.tp2} · SL ${d.sl} · Open ${d.open}`,
+    d.ambiguous ? `Ambiguous same-M15: ${d.ambiguous}` : null,
+    '',
+    'ALL TRACKED',
+    `Signals ${all.total} · 1R ${all.tp1} · 2R ${all.tp2} · SL ${all.sl} · Open ${all.open}`,
+    all.ambiguous ? `Ambiguous same-M15: ${all.ambiguous}` : null,
+    '',
+    'This is the new Session Breakout record — old Hunter results are removed.'
+  ].filter(Boolean).join('\n');
 }
 
 async function tg(method, body) {
@@ -244,9 +207,7 @@ async function tg(method, body) {
     body: JSON.stringify(body)
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    throw new Error(`Telegram ${method} failed: ${res.status} ${JSON.stringify(data).slice(0, 300)}`);
-  }
+  if (!res.ok || data.ok === false) throw new Error(`Telegram ${method} failed: ${res.status} ${JSON.stringify(data).slice(0, 300)}`);
   return data;
 }
 
@@ -264,326 +225,24 @@ async function answerCallback(id) {
   await tg('answerCallbackQuery', { callback_query_id: id }).catch(() => {});
 }
 
-async function analyze(force = false) {
-  if (!force && cache && Date.now() - cacheAt < CACHE_MS) return cache;
-  const snaps = await Promise.all(SYMBOLS.map(snapshot));
-  const ranked = rankSnapshots(snaps, EQUITY, RISK_PCT);
-  const bySymbol = Object.fromEntries(ranked.map((x) => [x.symbol, x]));
-  const snapBySymbol = Object.fromEntries(snaps.map((x) => [x.symbol, x]));
-
-  if (cache) previousData = cache;
-  cache = { ranked, bySymbol, snapBySymbol, at: new Date() };
-  cacheAt = Date.now();
-  return cache;
-}
-
-function actionLine(x) {
-  const v = stageVisual(x);
-  if (v.stage === 'ACTIONABLE') return 'DO NOW: Follow the signal plan.';
-  if (v.stage === 'ARMED') return 'DO NOW: Prepare. Wait for confirmation.';
-  if (v.stage === 'WATCH') return 'DO NOW: Watch the zone. Do not enter yet.';
-  return 'DO NOW: Wait. No trade.';
-}
-
-function statusText(data) {
-  return [
-    '⚙️ HUNTER STATUS',
-    '',
-    '🟢 System: ONLINE',
-    '🔔 Auto scan: every 15 min',
-    '🧠 Analyst: ON',
-    '🎯 Watch zones: ON',
-    '🟠 Early heads-up: ON',
-    '📒 Forward tracking: ON',
-    '🔁 Duplicate protection: ON',
-    '',
-    `Data: ${providerText(data)}`,
-    'Scoring: closed 15m / 1h / 4h candles',
-    'Display price: live ticker',
-    `Updated: ${localTime(data.at)} SGT/MYT`,
-    '',
-    'Signal threshold: |Edge| ≥ 0.65',
-    'Mode: SIGNAL ONLY'
-  ].join('\n');
-}
-
-function assetText(symbol, data) {
-  const x = data.bySymbol[symbol];
-  const s = data.snapBySymbol[symbol];
-  if (!x || !s) return `${shortSymbol(symbol)}: data unavailable`;
-
-  const price = currentPrice(s);
-  const visual = stageVisual(x);
-  const regime = regimeVisual(x.regime.name);
-  const watch = watchPlan(x, s);
-
-  const lines = [
-    `${shortSymbol(symbol)} / USDT`,
-    '',
-    `💵 $${priceFmt(price)}`,
-    `${visual.icon} ${visual.label}`,
-    `Direction: ${directionText(x)}`,
-    `${regime.icon} Market: ${regime.label}`,
-    `Edge: ${fmt(x.edge, 2)} / 0.65`,
-    '',
-    actionLine(x)
-  ];
-
-  if (x.decision !== 'NO_TRADE' && x.plan) {
-    lines.push(
-      '',
-      `🎯 ENTRY: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
-      `🛑 STOP: ${priceFmt(x.plan.stop)}`,
-      `Risk: ${(RISK_PCT * 100).toFixed(1)}%`
-    );
-  } else if (watch && visual.stage !== 'NO_TRADE') {
-    lines.push(
-      '',
-      `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`,
-      `🧭 Bias: ${watch.side}`,
-      `❌ Weakens beyond: ${priceFmt(watch.invalid)}`
-    );
-  }
-
-  lines.push('', `Updated: ${localTime(data.at)}`);
-  return lines.join('\n');
-}
-
-function whyText(symbol, data) {
-  const x = data.bySymbol[symbol];
-  const s = data.snapBySymbol[symbol];
-  if (!x || !s) return 'Data unavailable.';
-
-  const visual = stageVisual(x);
-  const regime = regimeVisual(x.regime.name);
-  const watch = watchPlan(x, s);
-
-  const regimeReason = {
-    TREND: 'Price is moving cleanly enough to follow.',
-    BREAKOUT: 'Price is expanding with momentum.',
-    RANGE: 'Sideways market. Hunter cuts confidence.',
-    CHAOS: 'Too unstable. Hunter blocks trades.'
-  }[x.regime.name] || x.regime.name;
-
-  const lines = [
-    `🧠 WHY ${shortSymbol(symbol)}?`,
-    '',
-    `Trend: ${componentVisual(x.components.trend, 'Supports LONG', 'Supports SHORT')}`,
-    `Relative: ${componentVisual(x.components.relativeStrength, 'Strong vs others', 'Weak vs others')}`,
-    `Futures: ${componentVisual(x.components.derivatives, 'Supportive', 'Against move')}`,
-    `Buy/Sell flow: ${componentVisual(x.components.flow, 'Buyers stronger', 'Sellers stronger')}`,
-    `${regime.icon} Regime: ${regime.label}`,
-    '',
-    regimeReason,
-    '',
-    `${visual.icon} Final: ${visual.label} | Edge ${fmt(x.edge, 2)}`,
-    actionLine(x)
-  ];
-
-  if (watch && x.decision === 'NO_TRADE' && visual.stage !== 'NO_TRADE') {
-    lines.push(`👀 Main price area: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
-  }
-
-  lines.push('', `Source: ${s.provider}`, 'Signal math uses CLOSED candles; live price is display only.');
-  return lines.join('\n');
-}
-
-function overviewText(data) {
-  const lines = ['🌍 MARKET', ''];
-  for (const x of data.ranked) {
-    const v = stageVisual(x);
-    const r = regimeVisual(x.regime.name);
-    lines.push(`${v.icon} ${shortSymbol(x.symbol)}  ${v.label} | ${directionText(x)} | ${r.icon} ${r.label} | ${fmt(x.edge, 2)}`);
-  }
-  lines.push('', '🟢/🔴 action | 🟠 prepare | 🟡 watch | ⚪ wait');
-  lines.push(`Updated: ${localTime(data.at)}`);
-  return lines.join('\n');
-}
-
-function bestText(data) {
-  const x = data.ranked[0];
-  const s = x ? data.snapBySymbol[x.symbol] : null;
-  if (!x || !s) return 'No market data available.';
-
-  const v = stageVisual(x);
-  const watch = watchPlan(x, s);
-  const lines = [
-    '🎯 BEST NOW',
-    '',
-    `${v.icon} ${shortSymbol(x.symbol)} — ${v.label}`,
-    `Direction: ${directionText(x)}`,
-    `Market: ${regimeVisual(x.regime.name).icon} ${x.regime.name}`,
-    `Edge: ${fmt(x.edge, 2)} / 0.65`,
-    '',
-    actionLine(x)
-  ];
-
-  if (x.decision !== 'NO_TRADE' && x.plan) {
-    lines.push(
-      '',
-      `ENTRY: ${priceFmt(x.plan.entryZone[0])} - ${priceFmt(x.plan.entryZone[1])}`,
-      `STOP: ${priceFmt(x.plan.stop)}`
-    );
-  } else if (watch && v.stage !== 'NO_TRADE') {
-    lines.push('', `👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
-  }
-
-  return lines.join('\n');
-}
-
-function analystText(data) {
-  const a = marketSynthesis(data);
-  if (!a) return 'No market data available.';
-
-  const bestSnap = data.snapBySymbol[a.best.symbol];
-  const watch = watchPlan(a.best, bestSnap);
-  const regime = regimeVisual(a.best.regime.name);
-
-  const lines = [
-    '🧠 HUNTER ANALYST',
-    '',
-    `${a.biasIcon} Bias: ${a.bias}`,
-    `${a.riskIcon} Risk: ${a.risk}`,
-    `${regime.icon} Regime: ${a.best.regime.name}`,
-    '',
-    `🎯 Focus: ${shortSymbol(a.best.symbol)}`,
-    `${a.bestVisual.icon} ${a.bestVisual.label}`,
-    `Edge: ${fmt(a.best.edge, 2)} / 0.65`
-  ];
-
-  if (watch && a.best.decision === 'NO_TRADE' && a.bestVisual.stage !== 'NO_TRADE') {
-    lines.push(`👀 Watch: ${priceFmt(watch.zone[0])} - ${priceFmt(watch.zone[1])}`);
-  }
-
-  lines.push(
-    '',
-    `BOTTOM LINE: ${a.oneLiner}`,
-    actionLine(a.best),
-    '',
-    `Breadth: ${a.bulls} bullish / ${a.bears} bearish / ${a.ranges} range`,
-    `Updated: ${localTime(data.at)}`
-  );
-
-  return lines.join('\n');
-}
-
-function changesText(data) {
-  if (!previousData) {
-    return ['⚡ CHANGES', '', 'No comparison yet.', 'Refresh Analyst once, then check Changes again.'].join('\n');
-  }
-
-  const rows = [];
-  let material = 0;
-  for (const symbol of SYMBOLS) {
-    const now = data.bySymbol[symbol];
-    const prev = previousData.bySymbol[symbol];
-    if (!now || !prev) continue;
-    const d = Number(now.edge) - Number(prev.edge);
-    const stageChanged = stageVisual(now).stage !== stageVisual(prev).stage;
-    const regimeChanged = now.regime.name !== prev.regime.name;
-    if (Math.abs(d) >= 0.05 || stageChanged || regimeChanged) material += 1;
-
-    rows.push({
-      symbol,
-      d,
-      stageChanged,
-      regimeChanged,
-      text: `${shortSymbol(symbol)}: Edge ${d >= 0 ? '+' : ''}${fmt(d, 2)}${stageChanged ? ` | ${stageVisual(prev).label} → ${stageVisual(now).label}` : ''}${regimeChanged ? ` | ${prev.regime.name} → ${now.regime.name}` : ''}`
-    });
-  }
-
-  rows.sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
-  if (!material) {
-    return ['⚡ CHANGES', '', 'No meaningful change since the previous refresh.', '', 'Market structure is broadly the same.'].join('\n');
-  }
-
-  return [
-    '⚡ CHANGES',
-    '',
-    ...rows.filter((r) => Math.abs(r.d) >= 0.05 || r.stageChanged || r.regimeChanged).map((r) => r.text),
-    '',
-    'Largest movement is shown first.'
-  ].join('\n');
-}
-
-function activeText(data) {
-  const state = loadState(STATE_PATH);
-  const journalActive = (state.signals || []).filter((s) => ['PENDING_ENTRY', 'TRIGGERED'].includes(s.status));
-  const liveActionable = data.ranked.filter((x) => x.decision !== 'NO_TRADE');
-
-  if (!journalActive.length && !liveActionable.length) {
-    return ['📌 ACTIVE', '', '⚪ No active setup now.', '', 'Hunter will alert you automatically.'].join('\n');
-  }
-
-  const lines = ['📌 ACTIVE', ''];
-  for (const s of journalActive.slice(-5)) {
-    const icon = s.side === 'LONG' ? '🟢' : '🔴';
-    const status = s.status === 'TRIGGERED' ? 'ENTRY TRIGGERED' : 'WAITING ENTRY';
-    lines.push(`${icon} ${shortSymbol(s.symbol)} — ${s.side} — ${status}`);
-    lines.push(`Entry ${priceFmt(s.entryZone[0])}-${priceFmt(s.entryZone[1])} | Stop ${priceFmt(s.stop)}`);
-  }
-
-  if (!journalActive.length && liveActionable.length) {
-    for (const x of liveActionable) {
-      const v = stageVisual(x);
-      lines.push(`${v.icon} ${shortSymbol(x.symbol)} — ${x.decision} — Edge ${fmt(x.edge, 2)}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-function performanceText() {
-  const state = loadState(STATE_PATH);
-  const p = performance(state);
-  const bySymbol = performanceBreakdown(state, 'symbol');
-  const byRegime = performanceBreakdown(state, 'regime');
-
-  if (!p.actionable) {
-    return ['📊 PERFORMANCE', '', 'No forward-test signal yet.', '', 'Hunter is collecting data first.'].join('\n');
-  }
-
-  const lines = [
-    '📊 PERFORMANCE',
-    '',
-    `Signals: ${p.actionable}`,
-    `Triggered: ${p.triggered}`,
-    `Completed: ${p.completed}`,
-    `Cancelled/expired: ${p.expired}`
-  ];
-
-  if (p.completed >= 10) {
-    lines.push(
-      `Win rate: ${p.winRateFinal == null ? 'n/a' : fmt(p.winRateFinal * 100, 1) + '%'}`,
-      `Average: ${p.avgFinalR == null ? 'n/a' : fmt(p.avgFinalR, 2) + 'R'}`
-    );
-  } else {
-    lines.push('', 'Too early for a reliable verdict.');
-  }
-
-  const symbolRows = Object.entries(bySymbol).filter(([, g]) => g.completed >= 3);
-  if (symbolRows.length) {
-    lines.push('', 'BY COIN');
-    for (const [key, g] of symbolRows) lines.push(`${shortSymbol(key)}: n=${g.completed} | avg ${fmt(g.avgR, 2)}R`);
-  }
-
-  const regimeRows = Object.entries(byRegime).filter(([, g]) => g.completed >= 3);
-  if (regimeRows.length) {
-    lines.push('', 'BY REGIME');
-    for (const [key, g] of regimeRows) lines.push(`${key}: n=${g.completed} | avg ${fmt(g.avgR, 2)}R`);
-  }
-
-  return lines.join('\n');
+async function getCheck(force = false) {
+  if (!force && checkCache && Date.now() - checkCacheAt < CHECK_CACHE_MS) return checkCache;
+  checkCache = await checkAll();
+  checkCacheAt = Date.now();
+  return checkCache;
 }
 
 async function showMenu() {
   await send([
-    'HUNTER',
+    'HUNTER · SESSION BREAKOUT',
     '',
-    '🚨 NOW = 有没有可以做的',
-    '👀 KEY LEVELS = 现在最需要盯的价位',
-    '📡 SYSTEM = 数据有没有正常',
-    '📊 RESULTS = 旧 Hunter forward results',
-    '📒 SIGNAL RECORDS = 这套 breakout 的 SL / 1R / 2R',
+    '🚨 NOW = 现在有没有确认的机会',
+    '🌍 MARKET BOARD = 全部市场现在走到哪一步',
+    '👀 KEY LEVELS = Box / trigger 价位',
+    '📌 ACTIVE = 已触发、仍在追踪的 signals',
+    '📒 SIGNAL RECORDS = SL / 1R / 2R 记录',
+    '📊 RESULTS = 这套 breakout 的 results',
+    '📡 SYSTEM = feed + scanner self-check',
     '',
     '没有确认 = 不进。'
   ].join('\n'), mainKeyboard());
@@ -592,88 +251,39 @@ async function showMenu() {
 async function handleAction(action, callbackId) {
   await answerCallback(callbackId);
 
-  if (['now', 'levels', 'system', 'breakout_check'].includes(action)) {
-    try {
-      const result = await checkBreakouts();
-      if (action === 'levels') await send(formatLevels(result), simpleKeyboard('levels'));
-      else if (action === 'system') await send(formatSystem(result), simpleKeyboard('system'));
-      else await send(formatNow(result), simpleKeyboard('now'));
-    } catch (err) {
-      console.error(JSON.stringify({ ok: false, action, error: err.message }));
-      await send('⚠️ Refresh failed. Try again in a moment.', simpleKeyboard(action === 'breakout_check' ? 'now' : action));
-    }
-    return;
-  }
-
-  if (action === 'more') {
-    await send('MORE', moreKeyboard());
-    return;
-  }
-
-  if (action === 'signal_results') {
-    await send(breakoutResultsText(), signalResultsKeyboard());
-    return;
-  }
-
-  if (action === 'performance') {
-    await send(performanceText(), backKeyboard());
-    return;
-  }
-  if (action === 'menu' || action === 'start') {
-    await showMenu();
-    return;
-  }
-
   try {
-    const force = action.startsWith('refresh:') || ['analyst', 'changes', 'overview', 'best', 'active', 'status'].includes(action);
-    const data = await analyze(force);
+    if (action === 'start') return showMenu();
+    if (action === 'active') return send(activeText(), refreshKeyboard('active'));
+    if (action === 'records') return send(signalRecordsText(), refreshKeyboard('records'));
+    if (action === 'results') return send(resultsText(), refreshKeyboard('results'));
 
-    if (action === 'status') {
-      await send(statusText(data), backKeyboard());
-    } else if (action.startsWith('asset:')) {
-      const symbol = action.slice(6);
-      await send(assetText(symbol, data), assetKeyboard(symbol));
-    } else if (action.startsWith('refresh:')) {
-      const symbol = action.slice(8);
-      await send(assetText(symbol, data), assetKeyboard(symbol));
-    } else if (action.startsWith('why:')) {
-      const symbol = action.slice(4);
-      await send(whyText(symbol, data), assetKeyboard(symbol));
-    } else if (action === 'analyst') {
-      await send(analystText(data), analystKeyboard());
-    } else if (action === 'changes') {
-      await send(changesText(data), analystKeyboard());
-    } else if (action === 'overview') {
-      await send(overviewText(data), backKeyboard());
-    } else if (action === 'best') {
-      await send(bestText(data), backKeyboard());
-    } else if (action === 'active') {
-      await send(activeText(data), backKeyboard());
-    } else {
-      await showMenu();
+    if (['now','why','market','levels','system'].includes(action)) {
+      const r = await getCheck(true);
+      if (action === 'now') return send(formatNow(r), nowKeyboard());
+      if (action === 'why') return send(formatWhy(r), refreshKeyboard('why', [[{ text: '🚨 NOW', callback_data: 'now' }]]));
+      if (action === 'market') return send(formatMarketBoard(r), refreshKeyboard('market', [[{ text: '❓ WHY NO SIGNAL', callback_data: 'why' }]]));
+      if (action === 'levels') return send(formatLevels(r), refreshKeyboard('levels', [[{ text: '🚨 NOW', callback_data: 'now' }]]));
+      if (action === 'system') return send(formatSystem(r), refreshKeyboard('system'));
     }
+
+    return showMenu();
   } catch (err) {
     console.error(JSON.stringify({ ok: false, action, error: err.message }));
-    await send('⚠️ Market refresh failed. Try again in a moment.', backKeyboard());
+    return send('⚠️ Refresh failed. Try again in a moment.', homeKeyboard());
   }
 }
 
 function normalizeMessage(text) {
   const t = String(text || '').trim().toLowerCase().replace(/@\w+$/, '');
-  if (t === '/start' || t === 'start' || t === '/menu' || t === 'menu') return 'start';
-  if (t === '/analyst' || t === 'analyst') return 'analyst';
-  if (t === '/btc' || t === 'btc') return 'asset:BTCUSDT';
-  if (t === '/eth' || t === 'eth') return 'asset:ETHUSDT';
-  if (t === '/sol' || t === 'sol') return 'asset:SOLUSDT';
-  if (t === '/market' || t === 'market' || t === '/overview' || t === 'overview') return 'overview';
-  if (t === '/best' || t === 'best') return 'best';
-  if (t === '/active' || t === 'active') return 'active';
-  if (t === '/performance' || t === 'performance') return 'performance';
-  if (t === '/status' || t === 'status') return 'status';
-  if (t === '/check' || t === 'check' || t === '/breakout' || t === 'breakout' || t === '/now' || t === 'now') return 'now';
-  if (t === '/levels' || t === 'levels') return 'levels';
-  if (t === '/system' || t === 'system') return 'system';
-  if (t === '/records' || t === 'records' || t === '/signalresults' || t === 'signalresults') return 'signal_results';
+  if (['/start','start','/menu','menu'].includes(t)) return 'start';
+  if (['/check','check','/now','now','/breakout','breakout'].includes(t)) return 'now';
+  if (['/why','why'].includes(t)) return 'why';
+  if (['/market','market','/board','board'].includes(t)) return 'market';
+  if (['/levels','levels'].includes(t)) return 'levels';
+  if (['/active','active'].includes(t)) return 'active';
+  if (['/records','records'].includes(t)) return 'records';
+  if (['/results','results','/performance','performance'].includes(t)) return 'results';
+  if (['/system','system','/status','status'].includes(t)) return 'system';
   return null;
 }
 
@@ -699,9 +309,8 @@ async function handleUpdate(update) {
 async function getUpdates(offset) {
   const url = new URL(`https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`);
   url.searchParams.set('timeout', '50');
-  url.searchParams.set('allowed_updates', JSON.stringify(['message', 'callback_query']));
+  url.searchParams.set('allowed_updates', JSON.stringify(['message','callback_query']));
   if (offset) url.searchParams.set('offset', String(offset));
-
   const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
   const data = await res.json();
   if (!res.ok || !data.ok) throw new Error(`getUpdates failed: ${res.status}`);
@@ -711,26 +320,21 @@ async function getUpdates(offset) {
 async function setCommands() {
   await tg('setMyCommands', {
     commands: [
-      { command: 'start', description: 'Open Hunter' },
-      { command: 'analyst', description: 'Whole-market analyst' },
-      { command: 'best', description: 'Best setup now' },
-      { command: 'market', description: 'Quick market view' },
-      { command: 'btc', description: 'BTC' },
-      { command: 'eth', description: 'ETH' },
-      { command: 'sol', description: 'SOL' },
-      { command: 'active', description: 'Open setup tracking' },
-      { command: 'performance', description: 'Forward-test results' },
-      { command: 'now', description: 'Confirmed signal now' },
-      { command: 'levels', description: 'Key prices to watch' },
-      { command: 'system', description: 'Feed and scanner status' },
-      { command: 'records', description: 'Breakout signal SL / 1R / 2R records' },
-      { command: 'status', description: 'Legacy Hunter status' }
+      { command: 'start', description: 'Open Session Breakout command center' },
+      { command: 'now', description: 'Confirmed / near / blocked setups now' },
+      { command: 'market', description: 'Market board' },
+      { command: 'why', description: 'Why there is no signal' },
+      { command: 'levels', description: 'Box and trigger prices' },
+      { command: 'active', description: 'Open signal tracking' },
+      { command: 'records', description: 'Signal SL / 1R / 2R records' },
+      { command: 'results', description: 'Session Breakout results' },
+      { command: 'system', description: 'Feed and scanner self-check' }
     ]
   });
 }
 
 async function run() {
-  console.log(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', status: 'STARTING' }));
+  console.log(JSON.stringify({ bot: 'Session Breakout Command Center V1', status: 'STARTING', statePath: path.resolve(BREAKOUT_STATE_PATH) }));
   await tg('deleteWebhook', { drop_pending_updates: false });
   await setCommands();
   let offset = 0;
@@ -743,13 +347,13 @@ async function run() {
         await handleUpdate(update);
       }
     } catch (err) {
-      console.error(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', error: err.message }));
+      console.error(JSON.stringify({ bot: 'Session Breakout Command Center V1', error: err.message }));
       await sleep(2500);
     }
   }
 }
 
-run().catch((err) => {
-  console.error(JSON.stringify({ bot: 'Hunter Interactive V4 Analyst', fatal: err.message }));
+run().catch(err => {
+  console.error(JSON.stringify({ bot: 'Session Breakout Command Center V1', fatal: err.message }));
   process.exit(1);
 });
