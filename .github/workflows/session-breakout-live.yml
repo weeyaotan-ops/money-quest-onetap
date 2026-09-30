@@ -1,6 +1,6 @@
-# Session Breakout v5: TP SL shadow arena + structure checks
-# Tracks every sent signal through SL, 1R and 2R milestones.
-name: Session Breakout Live Monitor
+# Hunter Adaptive V1 live scanner
+# Trend retest + range sweep/reclaim; signal only.
+name: Hunter Adaptive Live Monitor
 
 on:
   workflow_dispatch:
@@ -38,29 +38,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .hunter_state
-          key: session-breakout-state-${{ github.run_id }}-${{ github.run_attempt }}
+          key: hunter-adaptive-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            session-breakout-state-
+            hunter-adaptive-state-
 
       - name: Install public market data helper
         run: npm install --no-save dukascopy-node
 
-      - name: Validate engine
+      - name: Validate Hunter Adaptive
         run: |
-          node --check session_breakout_monitor.js
-          node test/session_breakout_monitor.test.js
+          node --check hunter_adaptive_engine.js
+          node test/hunter_adaptive_engine.test.js
 
       - name: Scan latest closed M15 candle
         env:
           HUNTER_RUN_ONCE: "true"
-          HUNTER_SYMBOLS: BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT
-          HUNTER_SESSIONS: LONDON,NEW_YORK
-          HUNTER_TP_R: "2"
-          HUNTER_RISK_PCT: "0.005"
-          HUNTER_EQUITY_USDT: "1000"
-          HUNTER_STATE_PATH: ".hunter_state/session_breakout_state.json"
-          HUNTER_MAX_SIGNAL_AGE_MS: "1200000"
-          FX_SYMBOLS: XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,NZDUSD
+          HUNTER_ADAPTIVE_STATE_PATH: ".hunter_state/hunter_adaptive_state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node session_breakout_monitor.js
+        run: node hunter_adaptive_engine.js
