@@ -187,6 +187,60 @@ function latestSignal(snap, id, now = Date.now()) {
   return { symbol: snap.symbol, session: session.label, side, close: latest.close, boxHigh: box.high, boxLow: box.low, vwap, trend };
 }
 
+function watchLevel(snap, id, now = Date.now()) {
+  const session = resolveSession(snap, id);
+  const c15 = [...snap.candles15m].sort((a,b) => a.openTime - b.openTime);
+  const latest = c15.at(-1);
+  if (!session || !latest) return null;
+
+  const age = now - (latest.openTime + M15_MS);
+  if (age < -60000 || age > 20 * 60 * 1000) return null;
+
+  const box = boxFor(c15, latest.openTime, session);
+  if (!box || latest.openTime < box.activeFrom || latest.openTime >= box.activeUntil) return null;
+
+  const vwap = dailyVwap(c15, latest.openTime);
+  const trend = ema50Bias(snap.candles4h);
+  const close = Number(latest.close);
+  const width = Number(box.high) - Number(box.low);
+  if (!Number.isFinite(vwap) || !(width > 0)) return null;
+
+  let side = null, trigger = null, invalidation = null, distance = null;
+
+  if (trend === 'BULLISH' && close > vwap && close <= box.high) {
+    side = 'LONG';
+    trigger = box.high;
+    invalidation = box.low;
+    distance = box.high - close;
+  } else if (trend === 'BEARISH' && close < vwap && close >= box.low) {
+    side = 'SHORT';
+    trigger = box.low;
+    invalidation = box.high;
+    distance = close - box.low;
+  } else {
+    return null;
+  }
+
+  const boxFraction = Math.max(0, distance / width);
+  const distancePct = Math.max(0, distance / close * 100);
+
+  return {
+    symbol: snap.symbol,
+    provider: snap.provider,
+    session: session.label,
+    side,
+    current: close,
+    trigger,
+    invalidation,
+    distance,
+    distancePct,
+    boxFraction,
+    trend,
+    vwap,
+    date: box.date
+  };
+}
+
 function nextScanAt(now = Date.now()) {
   const q = (Math.floor(now / M15_MS) + 1) * M15_MS + 2 * 60 * 1000;
   return q;
@@ -206,12 +260,18 @@ async function checkAll() {
 
   const all = [...cryptoSnaps, ...fxSnaps];
   const signals = [];
+  const watches = [];
   for (const snap of all) {
     for (const id of ['LONDON','NEW_YORK']) {
       const s = latestSignal(snap, id, now);
       if (s) signals.push(s);
+      else {
+        const w = watchLevel(snap, id, now);
+        if (w) watches.push(w);
+      }
     }
   }
+  watches.sort((a,b) => a.boxFraction - b.boxFraction);
 
   const latestTimes = all.map(s => s.candles15m.at(-1)?.openTime + M15_MS).filter(Number.isFinite);
   return {
@@ -223,40 +283,95 @@ async function checkAll() {
     fxTotal: FX.length,
     fxErrors,
     signals,
+    watches,
     latestClose: latestTimes.length ? Math.max(...latestTimes) : null,
     nextScan: nextScanAt(now)
   };
 }
 
-function p(x) {
+function p(x, symbol = '') {
   const n = Number(x);
   if (!Number.isFinite(n)) return 'n/a';
+  const s = String(symbol).toUpperCase();
+  if (s === 'XAUUSD') return n.toFixed(2);
+  if (s.includes('JPY')) return n.toFixed(3);
+  if (s.endsWith('USD') && !s.endsWith('USDT')) return n.toFixed(5);
   if (n >= 1000) return n.toFixed(2);
   if (n >= 10) return n.toFixed(3);
   return n.toFixed(4);
 }
 
-function formatCheck(r) {
-  const lines = [
-    '📡 BREAKOUT CHECK',
-    '',
-    `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto feed: ${r.cryptoOk}/${r.cryptoTotal} OK`,
-    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex feed: ${r.fxOk}/${r.fxTotal} public feed`,
-    '',
-    'Rule: 2×M15 box + CLOSE breakout + VWAP + H4 EMA50',
-    'Sessions: London + New York',
-    r.latestClose ? `Latest closed M15: ${sgt(r.latestClose)} SGT` : null,
-    `Next auto scan: ~${sgt(r.nextScan)} SGT`,
-    '',
-    r.signals.length ? '🚨 VALID RIGHT NOW' : '⚪ No new valid breakout on the latest M15 close.'
-  ].filter(Boolean);
+function formatNow(r) {
+  const lines = ['🚨 NOW', ''];
 
-  for (const s of r.signals.slice(0, 12)) {
-    lines.push(`${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} ${s.session} ${s.side} @ ${p(s.close)}`);
+  if (r.signals.length) {
+    lines.push('✅ CONFIRMED SIGNALS');
+    for (const s of r.signals.slice(0, 8)) {
+      lines.push(
+        `${s.side === 'LONG' ? '🟢' : '🔴'} ${s.symbol} — ${s.side}`,
+        `Entry ~ ${p(s.close, s.symbol)}`,
+        `Session: ${s.session}`,
+        ''
+      );
+    }
+  } else {
+    lines.push('⚪ No confirmed entry right now.');
   }
 
-  lines.push('', 'BTC/ETH/SOL: 2Y-tested version.', 'Other symbols: monitoring, not yet 2Y validated.');
+  const near = (r.watches || []).filter(w => w.boxFraction <= 0.35).slice(0, 3);
+  if (near.length) {
+    lines.push('👀 CLOSEST TO TRIGGER');
+    for (const w of near) {
+      const arrow = w.side === 'LONG' ? '↑' : '↓';
+      lines.push(`${w.symbol} ${arrow} ${p(w.trigger, w.symbol)}  | now ${p(w.current, w.symbol)}`);
+    }
+  }
+
+  lines.push('', `Next check ~ ${sgt(r.nextScan)} SGT`);
   return lines.join('\n');
 }
 
-module.exports = { checkAll, formatCheck, latestSignal, resolveSession };
+function formatLevels(r) {
+  const watches = (r.watches || []).slice(0, 8);
+  const lines = ['👀 KEY LEVELS', ''];
+
+  if (!watches.length) {
+    lines.push('Nothing important is close enough right now.', '', 'Wait for the next M15 close.');
+    return lines.join('\n');
+  }
+
+  for (const w of watches) {
+    const arrow = w.side === 'LONG' ? '↑' : '↓';
+    const verb = w.side === 'LONG' ? 'ABOVE' : 'BELOW';
+    const hot = w.boxFraction <= 0.20 ? '🔥' : w.boxFraction <= 0.35 ? '🟠' : '⚪';
+    lines.push(
+      `${hot} ${w.symbol} — ${w.side}`,
+      `WATCH ${arrow} ${p(w.trigger, w.symbol)}`,
+      `Now: ${p(w.current, w.symbol)} · ${w.distancePct.toFixed(2)}% away`,
+      `Only act after M15 CLOSE ${verb} ${p(w.trigger, w.symbol)}`,
+      ''
+    );
+  }
+
+  lines.push('🔥 = very close · still NOT an entry until M15 closes through the level.');
+  return lines.join('\n');
+}
+
+function formatSystem(r) {
+  return [
+    '📡 SYSTEM',
+    '',
+    `${r.cryptoOk === r.cryptoTotal ? '🟢' : '🟠'} Crypto: ${r.cryptoOk}/${r.cryptoTotal}`,
+    `${r.fxOk === r.fxTotal ? '🟢' : '🟠'} Gold/Forex: ${r.fxOk}/${r.fxTotal}`,
+    r.latestClose ? `Latest M15: ${sgt(r.latestClose)} SGT` : null,
+    `Next scan: ~${sgt(r.nextScan)} SGT`,
+    '',
+    'Mode: SIGNAL ONLY'
+  ].filter(Boolean).join('\n');
+}
+
+function formatCheck(r) {
+  return formatNow(r);
+}
+
+module.exports = { checkAll, formatCheck, formatNow, formatLevels, formatSystem, latestSignal, watchLevel, resolveSession };
