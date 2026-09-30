@@ -139,7 +139,7 @@ async function snapshot(symbol, now = Date.now()) {
 }
 
 async function dukascopyCandles(symbol, timeframe, lookbackDays, now = Date.now()) {
-  const intervalMs = timeframe === 'h4' ? 4 * HOUR_MS : M15_MS;
+  const intervalMs = timeframe === 'h4' ? 4 * HOUR_MS : timeframe === 'h1' ? HOUR_MS : M15_MS;
   const rows = await getHistoricalRates({
     instrument: String(symbol).toLowerCase(),
     dates: {
@@ -440,7 +440,8 @@ function buildMessage(s) {
     '',
     `🎯 Entry: ~${fmtPrice(s.entry)}`,
     `🛑 SL: ${fmtPrice(s.stop)}`,
-    `✅ TP: ${fmtPrice(s.target)} (${TP_R.toFixed(1)}R)`,
+    `✅ TP1: ${fmtPrice(s.side === 'LONG' ? s.entry + Math.abs(s.entry - s.stop) : s.entry - Math.abs(s.entry - s.stop))} (1.0R)`,
+    `✅ TP2: ${fmtPrice(s.side === 'LONG' ? s.entry + 2 * Math.abs(s.entry - s.stop) : s.entry - 2 * Math.abs(s.entry - s.stop))} (2.0R)`,
     Number.isFinite(s.riskUsd) ? `Risk: ${(RISK_PCT * 100).toFixed(1)}% (~$${s.riskUsd.toFixed(2)})` : null,
     '',
     `Confirmed M15 close: ${sgtTime(s.candleCloseTime)} SGT`,
@@ -460,21 +461,198 @@ async function telegram(text) {
   if (!res.ok) throw new Error(`Telegram HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
 }
 
+function normalizeState(parsed) {
+  const state = parsed && typeof parsed === 'object' ? parsed : {};
+  if (!state.sent || typeof state.sent !== 'object') state.sent = {};
+  if (!state.trades || typeof state.trades !== 'object') state.trades = {};
+  return state;
+}
+
+function tradeFromSignal(s) {
+  const riskDistance = Math.abs(Number(s.entry) - Number(s.stop));
+  const tp1 = s.side === 'LONG' ? Number(s.entry) + riskDistance : Number(s.entry) - riskDistance;
+  const tp2 = s.side === 'LONG' ? Number(s.entry) + 2 * riskDistance : Number(s.entry) - 2 * riskDistance;
+  return {
+    key: s.key,
+    symbol: s.symbol,
+    provider: s.provider,
+    session: s.session,
+    sessionLabel: s.sessionLabel,
+    side: s.side,
+    signalAt: new Date(s.candleCloseTime).toISOString(),
+    signalAtMs: Number(s.candleCloseTime),
+    candleOpenTime: Number(s.candleOpenTime),
+    entry: Number(s.entry),
+    stop: Number(s.stop),
+    tp1,
+    tp2,
+    riskDistance,
+    status: 'OPEN',
+    terminal: false,
+    lastTrackedOpenTime: Number(s.candleOpenTime),
+    milestones: {
+      tp1: { hit: false, at: null, candleOpenTime: null, sameBar: false },
+      tp2: { hit: false, at: null, candleOpenTime: null, sameBar: false },
+      sl:  { hit: false, at: null, candleOpenTime: null, sameBar: false }
+    }
+  };
+}
+
+function reconstructTradeFromSent(key, meta, snap) {
+  if (!meta || meta.watch || !Number.isFinite(Number(meta.candleOpenTime))) return null;
+  const parts = String(key).split('|');
+  const symbol = parts[0];
+  const sessionKey = parts[1] || '';
+  if (!snap || snap.symbol !== symbol) return null;
+  const baseSessionId = sessionKey.startsWith('NEW_YORK') ? 'NEW_YORK' : sessionKey === 'LONDON' ? 'LONDON' : null;
+  if (!baseSessionId) return null;
+  const session = resolveSession(snap, baseSessionId);
+  if (!session) return null;
+  const candleOpenTime = Number(meta.candleOpenTime);
+  const candle = (snap.candles15m || []).find(x => Number(x.openTime) === candleOpenTime);
+  if (!candle) return null;
+  const box = sessionBox(snap.candles15m || [], candleOpenTime, session);
+  if (!box) return null;
+  const entry = Number(candle.close);
+  const stop = String(meta.side).toUpperCase() === 'LONG' ? Number(box.low) : Number(box.high);
+  if (![entry, stop].every(Number.isFinite) || entry === stop) return null;
+  return tradeFromSignal({
+    key,
+    symbol,
+    provider: snap.provider,
+    session: session.id,
+    sessionLabel: session.label,
+    side: String(meta.side).toUpperCase(),
+    candleOpenTime,
+    candleCloseTime: candleOpenTime + M15_MS,
+    entry,
+    stop
+  });
+}
+
+function milestoneHit(trade, candle, kind) {
+  const side = trade.side;
+  const high = Number(candle.high), low = Number(candle.low);
+  if (kind === 'sl') return side === 'LONG' ? low <= trade.stop : high >= trade.stop;
+  if (kind === 'tp1') return side === 'LONG' ? high >= trade.tp1 : low <= trade.tp1;
+  if (kind === 'tp2') return side === 'LONG' ? high >= trade.tp2 : low <= trade.tp2;
+  return false;
+}
+
+function updateTradeFromCandles(trade, candles) {
+  if (!trade || trade.terminal) return false;
+  let changed = false;
+  const start = Number(trade.candleOpenTime) + M15_MS;
+  const sorted = [...(candles || [])].sort((a,b) => a.openTime - b.openTime);
+
+  for (const candle of sorted) {
+    if (trade.terminal) break;
+    if (Number(candle.openTime) < start) continue;
+    if (Number(candle.openTime) <= Number(trade.lastTrackedOpenTime || 0)) continue;
+
+    const hits = {
+      tp1: !trade.milestones.tp1.hit && milestoneHit(trade, candle, 'tp1'),
+      tp2: !trade.milestones.tp2.hit && milestoneHit(trade, candle, 'tp2'),
+      sl: !trade.milestones.sl.hit && milestoneHit(trade, candle, 'sl')
+    };
+
+    // A 2R touch necessarily crosses 1R inside the same bar unless there is a gap.
+    if (hits.tp2 && !trade.milestones.tp1.hit) hits.tp1 = true;
+
+    const newKinds = Object.entries(hits).filter(([,v]) => v).map(([k]) => k);
+    const sameBar = newKinds.length > 1;
+    const at = new Date(Number(candle.openTime) + M15_MS).toISOString();
+
+    for (const kind of newKinds) {
+      trade.milestones[kind] = {
+        hit: true,
+        at,
+        candleOpenTime: Number(candle.openTime),
+        sameBar
+      };
+      changed = true;
+    }
+
+    if (hits.sl && hits.tp2) {
+      trade.status = 'TP2_AND_SL_SAME_M15';
+      trade.terminal = true;
+    } else if (hits.sl && hits.tp1) {
+      trade.status = 'TP1_AND_SL_SAME_M15';
+      trade.terminal = true;
+    } else if (hits.sl) {
+      trade.status = trade.milestones.tp1.hit ? 'TP1_THEN_SL' : 'SL';
+      trade.terminal = true;
+    } else if (hits.tp2) {
+      trade.status = 'TP2';
+      trade.terminal = true;
+    } else if (hits.tp1) {
+      trade.status = 'TP1';
+    }
+
+    trade.lastTrackedOpenTime = Number(candle.openTime);
+  }
+  return changed;
+}
+
+function trackTrades(state, snaps) {
+  state = normalizeState(state);
+  const bySymbol = Object.fromEntries((snaps || []).map(s => [s.symbol, s]));
+  let changed = false;
+
+  // Migrate signals sent before result tracking was added.
+  for (const [key, meta] of Object.entries(state.sent || {})) {
+    if (meta?.watch || state.trades[key]) continue;
+    const symbol = String(key).split('|')[0];
+    const trade = reconstructTradeFromSent(key, meta, bySymbol[symbol]);
+    if (trade) {
+      state.trades[key] = trade;
+      changed = true;
+    }
+  }
+
+  for (const trade of Object.values(state.trades || {})) {
+    const snap = bySymbol[trade.symbol];
+    if (!snap) continue;
+    if (updateTradeFromCandles(trade, snap.candles15m || [])) changed = true;
+  }
+  return changed;
+}
+
+function pruneTrades(state) {
+  const cutoff = Date.now() - 180 * 24 * HOUR_MS;
+  const entries = Object.entries(state.trades || {}).sort((a,b) => Number(b[1]?.signalAtMs || 0) - Number(a[1]?.signalAtMs || 0));
+  const keep = new Set(entries.filter(([,t], idx) => idx < 1000 && Number(t?.signalAtMs || 0) >= cutoff).map(([k]) => k));
+  for (const key of Object.keys(state.trades || {})) if (!keep.has(key)) delete state.trades[key];
+}
+
+function resultSummary(state) {
+  const trades = Object.values(state.trades || {});
+  return {
+    signals: trades.length,
+    tp1: trades.filter(t => t.milestones?.tp1?.hit).length,
+    tp2: trades.filter(t => t.milestones?.tp2?.hit).length,
+    sl: trades.filter(t => t.milestones?.sl?.hit).length,
+    open: trades.filter(t => !t.terminal).length,
+    ambiguousSameM15: trades.filter(t => String(t.status || '').includes('SAME_M15')).length
+  };
+}
+
 function loadState() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
-    return parsed && typeof parsed.sent === 'object' ? parsed : { sent: {} };
+    return normalizeState(JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')));
   } catch {
-    return { sent: {} };
+    return normalizeState({});
   }
 }
 
 function saveState(state) {
+  state = normalizeState(state);
   fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
   const cutoff = Date.now() - 10 * 24 * HOUR_MS;
   for (const [k, v] of Object.entries(state.sent || {})) {
     if (!v || Number(v.atMs || 0) < cutoff) delete state.sent[k];
   }
+  pruneTrades(state);
   const tmp = STATE_PATH + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, STATE_PATH);
@@ -498,6 +676,9 @@ async function cycle() {
     if (r.status === 'fulfilled') snaps.push(r.value);
     else console.error(JSON.stringify({ symbol: FX_SYMBOLS[i], provider: 'DUKASCOPY', marketData: 'ERROR', error: String(r.reason?.message || r.reason) }));
   }
+
+  const outcomeChanged = trackTrades(state, snaps);
+  if (outcomeChanged) saveState(state);
 
   const signals = [];
   const watches = [];
@@ -531,6 +712,7 @@ async function cycle() {
     try {
       await telegram(buildMessage(s));
       state.sent[s.key] = { at: new Date().toISOString(), atMs: Date.now(), side: s.side, candleOpenTime: s.candleOpenTime };
+      state.trades[s.key] = tradeFromSignal(s);
       saveState(state);
       console.log(JSON.stringify({ telegram: 'SENT', key: s.key, symbol: s.symbol, session: s.session, side: s.side }));
     } catch (error) {
@@ -549,7 +731,8 @@ async function cycle() {
     sessions: SESSION_IDS,
     providers: Object.fromEntries(snaps.map(s => [s.symbol, s.provider])),
     watches: watches.map(w => ({ symbol: w.symbol, session: w.session, side: w.side, current: w.current, trigger: w.trigger })),
-    candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend }))
+    candidates: signals.map(s => ({ symbol: s.symbol, session: s.session, side: s.side, close: s.close, vwap: s.vwap, trend: s.trend })),
+    results: resultSummary(state)
   }));
 
   saveState(state);
@@ -628,4 +811,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, mapBinanceKlines };
+module.exports = { localParts, ema50Bias, dailyVwap, sessionBox, evaluate, evaluateWatch, mapBinanceKlines, tradeFromSignal, updateTradeFromCandles, resultSummary };
