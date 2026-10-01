@@ -1,5 +1,4 @@
-# Hunter Adaptive V1 Telegram command center
-# Minimal live UI: now, market, active, results, learn, system.
+# One-shot cleanup for old Telegram pollers
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -7,46 +6,16 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/hunter-interactive-bot.yml"
-  workflow_dispatch:
-  schedule:
-    - cron: "5,20,35,50 * * * *"
 
 concurrency:
-  group: hunter-adaptive-telegram-bot
+  group: hunter-interactive-telegram-bot
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  bot:
+  cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
     steps:
-      - name: Checkout Hunter Adaptive Bot
-        uses: actions/checkout@v4
-        with:
-          ref: hunter-adaptive-v1-bot
-
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Restore latest Hunter Adaptive state
-        uses: actions/cache/restore@v4
-        with:
-          path: .hunter_state
-          key: hunter-adaptive-v1-reader-${{ github.run_id }}
-          restore-keys: |
-            hunter-adaptive-v1-state-
-
-      - name: Validate adaptive bot
-        run: node --check hunter_core_v1/adaptive_bot.js
-
-      - name: Run adaptive bot
-        env:
-          ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node hunter_core_v1/adaptive_bot.js
+      - run: echo "Old Telegram pollers cancelled"
