@@ -68,7 +68,9 @@ jobs:
       - name: Run Telegram + continuous scanner
         env:
           ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
-          ADAPTIVE_SCAN_EVERY_MS: "180000"
+          ADAPTIVE_SCAN_AFTER_CLOSE_MS: "8000"
+          ADAPTIVE_RETRY_AFTER_MS: "15000"
+          ADAPTIVE_MAX_CLOSE_RETRIES: "4"
           ADAPTIVE_RUNTIME_MS: "18600000"
           ADAPTIVE_RISK_PCT: "0.005"
           ADAPTIVE_DAILY_STOP_R: "-2"
