@@ -79,14 +79,30 @@ async function okxCandles(symbol,bar,limit){
   const ms=bar==='4H'?4*HOUR:M15;
   return (b.data||[]).filter(r=>String(r[8]||'1')==='1').map(r=>({openTime:Number(r[0]),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5]),closeTime:Number(r[0])+ms-1})).sort((a,b)=>a.openTime-b.openTime);
 }
+function chooseFreshestSnapshot(candidates,now=Date.now()){
+  const xs=(candidates||[]).filter(x=>x&&Array.isArray(x.m15)&&x.m15.length);
+  if(!xs.length) return null;
+  return [...xs].sort((a,b)=>snapshotFreshness(a,now)-snapshotFreshness(b,now))[0];
+}
 async function cryptoSnapshot(symbol,now){
-  try{
-    const [m15,h4]=await Promise.all([binanceCandles(symbol,'15m',300,now),binanceCandles(symbol,'4h',120,now)]);
-    return {symbol,provider:'BINANCE',m15,h4};
-  }catch(e){
-    const [m15,h4]=await Promise.all([okxCandles(symbol,'15m',300),okxCandles(symbol,'4H',120)]);
-    return {symbol,provider:'OKX',m15,h4};
-  }
+  const [binanceResult,okxResult]=await Promise.allSettled([
+    Promise.all([binanceCandles(symbol,'15m',300,now),binanceCandles(symbol,'4h',120,now)])
+      .then(([m15,h4])=>({symbol,provider:'BINANCE',m15,h4})),
+    Promise.all([okxCandles(symbol,'15m',300),okxCandles(symbol,'4H',120)])
+      .then(([m15,h4])=>({symbol,provider:'OKX',m15,h4}))
+  ]);
+  const candidates=[];
+  if(binanceResult.status==='fulfilled') candidates.push(binanceResult.value);
+  if(okxResult.status==='fulfilled') candidates.push(okxResult.value);
+  const errors=[
+    binanceResult.status==='rejected'?'BINANCE:'+(binanceResult.reason?.message||'failed'):null,
+    okxResult.status==='rejected'?'OKX:'+(okxResult.reason?.message||'failed'):null
+  ].filter(Boolean);
+  const best=chooseFreshestSnapshot(candidates,now);
+  if(!best) throw new Error('CRYPTO_ALL_FEEDS_FAILED '+symbol+' '+errors.join(' | '));
+  best.feedCandidates=candidates.map(x=>({provider:x.provider,lagMinutes:snapshotFreshness(x,now)/60000}));
+  best.feedErrors=errors;
+  return best;
 }
 async function duka(symbol,timeframe,days,now){
   const ms=timeframe==='h1'?HOUR:M15;
@@ -259,6 +275,13 @@ function dailyVwap(candles,target){
   }
   return v>0?pv/v:null;
 }
+function vwapGate(side,price,vwap){
+  const p=Number(price),v=Number(vwap);
+  if(!Number.isFinite(p)||!Number.isFinite(v)||vwap===null) return false;
+  if(side==='LONG') return p>v;
+  if(side==='SHORT') return p<v;
+  return false;
+}
 function regime(snap){
   const h4=snap.h4; const m15=snap.m15;
   const closes=h4.map(x=>x.close); const e20=emaSeries(closes,20),e50=emaSeries(closes,50);
@@ -311,7 +334,7 @@ function retestSignal(snap,armed,box,reg){
   if(!Number.isFinite(vwap)) return null;
   if(armed.side==='LONG'){
     const touched=cur.low<=box.high+0.25*a && cur.low>=box.high-0.60*a;
-    const reclaimed=cur.close>box.high && cur.close>vwap && cur.close>=cur.open;
+    const reclaimed=cur.close>box.high && vwapGate('LONG',cur.close,vwap) && cur.close>=cur.open;
     if(!touched||!reclaimed) return null;
     const swing=Math.min(...xs.map(x=>x.low)); const stop=swing-0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
@@ -319,7 +342,7 @@ function retestSignal(snap,armed,box,reg){
     return {mode:'TREND_RETEST',side:'LONG',entry:cur.close,stop,tp1:cur.close+risk,tp2:cur.close+2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'40%@1R · 30%@2R · 30% Runner'};
   }else{
     const touched=cur.high>=box.low-0.25*a && cur.high<=box.low+0.60*a;
-    const reclaimed=cur.close<box.low && cur.close<vwap && cur.close<=cur.open;
+    const reclaimed=cur.close<box.low && vwapGate('SHORT',cur.close,vwap) && cur.close<=cur.open;
     if(!touched||!reclaimed) return null;
     const swing=Math.max(...xs.map(x=>x.high)); const stop=swing+0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
@@ -466,7 +489,7 @@ async function cycle(now=Date.now()){
         const bo=freshBreakout(snap.m15,box,reg.side);
         if(bo){
           const vwap=dailyVwap(snap.m15,bo.candle.openTime);
-          const vwapOk=reg.side==='LONG'?bo.candle.close>vwap:bo.candle.close<vwap;
+          const vwapOk=vwapGate(reg.side,bo.candle.close,vwap);
           if(vwapOk) state.armed[armKey]={symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,side:reg.side,breakoutOpenTime:bo.candle.openTime,expiresOpenTime:bo.candle.openTime+RETEST_BARS*M15,boxHigh:box.high,boxLow:box.low};
         }
         const arm=state.armed[armKey];
@@ -517,4 +540,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,goldSnapshot,cycle};
+module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,cycle};
