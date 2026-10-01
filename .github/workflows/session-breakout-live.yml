@@ -1,15 +1,9 @@
-# Hunter Adaptive V1 live scanner
-# Trend retest + range sweep/reclaim; signal only.
+# Hunter Adaptive V1 manual backup scan
+# Primary scanning now runs continuously inside Hunter Adaptive Telegram Bot.
 name: Hunter Adaptive Live Monitor
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/session-breakout-live.yml"
-  schedule:
-    - cron: "2,17,32,47 * * * *"
 
 permissions:
   contents: read
@@ -49,7 +43,7 @@ jobs:
           node --check adaptive_hunter_monitor.js
           node test/adaptive_hunter_monitor.test.js
 
-      - name: Scan latest closed M15 candle
+      - name: Manual scan
         env:
           ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
           ADAPTIVE_RISK_PCT: "0.005"
