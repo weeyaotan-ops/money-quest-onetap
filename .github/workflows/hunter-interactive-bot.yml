@@ -1,15 +1,16 @@
-# Hunter Adaptive V1 Telegram command center
-# Minimal live UI: now, market, active, results, learn, system.
+# Hunter Adaptive V1 always-on runtime
+# Telegram + market scanner run in one process; self-rotates before GitHub timeout.
 name: Hunter Adaptive Telegram Bot
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - ".github/workflows/hunter-interactive-bot.yml"
-  workflow_dispatch:
   schedule:
-    - cron: "5,20,35,50 * * * *"
+    # Watchdog only. Normal restarts are self-dispatched after state is saved.
+    - cron: "17 */12 * * *"
 
 concurrency:
   group: hunter-adaptive-telegram-bot
@@ -17,11 +18,12 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 345
     steps:
       - name: Checkout Hunter Adaptive Bot
         uses: actions/checkout@v4
@@ -37,16 +39,39 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .hunter_state
-          key: hunter-adaptive-v1-reader-${{ github.run_id }}
+          key: hunter-adaptive-v1-reader-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             hunter-adaptive-v1-state-
 
-      - name: Validate adaptive bot
-        run: node --check hunter_core_v1/adaptive_bot.js
+      - name: Install market data helper
+        run: npm install --no-save dukascopy-node
 
-      - name: Run adaptive bot
+      - name: Validate adaptive runtime
+        run: |
+          node --check adaptive_hunter_monitor.js
+          node --check hunter_core_v1/adaptive_bot.js
+          node test/adaptive_hunter_monitor.test.js
+
+      - name: Run Telegram + continuous scanner
         env:
           ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
+          ADAPTIVE_SCAN_EVERY_MS: "180000"
+          ADAPTIVE_RUNTIME_MS: "18600000"
+          ADAPTIVE_RISK_PCT: "0.005"
+          ADAPTIVE_DAILY_STOP_R: "-2"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hunter_core_v1/adaptive_bot.js
+
+      - name: Save Hunter Adaptive state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .hunter_state
+          key: hunter-adaptive-v1-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Start next runtime
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hunter-interactive-bot.yml --ref main
