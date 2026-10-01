@@ -1,12 +1,14 @@
 'use strict';
 
 const fs = require('fs');
+const { cycle: scanMarket } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
 const VERSION='HUNTER_ADAPTIVE_V1_2026-10-01';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const SCAN_EVERY_MS=Number(process.env.ADAPTIVE_SCAN_EVERY_MS||180000);
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
 
@@ -36,6 +38,7 @@ function regimeText(x){
   if(x==='TREND') return '🟢 趋势';
   if(x==='RANGE') return '🟡 区间';
   if(x==='CHAOS') return '🔴 混乱';
+  if(x==='STALE') return '🔴 数据过旧';
   return '⚪ 中性';
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
@@ -94,6 +97,8 @@ function marketText(){
   for(const x of xs){
     lines.push(regimeText(x.regime)+' '+x.symbol+(x.side?' · '+sideText(x.side):''));
     lines.push('现价 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
+    lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(x.lagMinutes)?' · 延迟 '+Number(x.lagMinutes).toFixed(1)+'分钟':''));
+    if(x.regime==='STALE') lines.push('⚠️ 旧数据不会发信号');
     lines.push('');
   }
   lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','混乱/中性 → 不做');
@@ -177,6 +182,7 @@ function learnText(){
 function systemText(){
   const s=load(),scan=s.lastScan||{},age=Number(scan.at)?(Date.now()-Number(scan.at))/60000:null;
   const errs=scan.errors||[];
+  const stale=Object.values(s.market||{}).filter(x=>x.regime==='STALE');
   return [
     '📡 系统','',
     '策略：Hunter Adaptive V1',
@@ -187,8 +193,10 @@ function systemText(){
     'Daily kill：-2R',
     '',
     '最后扫描：'+sgtTime(scan.at)+' SGT',
-    Number.isFinite(age)?'数据年龄：'+age.toFixed(1)+'分钟':null,
-    errs.length?'⚠️ 数据错误：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
+    Number.isFinite(age)?'扫描年龄：'+age.toFixed(1)+'分钟':null,
+    Number.isFinite(age)&&age>8?'🚨 Scanner 可能卡住':'🟢 Scanner：持续扫描中',
+    stale.length?'⚠️ 旧数据：'+stale.map(x=>x.symbol+'('+Number(x.lagMinutes||0).toFixed(0)+'m)').join(' / '):null,
+    errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
     '',
     '旧 Session Breakout 已退出 Live。'
@@ -248,9 +256,28 @@ async function setCommands(){
     {command:'system',description:'系统状态'}
   ]});
 }
+let scannerBusy=false;
+async function scannerLoop(){
+  while(true){
+    if(!scannerBusy){
+      scannerBusy=true;
+      try{
+        const r=await scanMarket(Date.now());
+        console.log(JSON.stringify({bot:VERSION,scanner:'OK',at:r?.at,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0}));
+      }catch(e){
+        console.error(JSON.stringify({bot:VERSION,scanner:'ERROR',error:e.message}));
+      }finally{
+        scannerBusy=false;
+      }
+    }
+    await sleep(SCAN_EVERY_MS);
+  }
+}
+
 async function run(){
   await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING'}));
+  scannerLoop().catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scannerEveryMs:SCAN_EVERY_MS}));
   while(true){
     try{
       const us=await getUpdates(offset);
