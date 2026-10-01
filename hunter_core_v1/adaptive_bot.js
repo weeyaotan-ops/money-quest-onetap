@@ -6,9 +6,12 @@ const { cycle: scanMarket } = require('../adaptive_hunter_monitor');
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
-const VERSION='HUNTER_ADAPTIVE_V1_2026-10-01';
+const VERSION='HUNTER_ADAPTIVE_V1_2026-10-02_FAST_CLOSE';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const SCAN_EVERY_MS=Number(process.env.ADAPTIVE_SCAN_EVERY_MS||180000);
+const M15_MS=15*60*1000;
+const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||8000);
+const RETRY_AFTER_MS=Number(process.env.ADAPTIVE_RETRY_AFTER_MS||15000);
+const MAX_CLOSE_RETRIES=Number(process.env.ADAPTIVE_MAX_CLOSE_RETRIES||4);
 const RUNTIME_MS=Number(process.env.ADAPTIVE_RUNTIME_MS||18600000);
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
@@ -97,8 +100,9 @@ function marketText(){
   xs.sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));
   for(const x of xs){
     lines.push(regimeText(x.regime)+' '+x.symbol+(x.side?' · '+sideText(x.side):''));
-    lines.push('现价 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
-    lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(x.lagMinutes)?' · 延迟 '+Number(x.lagMinutes).toFixed(1)+'分钟':''));
+    lines.push('M15收盘 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
+    const lag=Number(x.lagMinutes);
+    lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 数据源落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
     if(x.regime==='STALE') lines.push('⚠️ 旧数据不会发信号');
     lines.push('');
   }
@@ -257,22 +261,41 @@ async function setCommands(){
     {command:'system',description:'系统状态'}
   ]});
 }
-let scannerBusy=false;
+function expectedM15Close(now=Date.now()){ return Math.floor(Number(now)/M15_MS)*M15_MS; }
+function nextM15ScanAt(now=Date.now()){
+  const base=Math.floor(Number(now)/M15_MS)*M15_MS;
+  let target=base+SCAN_AFTER_CLOSE_MS;
+  if(target<=now) target=base+M15_MS+SCAN_AFTER_CLOSE_MS;
+  return target;
+}
+function behindExpectedClose(result,scanAt){
+  const expected=expectedM15Close(scanAt);
+  return Object.values(result?.market||{}).filter(x=>Number(x?.lastCandleClose||0)<expected);
+}
 async function scannerLoop(stopAt){
+  let first=true;
   while(Date.now()<stopAt){
-    if(!scannerBusy){
-      scannerBusy=true;
+    if(!first){
+      const wait=Math.max(0,nextM15ScanAt(Date.now())-Date.now());
+      if(wait>0) await sleep(Math.min(wait,Math.max(0,stopAt-Date.now())));
+      if(Date.now()>=stopAt) break;
+    }
+    first=false;
+    for(let attempt=1;attempt<=MAX_CLOSE_RETRIES&&Date.now()<stopAt;attempt+=1){
+      const scanAt=Date.now();
       try{
-        const r=await scanMarket(Date.now());
-        console.log(JSON.stringify({bot:VERSION,scanner:'OK',at:r?.at,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0}));
+        const r=await scanMarket(scanAt);
+        const behind=behindExpectedClose(r,scanAt);
+        console.log(JSON.stringify({bot:VERSION,scanner:'OK',at:r?.at,attempt,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0,behind:behind.map(x=>x.symbol)}));
+        if(!behind.length) break;
       }catch(e){
-        console.error(JSON.stringify({bot:VERSION,scanner:'ERROR',error:e.message}));
-      }finally{
-        scannerBusy=false;
+        console.error(JSON.stringify({bot:VERSION,scanner:'ERROR',attempt,error:e.message}));
+      }
+      if(attempt<MAX_CLOSE_RETRIES){
+        const remaining=Math.max(0,stopAt-Date.now());
+        if(remaining>0) await sleep(Math.min(RETRY_AFTER_MS,remaining));
       }
     }
-    const remaining=Math.max(0,stopAt-Date.now());
-    if(remaining>0) await sleep(Math.min(SCAN_EVERY_MS,remaining));
   }
 }
 
@@ -280,7 +303,7 @@ async function run(){
   await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
   const stopAt=Date.now()+RUNTIME_MS;
   const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scannerEveryMs:SCAN_EVERY_MS,runtimeMs:RUNTIME_MS}));
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS}));
   while(Date.now()<stopAt){
     try{
       const us=await getUpdates(offset);
