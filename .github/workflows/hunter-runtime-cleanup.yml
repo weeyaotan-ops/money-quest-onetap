@@ -1,0 +1,35 @@
+name: Hunter Runtime Cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-runtime-cleanup.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stop all Hunter bot runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/hunter-interactive-bot.yml/runs?per_page=50" --jq '.workflow_runs[] | "\(.id) \(.status)"' |
+          while read -r id status; do
+            if [ "$status" = "in_progress" ] || [ "$status" = "queued" ] || [ "$status" = "pending" ]; then
+              echo "Force cancelling $id ($status)"
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/force-cancel" ||               gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
+            fi
+          done
+          sleep 8
+
+      - name: Start one clean Hunter runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hunter-interactive-bot.yml --ref main
