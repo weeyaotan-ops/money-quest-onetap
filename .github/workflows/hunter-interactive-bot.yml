@@ -13,7 +13,7 @@ on:
     - cron: "17 */12 * * *"
 
 concurrency:
-  group: hunter-adaptive-telegram-bot
+  group: hunter-adaptive-telegram-bot-v2
   cancel-in-progress: true
 
 permissions:
@@ -25,6 +25,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 345
     steps:
+      - name: Cancel legacy Hunter bot runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/hunter-interactive-bot.yml/runs?per_page=50" --jq '.workflow_runs[] | "\(.id) \(.status)"' |
+          while read -r id status; do
+            if [ "$id" != "$GITHUB_RUN_ID" ] && { [ "$status" = "in_progress" ] || [ "$status" = "queued" ] || [ "$status" = "pending" ]; }; then
+              echo "Cancelling old bot run $id ($status)"
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
+            fi
+          done
+
       - name: Checkout Hunter Adaptive Bot
         uses: actions/checkout@v4
         with:
