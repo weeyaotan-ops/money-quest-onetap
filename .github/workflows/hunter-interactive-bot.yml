@@ -34,7 +34,7 @@ jobs:
           while read -r id status; do
             if [ "$id" != "$GITHUB_RUN_ID" ] && { [ "$status" = "in_progress" ] || [ "$status" = "queued" ] || [ "$status" = "pending" ]; }; then
               echo "Cancelling old bot run $id ($status)"
-              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/force-cancel" || gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
             fi
           done
 
