@@ -73,7 +73,7 @@ function m15Base(count=80,start=0){
   for(let i=0;i<40;i+=1) base.push(c(start+i*M15,100,101,99,100,100));
   const boTime=start+40*M15;
   base.push(c(boTime,104,108,103,106,150));
-  base.push(c(boTime+M15,106,106.5,104.7,105.8,150));
+  base.push(c(boTime+M15,105.2,106.5,104.7,105.8,150));
   const snap={symbol:'BTCUSDT',m15:base,h4:h4Trend(true)};
   const armed={side:'LONG',breakoutOpenTime:boTime};
   const box={high:105,low:99};
