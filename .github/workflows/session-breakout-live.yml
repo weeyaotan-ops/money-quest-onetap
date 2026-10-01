@@ -15,45 +15,45 @@ permissions:
   contents: read
 
 concurrency:
-  group: session-breakout-live
+  group: hunter-adaptive-live
   cancel-in-progress: true
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 8
-
     steps:
-      - name: Checkout signal engine
+      - name: Checkout Hunter Adaptive V1
         uses: actions/checkout@v4
         with:
-          ref: exact-mirror-resting-v2
+          ref: hunter-adaptive-v1-live
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Restore breakout state
+      - name: Restore adaptive state
         uses: actions/cache@v4
         with:
           path: .hunter_state
-          key: hunter-adaptive-state-${{ github.run_id }}-${{ github.run_attempt }}
+          key: hunter-adaptive-v1-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            hunter-adaptive-state-
+            hunter-adaptive-v1-state-
 
-      - name: Install public market data helper
+      - name: Install market data helper
         run: npm install --no-save dukascopy-node
 
-      - name: Validate Hunter Adaptive
+      - name: Validate engine
         run: |
-          node --check hunter_adaptive_engine.js
-          node test/hunter_adaptive_engine.test.js
+          node --check adaptive_hunter_monitor.js
+          node test/adaptive_hunter_monitor.test.js
 
       - name: Scan latest closed M15 candle
         env:
-          HUNTER_RUN_ONCE: "true"
-          HUNTER_ADAPTIVE_STATE_PATH: ".hunter_state/hunter_adaptive_state.json"
+          ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
+          ADAPTIVE_RISK_PCT: "0.005"
+          ADAPTIVE_DAILY_STOP_R: "-2"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node hunter_adaptive_engine.js
+        run: node adaptive_hunter_monitor.js
