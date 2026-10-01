@@ -1,5 +1,5 @@
 # Hunter Adaptive V1 Telegram command center
-# Minimal live UI: now, active, records, results, learn, health, system.
+# Minimal live UI: now, market, active, results, learn, system.
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -12,7 +12,7 @@ on:
     - cron: "5,20,35,50 * * * *"
 
 concurrency:
-  group: hunter-interactive-telegram-bot
+  group: hunter-adaptive-telegram-bot
   cancel-in-progress: true
 
 permissions:
@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - name: Checkout Hunter Core V1
+      - name: Checkout Hunter Adaptive Bot
         uses: actions/checkout@v4
         with:
-          ref: hunter-core-v1-clean
+          ref: hunter-adaptive-v1-bot
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
@@ -37,16 +37,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .hunter_state
-          key: hunter-adaptive-reader-${{ github.run_id }}
+          key: hunter-adaptive-v1-reader-${{ github.run_id }}
           restore-keys: |
-            hunter-adaptive-state-
+            hunter-adaptive-v1-state-
 
       - name: Validate adaptive bot
         run: node --check hunter_core_v1/adaptive_bot.js
 
       - name: Run adaptive bot
         env:
-          HUNTER_ADAPTIVE_STATE_PATH: ".hunter_state/hunter_adaptive_state.json"
+          ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hunter_core_v1/adaptive_bot.js
