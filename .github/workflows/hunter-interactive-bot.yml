@@ -66,6 +66,8 @@ jobs:
           node test/adaptive_hunter_monitor.test.js
 
       - name: Run Telegram + continuous scanner
+        id: runtime
+        continue-on-error: true
         env:
           ADAPTIVE_STATE_PATH: ".hunter_state/adaptive_state.json"
           ADAPTIVE_SCAN_AFTER_CLOSE_MS: "8000"
@@ -86,7 +88,19 @@ jobs:
           key: hunter-adaptive-v1-state-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Start next runtime
-        if: success()
+        if: always() && steps.runtime.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run --repo "$GITHUB_REPOSITORY" hunter-interactive-bot.yml --ref main
+        shell: bash
+        run: |
+          if [ "${{ steps.runtime.outcome }}" = "failure" ]; then
+            echo "Runtime crashed; relaunching after 60 seconds."
+            sleep 60
+          fi
+          gh workflow run --repo "$GITHUB_REPOSITORY" hunter-interactive-bot.yml --ref main
+
+      - name: Surface runtime failure
+        if: steps.runtime.outcome == 'failure'
+        run: |
+          echo "Previous runtime failed after the replacement run was dispatched."
+          exit 1
