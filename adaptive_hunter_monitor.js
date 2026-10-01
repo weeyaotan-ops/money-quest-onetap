@@ -14,6 +14,7 @@ const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
 const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.binance.com';
 const OKX_BASE = process.env.OKX_REST_BASE || 'https://www.okx.com';
 const YAHOO_BASE = process.env.YAHOO_FINANCE_BASE || 'https://query1.finance.yahoo.com';
+const XAUS_BASE = process.env.XAUS_API_BASE || 'https://xaus.com';
 const MAX_AGE_MS = Number(process.env.ADAPTIVE_MAX_AGE_MS || 20 * 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
@@ -139,21 +140,62 @@ async function yahooGoldSnapshot(now){
   if(m15.length<30 || h4.length<51) throw new Error('YAHOO_XAU_INSUFFICIENT m15='+m15.length+' h4='+h4.length);
   return {symbol:'XAUUSD',provider:'YAHOO_SPOT',m15,h4};
 }
+
+function xausPointTime(t){
+  const n=Number(t);
+  if(!Number.isFinite(n)) return null;
+  return n<1e12?n*1000:n;
+}
+async function xausChartCandles(interval,range,now=Date.now()){
+  const q=new URLSearchParams({symbol:'xau',range,interval});
+  const body=await getJson(XAUS_BASE+'/api/v1/chart?'+q.toString());
+  if(body?.data_state?.status==='unavailable') throw new Error('XAUS_UNAVAILABLE');
+  const points=body?.points||body?.data||body?.series||[];
+  const ms=interval==='1h'?HOUR:M15;
+  return (points||[]).map(p=>{
+    const openTime=xausPointTime(p.t??p.timestamp??p.time);
+    return {
+      openTime,
+      open:Number(p.o??p.open),
+      high:Number(p.h??p.high),
+      low:Number(p.l??p.low),
+      close:Number(p.c??p.close),
+      volume:Number(p.v??p.volume??0),
+      closeTime:Number(openTime)+ms-1
+    };
+  }).filter(x=>Number.isFinite(x.openTime)&&x.openTime+ms<=now&&[x.open,x.high,x.low,x.close].every(Number.isFinite))
+    .sort((a,b)=>a.openTime-b.openTime);
+}
+async function xausGoldSnapshot(now){
+  const [m15,h1]=await Promise.all([
+    xausChartCandles('15m','5d',now),
+    xausChartCandles('1h','1mo',now)
+  ]);
+  const h4=aggregateH4(h1);
+  if(m15.length<30||h4.length<51) throw new Error('XAUS_INSUFFICIENT m15='+m15.length+' h4='+h4.length);
+  return {symbol:'XAUUSD',provider:'XAUS_SPOT',m15,h4};
+}
 async function goldSnapshot(now){
-  const [dukaResult,yahooResult]=await Promise.allSettled([
+  const [xausResult,dukaResult,yahooResult]=await Promise.allSettled([
+    xausGoldSnapshot(now),
     Promise.all([duka('XAUUSD','m15',7,now),duka('XAUUSD','h1',30,now)])
       .then(([m15,h1])=>({symbol:'XAUUSD',provider:'DUKASCOPY',m15,h4:aggregateH4(h1)})),
     yahooGoldSnapshot(now)
   ]);
   const candidates=[];
+  if(xausResult.status==='fulfilled') candidates.push(xausResult.value);
   if(dukaResult.status==='fulfilled') candidates.push(dukaResult.value);
   if(yahooResult.status==='fulfilled') candidates.push(yahooResult.value);
-  if(!candidates.length){
-    throw new Error('XAU_ALL_FEEDS_FAILED duka='+(dukaResult.reason?.message||'failed')+' yahoo='+(yahooResult.reason?.message||'failed'));
-  }
+  const feedErrors=[
+    xausResult.status==='rejected'?'XAUS:'+(xausResult.reason?.message||'failed'):null,
+    dukaResult.status==='rejected'?'DUKA:'+(dukaResult.reason?.message||'failed'):null,
+    yahooResult.status==='rejected'?'YAHOO:'+(yahooResult.reason?.message||'failed'):null
+  ].filter(Boolean);
+  if(!candidates.length) throw new Error('XAU_ALL_FEEDS_FAILED '+feedErrors.join(' | '));
   candidates.sort((a,b)=>snapshotFreshness(a,now)-snapshotFreshness(b,now));
   const best=candidates[0];
   best.feedCandidates=candidates.map(x=>({provider:x.provider,lagMinutes:snapshotFreshness(x,now)/60000}));
+  best.feedErrors=feedErrors;
   return best;
 }
 async function snapshot(symbol,now){ return symbol==='XAUUSD'?goldSnapshot(now):cryptoSnapshot(symbol,now); }
@@ -400,13 +442,13 @@ async function cycle(now=Date.now()){
       state.market[snap.symbol]={
         symbol:snap.symbol,provider:snap.provider,regime:'STALE',side:null,adx:null,lastClose:latest.close,
         lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,
-        feedCandidates:snap.feedCandidates||null
+        feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null
       };
       errors.push({symbol:snap.symbol,error:'STALE_'+snap.provider+'_'+(lag/60000).toFixed(1)+'m'});
       continue;
     }
     const reg=regime(snap);
-    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null};
+    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null};
     for(const sid of ['LONDON','NEW_YORK']){
       const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime); if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
@@ -465,4 +507,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,snapshotFreshness,goldSnapshot,cycle};
+module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,goldSnapshot,cycle};
