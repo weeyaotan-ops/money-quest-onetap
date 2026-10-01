@@ -9,6 +9,7 @@ const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.
 const VERSION='HUNTER_ADAPTIVE_V1_2026-10-01';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const SCAN_EVERY_MS=Number(process.env.ADAPTIVE_SCAN_EVERY_MS||180000);
+const RUNTIME_MS=Number(process.env.ADAPTIVE_RUNTIME_MS||18600000);
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
 
@@ -257,8 +258,8 @@ async function setCommands(){
   ]});
 }
 let scannerBusy=false;
-async function scannerLoop(){
-  while(true){
+async function scannerLoop(stopAt){
+  while(Date.now()<stopAt){
     if(!scannerBusy){
       scannerBusy=true;
       try{
@@ -270,15 +271,17 @@ async function scannerLoop(){
         scannerBusy=false;
       }
     }
-    await sleep(SCAN_EVERY_MS);
+    const remaining=Math.max(0,stopAt-Date.now());
+    if(remaining>0) await sleep(Math.min(SCAN_EVERY_MS,remaining));
   }
 }
 
 async function run(){
   await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
-  scannerLoop().catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scannerEveryMs:SCAN_EVERY_MS}));
-  while(true){
+  const stopAt=Date.now()+RUNTIME_MS;
+  const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scannerEveryMs:SCAN_EVERY_MS,runtimeMs:RUNTIME_MS}));
+  while(Date.now()<stopAt){
     try{
       const us=await getUpdates(offset);
       for(const u of us){
@@ -292,5 +295,7 @@ async function run(){
       }
     }catch(e){console.error(JSON.stringify({bot:VERSION,error:e.message}));await sleep(2500);}
   }
+  await scannerPromise;
+  console.log(JSON.stringify({bot:VERSION,status:'ROTATE'}));
 }
 run().catch(e=>{console.error(JSON.stringify({bot:VERSION,fatal:e.message}));process.exit(1);});
