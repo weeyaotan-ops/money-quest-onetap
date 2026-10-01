@@ -7,7 +7,7 @@ const { getHistoricalRates } = require('dukascopy-node');
 const M15 = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const VERSION = 'HUNTER_ADAPTIVE_V1_2026-10-01';
+const VERSION = 'HUNTER_ADAPTIVE_V1_2026-10-02_FAST_CLOSE';
 const STATE_PATH = process.env.ADAPTIVE_STATE_PATH || '.hunter_state/adaptive_state.json';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -15,7 +15,7 @@ const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.bina
 const OKX_BASE = process.env.OKX_REST_BASE || 'https://www.okx.com';
 const YAHOO_BASE = process.env.YAHOO_FINANCE_BASE || 'https://query1.finance.yahoo.com';
 const XAUS_BASE = process.env.XAUS_API_BASE || 'https://xaus.com';
-const MAX_AGE_MS = Number(process.env.ADAPTIVE_MAX_AGE_MS || 20 * 60 * 1000);
+const MAX_FEED_BEHIND_MS = Number(process.env.ADAPTIVE_MAX_FEED_BEHIND_MS || 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
@@ -126,7 +126,14 @@ async function yahooCandles(symbol,interval,range,now=Date.now()){
   }
   return out.sort((a,b)=>a.openTime-b.openTime);
 }
+function expectedClosedM15(now=Date.now()){ return Math.floor(Number(now)/M15)*M15; }
 function snapshotFreshness(snap,now=Date.now()){
+  const last=snap?.m15?.at(-1);
+  if(!last) return Infinity;
+  const lastClose=Number(last.openTime)+M15;
+  return Math.max(0,expectedClosedM15(now)-lastClose);
+}
+function candleAgeMs(snap,now=Date.now()){
   const last=snap?.m15?.at(-1);
   if(!last) return Infinity;
   return now-(Number(last.openTime)+M15);
@@ -437,18 +444,21 @@ async function cycle(now=Date.now()){
   const candidates=[];
   for(const snap of snaps){
     const latest=snap.m15.at(-1); if(!latest) continue;
-    const lag=now-(latest.openTime+M15);
-    if(lag>MAX_AGE_MS||lag<-60000){
+    const lastClose=latest.openTime+M15;
+    const expectedClose=expectedClosedM15(now);
+    const feedLag=Math.max(0,expectedClose-lastClose);
+    const candleAge=now-lastClose;
+    if(feedLag>MAX_FEED_BEHIND_MS||candleAge<-60000){
       state.market[snap.symbol]={
         symbol:snap.symbol,provider:snap.provider,regime:'STALE',side:null,adx:null,lastClose:latest.close,
-        lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,
+        lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,
         feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null
       };
-      errors.push({symbol:snap.symbol,error:'STALE_'+snap.provider+'_'+(lag/60000).toFixed(1)+'m'});
+      errors.push({symbol:snap.symbol,error:'STALE_'+snap.provider+'_'+(feedLag/60000).toFixed(1)+'m'});
       continue;
     }
     const reg=regime(snap);
-    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null};
+    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null};
     for(const sid of ['LONDON','NEW_YORK']){
       const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime); if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
