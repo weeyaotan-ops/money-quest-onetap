@@ -13,6 +13,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
 const BINANCE_BASE = process.env.BINANCE_FUTURES_REST_BASE || 'https://fapi.binance.com';
 const OKX_BASE = process.env.OKX_REST_BASE || 'https://www.okx.com';
+const YAHOO_BASE = process.env.YAHOO_FINANCE_BASE || 'https://query1.finance.yahoo.com';
 const MAX_AGE_MS = Number(process.env.ADAPTIVE_MAX_AGE_MS || 20 * 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
@@ -101,9 +102,59 @@ function aggregateH4(h1){
   }
   return [...m.values()].sort((a,b)=>a.openTime-b.openTime);
 }
+
+function yahooIntervalMs(interval){
+  if(interval==='1h') return HOUR;
+  if(interval==='15m') return M15;
+  throw new Error('Unsupported Yahoo interval '+interval);
+}
+async function yahooCandles(symbol,interval,range,now=Date.now()){
+  const q=new URLSearchParams({interval,range,includePrePost:'true',events:'history'});
+  const url=YAHOO_BASE+'/v8/finance/chart/'+encodeURIComponent(symbol)+'?'+q.toString();
+  const body=await getJson(url);
+  const result=body?.chart?.result?.[0];
+  if(!result) throw new Error('YAHOO_NO_RESULT '+symbol);
+  const ts=result.timestamp||[];
+  const quote=result.indicators?.quote?.[0]||{};
+  const ms=yahooIntervalMs(interval);
+  const out=[];
+  for(let i=0;i<ts.length;i+=1){
+    const openTime=Number(ts[i])*1000;
+    const row={openTime,open:Number(quote.open?.[i]),high:Number(quote.high?.[i]),low:Number(quote.low?.[i]),close:Number(quote.close?.[i]),volume:Number(quote.volume?.[i]||0),closeTime:openTime+ms-1};
+    if(openTime+ms<=now && [row.open,row.high,row.low,row.close].every(Number.isFinite)) out.push(row);
+  }
+  return out.sort((a,b)=>a.openTime-b.openTime);
+}
+function snapshotFreshness(snap,now=Date.now()){
+  const last=snap?.m15?.at(-1);
+  if(!last) return Infinity;
+  return now-(Number(last.openTime)+M15);
+}
+async function yahooGoldSnapshot(now){
+  const [m15,h1]=await Promise.all([
+    yahooCandles('XAUUSD=X','15m','5d',now),
+    yahooCandles('XAUUSD=X','1h','1mo',now)
+  ]);
+  const h4=aggregateH4(h1);
+  if(m15.length<30 || h4.length<51) throw new Error('YAHOO_XAU_INSUFFICIENT m15='+m15.length+' h4='+h4.length);
+  return {symbol:'XAUUSD',provider:'YAHOO_SPOT',m15,h4};
+}
 async function goldSnapshot(now){
-  const [m15,h1]=await Promise.all([duka('XAUUSD','m15',7,now),duka('XAUUSD','h1',30,now)]);
-  return {symbol:'XAUUSD',provider:'DUKASCOPY',m15,h4:aggregateH4(h1)};
+  const [dukaResult,yahooResult]=await Promise.allSettled([
+    Promise.all([duka('XAUUSD','m15',7,now),duka('XAUUSD','h1',30,now)])
+      .then(([m15,h1])=>({symbol:'XAUUSD',provider:'DUKASCOPY',m15,h4:aggregateH4(h1)})),
+    yahooGoldSnapshot(now)
+  ]);
+  const candidates=[];
+  if(dukaResult.status==='fulfilled') candidates.push(dukaResult.value);
+  if(yahooResult.status==='fulfilled') candidates.push(yahooResult.value);
+  if(!candidates.length){
+    throw new Error('XAU_ALL_FEEDS_FAILED duka='+(dukaResult.reason?.message||'failed')+' yahoo='+(yahooResult.reason?.message||'failed'));
+  }
+  candidates.sort((a,b)=>snapshotFreshness(a,now)-snapshotFreshness(b,now));
+  const best=candidates[0];
+  best.feedCandidates=candidates.map(x=>({provider:x.provider,lagMinutes:snapshotFreshness(x,now)/60000}));
+  return best;
 }
 async function snapshot(symbol,now){ return symbol==='XAUUSD'?goldSnapshot(now):cryptoSnapshot(symbol,now); }
 
@@ -344,9 +395,18 @@ async function cycle(now=Date.now()){
   const candidates=[];
   for(const snap of snaps){
     const latest=snap.m15.at(-1); if(!latest) continue;
-    const lag=now-(latest.openTime+M15); if(lag>MAX_AGE_MS||lag<-60000) continue;
+    const lag=now-(latest.openTime+M15);
+    if(lag>MAX_AGE_MS||lag<-60000){
+      state.market[snap.symbol]={
+        symbol:snap.symbol,provider:snap.provider,regime:'STALE',side:null,adx:null,lastClose:latest.close,
+        lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,
+        feedCandidates:snap.feedCandidates||null
+      };
+      errors.push({symbol:snap.symbol,error:'STALE_'+snap.provider+'_'+(lag/60000).toFixed(1)+'m'});
+      continue;
+    }
     const reg=regime(snap);
-    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:latest.openTime+M15,updatedAt:now};
+    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:latest.openTime+M15,lagMinutes:lag/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null};
     for(const sid of ['LONDON','NEW_YORK']){
       const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime); if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
@@ -400,7 +460,9 @@ async function cycle(now=Date.now()){
   state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
-  console.log(JSON.stringify({engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors}));
+  const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
+  console.log(JSON.stringify(result));
+  return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,cycle};
+module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,snapshotFreshness,goldSnapshot,cycle};
