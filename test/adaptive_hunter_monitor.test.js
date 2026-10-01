@@ -2,7 +2,8 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats
+  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats,
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -32,6 +33,22 @@ function m15Base(count=80,start=0){
   }
   return out;
 }
+
+
+(function vwapMustBeReal(){
+  assert.strictEqual(vwapGate('LONG',101,null),false);
+  assert.strictEqual(vwapGate('SHORT',99,null),false);
+  assert.strictEqual(vwapGate('LONG',101,100),true);
+  assert.strictEqual(vwapGate('SHORT',99,100),true);
+})();
+
+(function freshestFeedWins(){
+  const now=Date.parse('2026-10-02T00:31:00Z');
+  const oldSnap={provider:'BINANCE',m15:[c(Date.parse('2026-10-02T00:00:00Z'),1,1,1,1)]};
+  const freshSnap={provider:'OKX',m15:[c(Date.parse('2026-10-02T00:15:00Z'),1,1,1,1)]};
+  assert.ok(snapshotFreshness(oldSnap,now)>snapshotFreshness(freshSnap,now));
+  assert.strictEqual(chooseFreshestSnapshot([oldSnap,freshSnap],now).provider,'OKX');
+})();
 
 (function indicatorsWork(){
   const e=emaSeries([1,2,3,4,5,6,7,8,9,10],3);
