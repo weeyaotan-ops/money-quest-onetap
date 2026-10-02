@@ -3,6 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness
 } = require('../adaptive_hunter_monitor');
 
@@ -154,6 +155,35 @@ function m15Base(count=80,start=0){
   assert.ok(msg.includes('Limit Entry：10000.00'));
   assert.ok(msg.includes('追价上限：10005.00（最多 0.05R）'));
   assert.ok(msg.includes('超过追价上限：SKIP / 等回踩'));
+  assert.ok(msg.includes('状态：🟢 ACTIONABLE'));
+  assert.ok(msg.includes('有效到：'));
+})();
+
+(function lifecycleExpiry(){
+  const t={key:'x',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:ENTRY_VALID_MS,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  const before=lifecycleSnapshot(t);
+  updateTrade(t,[],ENTRY_VALID_MS+1);
+  assert.strictEqual(t.actionState,'EXPIRED');
+  assert.ok(lifecycleEvents(before,t).includes('EXPIRED'));
+  assert.ok(lifecycleMessage(t,'EXPIRED').includes('不要追'));
+})();
+
+(function lifecycleTp1(){
+  const t={key:'y',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:M15,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:10*M15,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  ensureTradeLifecycle(t);
+  const before=lifecycleSnapshot(t);
+  updateTrade(t,[c(M15,100,106,99,105)],2*M15);
+  const ev=lifecycleEvents(before,t);
+  assert.ok(ev.includes('TP1'));
+  assert.strictEqual(t.actionState,'MANAGING');
+  assert.strictEqual(t.stop,t.entry);
+  assert.ok(lifecycleMessage(t,'TP1').includes('SL → Entry（BE）'));
+})();
+
+(function retestLifecycleMessages(){
+  const a={symbol:'BTCUSDT',side:'LONG',sessionLabel:'London',expiresOpenTime:4*M15};
+  assert.ok(armedMessage(a).includes('WAITING RETEST'));
+  assert.ok(armEndMessage(a,'EXPIRED').includes('SETUP EXPIRED'));
 })();
 
 console.log('adaptive_hunter_monitor tests: PASS');
