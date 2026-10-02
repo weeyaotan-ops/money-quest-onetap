@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats,
+  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness
 } = require('../adaptive_hunter_monitor');
 
@@ -135,6 +135,25 @@ function m15Base(count=80,start=0){
   assert.strictEqual(s.totalR,1);
   assert.ok(s.maxDrawdownR>=2);
   assert.strictEqual(s.maxLossStreak,2);
+})();
+
+(function chaseGuardFormatting(){
+  const long=chaseGuard({side:'LONG',entry:10000,stop:9900});
+  assert.strictEqual(long.limitEntry,10000);
+  assert.strictEqual(long.chasePrice,10005);
+  assert.strictEqual(long.boundaryLabel,'追价上限');
+  const short=chaseGuard({side:'SHORT',entry:10000,stop:10100});
+  assert.strictEqual(short.chasePrice,9995);
+  assert.strictEqual(short.boundaryLabel,'追价下限');
+
+  const msg=signalMessage({
+    symbol:'BTCUSDT',side:'LONG',mode:'TREND_RETEST',sessionLabel:'London',
+    entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'40%@1R · 30%@2R · 30% Runner',
+    riskAtr:1.15,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
+  });
+  assert.ok(msg.includes('Limit Entry：10000.00'));
+  assert.ok(msg.includes('追价上限：10005.00（最多 0.05R）'));
+  assert.ok(msg.includes('超过追价上限：SKIP / 等回踩'));
 })();
 
 console.log('adaptive_hunter_monitor tests: PASS');
