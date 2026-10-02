@@ -2,7 +2,9 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats
+  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS,
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -32,6 +34,22 @@ function m15Base(count=80,start=0){
   }
   return out;
 }
+
+
+(function vwapMustBeReal(){
+  assert.strictEqual(vwapGate('LONG',101,null),false);
+  assert.strictEqual(vwapGate('SHORT',99,null),false);
+  assert.strictEqual(vwapGate('LONG',101,100),true);
+  assert.strictEqual(vwapGate('SHORT',99,100),true);
+})();
+
+(function freshestFeedWins(){
+  const now=Date.parse('2026-10-02T00:31:00Z');
+  const oldSnap={provider:'BINANCE',m15:[c(Date.parse('2026-10-02T00:00:00Z'),1,1,1,1)]};
+  const freshSnap={provider:'OKX',m15:[c(Date.parse('2026-10-02T00:15:00Z'),1,1,1,1)]};
+  assert.ok(snapshotFreshness(oldSnap,now)>snapshotFreshness(freshSnap,now));
+  assert.strictEqual(chooseFreshestSnapshot([oldSnap,freshSnap],now).provider,'OKX');
+})();
 
 (function indicatorsWork(){
   const e=emaSeries([1,2,3,4,5,6,7,8,9,10],3);
@@ -118,6 +136,54 @@ function m15Base(count=80,start=0){
   assert.strictEqual(s.totalR,1);
   assert.ok(s.maxDrawdownR>=2);
   assert.strictEqual(s.maxLossStreak,2);
+})();
+
+(function chaseGuardFormatting(){
+  const long=chaseGuard({side:'LONG',entry:10000,stop:9900});
+  assert.strictEqual(long.limitEntry,10000);
+  assert.strictEqual(long.chasePrice,10005);
+  assert.strictEqual(long.boundaryLabel,'追价上限');
+  const short=chaseGuard({side:'SHORT',entry:10000,stop:10100});
+  assert.strictEqual(short.chasePrice,9995);
+  assert.strictEqual(short.boundaryLabel,'追价下限');
+
+  const msg=signalMessage({
+    symbol:'BTCUSDT',side:'LONG',mode:'TREND_RETEST',sessionLabel:'London',
+    entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'40%@1R · 30%@2R · 30% Runner',
+    riskAtr:1.15,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
+  });
+  assert.ok(msg.includes('Limit Entry：10000.00'));
+  assert.ok(msg.includes('追价上限：10005.00（最多 0.05R）'));
+  assert.ok(msg.includes('超过追价上限：SKIP / 等回踩'));
+  assert.ok(msg.includes('状态：🟢 ACTIONABLE'));
+  assert.ok(msg.includes('有效到：'));
+})();
+
+(function lifecycleExpiry(){
+  const t={key:'x',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:ENTRY_VALID_MS,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  const before=lifecycleSnapshot(t);
+  updateTrade(t,[],ENTRY_VALID_MS+1);
+  assert.strictEqual(t.actionState,'EXPIRED');
+  assert.ok(lifecycleEvents(before,t).includes('EXPIRED'));
+  assert.ok(lifecycleMessage(t,'EXPIRED').includes('不要追'));
+})();
+
+(function lifecycleTp1(){
+  const t={key:'y',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:M15,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:10*M15,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  ensureTradeLifecycle(t);
+  const before=lifecycleSnapshot(t);
+  updateTrade(t,[c(M15,100,106,99,105)],2*M15);
+  const ev=lifecycleEvents(before,t);
+  assert.ok(ev.includes('TP1'));
+  assert.strictEqual(t.actionState,'MANAGING');
+  assert.strictEqual(t.stop,t.entry);
+  assert.ok(lifecycleMessage(t,'TP1').includes('SL → Entry（BE）'));
+})();
+
+(function retestLifecycleMessages(){
+  const a={symbol:'BTCUSDT',side:'LONG',sessionLabel:'London',expiresOpenTime:4*M15};
+  assert.ok(armedMessage(a).includes('WAITING RETEST'));
+  assert.ok(armEndMessage(a,'EXPIRED').includes('SETUP EXPIRED'));
 })();
 
 console.log('adaptive_hunter_monitor tests: PASS');
