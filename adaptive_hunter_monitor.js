@@ -7,7 +7,7 @@ const { getHistoricalRates } = require('dukascopy-node');
 const M15 = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const VERSION = 'HUNTER_ADAPTIVE_V1_2026-10-02_FAST_CLOSE';
+const VERSION = 'HUNTER_ADAPTIVE_V1_2026-10-02_LIFECYCLE_V2';
 const STATE_PATH = process.env.ADAPTIVE_STATE_PATH || '.hunter_state/adaptive_state.json';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -20,6 +20,7 @@ const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
+const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
 const SYMBOLS = ['BTCUSDT','ETHUSDT','XAUUSD'];
 
 const SESSION_DEFS = {
@@ -390,32 +391,121 @@ function normalizeState(x){
   if(!s.trades||typeof s.trades!=='object') s.trades={};
   if(!s.daily||typeof s.daily!=='object') s.daily={};
   if(!s.market||typeof s.market!=='object') s.market={};
+  if(!Array.isArray(s.pendingAlerts)) s.pendingAlerts=[];
+  for(const t of Object.values(s.trades)) ensureTradeLifecycle(t);
   s.version=VERSION; return s;
 }
 function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE_PATH,'utf8')));}catch{return normalizeState({});} }
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
-  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'OPEN',terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:sig.candle.openTime,realizedR:null};
+  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null};
+}
+function ensureTradeLifecycle(t){
+  if(!t||typeof t!=='object') return t;
+  if(!Number.isFinite(Number(t.initialStop))&&Number.isFinite(Number(t.stop))) t.initialStop=Number(t.stop);
+  if(!Number.isFinite(Number(t.entryExpiresAtMs))&&Number.isFinite(Number(t.signalAtMs))) t.entryExpiresAtMs=Number(t.signalAtMs)+ENTRY_VALID_MS;
+  if(!t.actionState){
+    if(t.terminal) t.actionState='CLOSED';
+    else if(t.runnerActive) t.actionState='RUNNER';
+    else if(t.tp1Hit) t.actionState='MANAGING';
+    else t.actionState='ACTIONABLE';
+  }
+  if(t.status==='OPEN') t.status=t.tp1Hit?'TP1':'ACTIONABLE';
+  return t;
+}
+function lifecycleSnapshot(t){
+  return {status:t.status,actionState:t.actionState,terminal:Boolean(t.terminal),tp1Hit:Boolean(t.tp1Hit),tp2Hit:Boolean(t.tp2Hit),runnerActive:Boolean(t.runnerActive)};
+}
+function lifecycleEvents(before,t){
+  const out=[];
+  if(before.actionState!==t.actionState&&t.actionState==='EXPIRED') out.push('EXPIRED');
+  if(!before.tp1Hit&&t.tp1Hit) out.push('TP1');
+  if(!before.tp2Hit&&t.tp2Hit) out.push('TP2');
+  if(!before.terminal&&t.terminal&&t.status!=='TP2') out.push(String(t.status||'CLOSED'));
+  if(!before.runnerActive&&t.runnerActive&&!out.includes('TP2')) out.push('RUNNER');
+  return [...new Set(out.filter(Boolean))];
+}
+function queueAlert(state,key,text,now=Date.now()){
+  if(!text||!key) return;
+  if(state.pendingAlerts.some(x=>x&&x.key===key)) return;
+  state.pendingAlerts.push({key,text,createdAtMs:now});
+}
+function armedMessage(a){
+  return [
+    '👀 WAITING RETEST','',
+    a.symbol+' · '+(a.side==='LONG'?'做多':'做空'),
+    'Session：'+a.sessionLabel,
+    '突破已确认，但还不能追。',
+    '等回踩确认后才会变成 ACTIONABLE。',
+    '回踩窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
+  ].join('\n');
+}
+function armEndMessage(a,reason='EXPIRED'){
+  return [
+    reason==='REJECTED'?'⚪ SETUP INVALID':'⌛ SETUP EXPIRED','',
+    a.symbol+' · '+(a.side==='LONG'?'做多':'做空'),
+    reason==='REJECTED'?'回踩后的结构不再合格，这次跳过。':'回踩窗口结束，这次机会作废。',
+    '不要追价，等下一次 setup。'
+  ].join('\n');
+}
+function lifecycleMessage(t,event){
+  const head=t.symbol+' · '+(t.side==='LONG'?'做多':'做空');
+  if(event==='EXPIRED') return ['⌛ ENTRY EXPIRED','',head,'进场窗口已结束。','未进场：跳过，不要追。','已进场：继续按原 SL / TP 管理。'].join('\n');
+  if(event==='TP1'){
+    const pct=t.mode==='TREND_RETEST'?'40%':'50%';
+    return ['✅ TP1 HIT','',head,'先止盈 '+pct,'SL → Entry（BE）','剩余仓位继续跑 TP2。'].join('\n');
+  }
+  if(event==='TP2'){
+    if(t.mode==='TREND_RETEST') return ['✅ TP2 HIT','',head,'再止盈 30%','剩余 30% → Runner','Runner 用动态 Trail 管理。'].join('\n');
+    return ['✅ TP2 HIT','',head,'剩余 50% 止盈。','这单完成。'].join('\n');
+  }
+  if(event==='SL') return ['❌ SL HIT','',head,'结构失效，停止这单。','纸面结果：-1R'].join('\n');
+  if(event==='TP1_BE') return ['🟦 BE EXIT','',head,'TP1 已拿到，剩余仓位在 Entry 保本离场。','这单结束。'].join('\n');
+  if(event==='RUNNER_EXIT'){
+    const rr=Number(t.realizedR);
+    return ['🏁 RUNNER EXIT','',head,Number.isFinite(rr)?'纸面结果：'+(rr>=0?'+':'')+rr.toFixed(2)+'R':'Runner 已触发动态退出。','这单完成。'].join('\n');
+  }
+  if(event==='AMBIGUOUS') return ['⚠️ CANDLE AMBIGUOUS','',head,'同一根 M15 同时触及 SL / TP，无法确认先后。','这单不计入确定结果。'].join('\n');
+  if(event==='RUNNER') return ['🏃 RUNNER ACTIVE','',head,'TP2 已完成，剩余仓位进入 Runner。'].join('\n');
+  return null;
+}
+async function flushAlerts(state){
+  const pending=Array.isArray(state.pendingAlerts)?state.pendingAlerts:[];
+  const keep=[];
+  for(const a of pending.slice(0,20)){
+    try{
+      const ok=await telegram(a.text);
+      if(!ok) keep.push(a);
+    }catch(e){
+      keep.push(a);
+      console.error(JSON.stringify({telegram:'LIFECYCLE_ERROR',key:a.key,error:e.message}));
+    }
+  }
+  state.pendingAlerts=keep.concat(pending.slice(20));
 }
 function ema20At(candles){
   const e=emaSeries(candles.map(x=>x.close),20); return e?e.at(-1):null;
 }
-function updateTrade(t,candles){
-  if(t.terminal) return false; let changed=false;
+function updateTrade(t,candles,now=Date.now()){
+  if(t.terminal) return false;
+  ensureTradeLifecycle(t);
+  let changed=false;
   const xs=candles.filter(x=>x.openTime>t.lastOpenTime).sort((a,b)=>a.openTime-b.openTime);
   for(const c of xs){
     const stopHit=t.side==='LONG'?c.low<=t.stop:c.high>=t.stop;
     const t1=t.side==='LONG'?c.high>=t.tp1:c.low<=t.tp1;
     const t2=t.side==='LONG'?c.high>=t.tp2:c.low<=t.tp2;
-    if(!t.tp1Hit && stopHit && t1){ t.status='AMBIGUOUS'; t.terminal=true; t.realizedR=null; changed=true; break; }
-    if(!t.tp1Hit && stopHit){ t.status='SL'; t.terminal=true; t.realizedR=-1; changed=true; break; }
-    if(!t.tp1Hit && t1){ t.tp1Hit=true; changed=true; t.status='TP1'; if(t.mode==='TREND_RETEST') t.stop=t.entry; else t.stop=t.entry; }
+    if(!t.tp1Hit && stopHit && t1){ t.status='AMBIGUOUS'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=null; changed=true; break; }
+    if(!t.tp1Hit && stopHit){ t.status='SL'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=-1; changed=true; break; }
+    if(!t.tp1Hit && t1){
+      t.tp1Hit=true; changed=true; t.status='TP1'; t.actionState='MANAGING'; t.stop=t.entry; t.beActive=true; t.beActivatedAtMs=c.openTime+M15;
+    }
     if(t.mode==='RANGE_SWEEP'){
-      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance; t.status='TP1_BE'; t.terminal=true; t.realizedR=0.5*r1; changed=true; break; }
-      if(t2){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance; t.tp2Hit=true;t.status='TP2';t.terminal=true;t.realizedR=0.5*r1+0.5*r2;changed=true;break; }
+      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance; t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1; changed=true; break; }
+      if(t2){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance; t.tp2Hit=true;t.status='TP2';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.5*r1+0.5*r2;changed=true;break; }
     }else{
-      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ t.status='TP1_BE';t.terminal=true;t.realizedR=0.4;changed=true;break; }
-      if(!t.tp2Hit&&t2){ t.tp2Hit=true;t.runnerActive=true;t.status='RUNNER';t.stop=t.entry;changed=true; }
+      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ t.status='TP1_BE';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.4;changed=true;break; }
+      if(!t.tp2Hit&&t2){ t.tp2Hit=true;t.runnerActive=true;t.status='RUNNER';t.actionState='RUNNER';t.stop=t.entry;changed=true; }
       if(t.runnerActive){
         const history=candles.filter(x=>x.openTime<=c.openTime).slice(-30); const e20=ema20At(history); const a=atr(history,14);
         if(Number.isFinite(e20)&&Number.isFinite(a)){
@@ -425,12 +515,15 @@ function updateTrade(t,candles){
           const trailHit=t.side==='LONG'?c.low<=t.runnerTrail:c.high>=t.runnerTrail;
           if(trailHit){
             const rr=t.side==='LONG'?(t.runnerTrail-t.entry)/t.riskDistance:(t.entry-t.runnerTrail)/t.riskDistance;
-            t.status='RUNNER_EXIT';t.terminal=true;t.realizedR=0.4+0.6+0.3*rr;changed=true;break;
+            t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.4+0.6+0.3*rr;changed=true;break;
           }
         }
       }
     }
     t.lastOpenTime=c.openTime;
+  }
+  if(!t.terminal&&t.actionState==='ACTIONABLE'&&Number.isFinite(Number(t.entryExpiresAtMs))&&Number(now)>=Number(t.entryExpiresAtMs)){
+    t.actionState='EXPIRED'; t.expiredAtMs=Number(t.entryExpiresAtMs); if(t.status==='ACTIONABLE') t.status='EXPIRED'; changed=true;
   }
   return changed;
 }
@@ -451,8 +544,10 @@ async function telegram(text){
 function signalMessage(s){
   const icon=s.side==='LONG'?'🟢':'🔴';
   const guard=chaseGuard(s);
+  const expires=Number(s.signalAtMs)+ENTRY_VALID_MS;
   return [
     icon+' HUNTER ADAPTIVE',
+    '状态：🟢 ACTIONABLE',
     '',
     s.symbol+' · '+(s.side==='LONG'?'做多':'做空'),
     '模式：'+(s.mode==='TREND_RETEST'?'趋势突破回踩':'区间扫流动性'),
@@ -470,7 +565,8 @@ function signalMessage(s){
     '',
     '结构SL：约 '+s.riskAtr.toFixed(2)+'× M15 ATR',
     '确认：'+sgtTime(s.signalAtMs)+' SGT',
-    '有效约15分钟',
+    '有效到：'+sgtTime(expires)+' SGT（约 '+Math.round(ENTRY_VALID_MS/60000)+'分钟）',
+    '过期后不要追，等下一次 setup。',
     '',
     'Signal only · 不自动下单'
   ].join('\n');
@@ -481,7 +577,12 @@ async function cycle(now=Date.now()){
   const snaps=[]; const errors=[];
   results.forEach((r,i)=>{if(r.status==='fulfilled')snaps.push(r.value);else errors.push({symbol:SYMBOLS[i],error:String(r.reason&&r.reason.message||r.reason)});});
   for(const snap of snaps){
-    for(const t of Object.values(state.trades).filter(x=>x.symbol===snap.symbol&&!x.terminal)) updateTrade(t,snap.m15);
+    for(const t of Object.values(state.trades).filter(x=>x.symbol===snap.symbol&&!x.terminal)){
+      ensureTradeLifecycle(t);
+      const before=lifecycleSnapshot(t);
+      updateTrade(t,snap.m15,now);
+      for(const event of lifecycleEvents(before,t)) queueAlert(state,'TRADE|'+t.key+'|'+event,lifecycleMessage(t,event),now);
+    }
   }
   const dailyR=dailyResolvedR(state,date); const killed=dailyR<=DAILY_STOP_R;
   const candidates=[];
@@ -510,14 +611,24 @@ async function cycle(now=Date.now()){
         if(bo){
           const vwap=dailyVwap(snap.m15,bo.candle.openTime);
           const vwapOk=vwapGate(reg.side,bo.candle.close,vwap);
-          if(vwapOk) state.armed[armKey]={symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,side:reg.side,breakoutOpenTime:bo.candle.openTime,expiresOpenTime:bo.candle.openTime+RETEST_BARS*M15,boxHigh:box.high,boxLow:box.low};
+          if(vwapOk&&!state.armed[armKey]){
+            const arm={symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,side:reg.side,status:'WAITING_RETEST',breakoutOpenTime:bo.candle.openTime,expiresOpenTime:bo.candle.openTime+RETEST_BARS*M15,boxHigh:box.high,boxLow:box.low};
+            state.armed[armKey]=arm;
+            queueAlert(state,'ARMED|'+armKey+'|'+arm.breakoutOpenTime,armedMessage(arm),now);
+          }
         }
         const arm=state.armed[armKey];
         if(arm){
-          if(latest.openTime>arm.expiresOpenTime){ delete state.armed[armKey]; }
+          if(latest.openTime>arm.expiresOpenTime){
+            queueAlert(state,'ARM_END|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'EXPIRED'),now);
+            delete state.armed[armKey];
+          }
           else{
             const sig=retestSignal(snap,arm,box,reg);
-            if(sig&&sig.reject){ delete state.armed[armKey]; }
+            if(sig&&sig.reject){
+              queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
+              delete state.armed[armKey];
+            }
             else if(sig){
               const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
               if(!state.sent[key]){
@@ -544,6 +655,7 @@ async function cycle(now=Date.now()){
       for(let i=candidates.length-1;i>=0;i-=1) if(candidates[i].symbol!=='XAUUSD'&&candidates[i].key!==keep) candidates.splice(i,1);
     }
   }
+  await flushAlerts(state);
   for(const s of candidates){
     try{
       if(await telegram(signalMessage(s))){
@@ -552,7 +664,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -560,4 +672,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,chaseGuard,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,chaseGuard,signalMessage,cycle};
