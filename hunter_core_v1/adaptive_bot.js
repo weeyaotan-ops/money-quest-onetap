@@ -9,9 +9,9 @@ const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.
 const VERSION='HUNTER_ADAPTIVE_V1_2026-10-02_LIFECYCLE_V2';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const M15_MS=15*60*1000;
-const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||8000);
-const RETRY_AFTER_MS=Number(process.env.ADAPTIVE_RETRY_AFTER_MS||15000);
-const MAX_CLOSE_RETRIES=Number(process.env.ADAPTIVE_MAX_CLOSE_RETRIES||4);
+const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||1500);
+const RETRY_AFTER_MS=Number(process.env.ADAPTIVE_RETRY_AFTER_MS||2000);
+const MAX_CLOSE_RETRIES=Number(process.env.ADAPTIVE_MAX_CLOSE_RETRIES||8);
 const RUNTIME_MS=Number(process.env.ADAPTIVE_RUNTIME_MS||18600000);
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
