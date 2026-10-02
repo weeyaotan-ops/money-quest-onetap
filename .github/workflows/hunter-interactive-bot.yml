@@ -1,5 +1,6 @@
 # Hunter Adaptive V1 always-on runtime
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
+# Runtime source refresh: Hunter chase guard 2026-10-02
 name: Hunter Adaptive Telegram Bot
 
 on:
