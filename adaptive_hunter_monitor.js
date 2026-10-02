@@ -18,6 +18,7 @@ const XAUS_BASE = process.env.XAUS_API_BASE || 'https://xaus.com';
 const MAX_FEED_BEHIND_MS = Number(process.env.ADAPTIVE_MAX_FEED_BEHIND_MS || 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
+const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const SYMBOLS = ['BTCUSDT','ETHUSDT','XAUUSD'];
 
@@ -35,6 +36,21 @@ function fmt(x,symbol){
   if(n>=1000) return n.toFixed(2);
   if(n>=10) return n.toFixed(3);
   return n.toFixed(4);
+}
+function chaseGuard(s){
+  const entry=Number(s?.entry), stop=Number(s?.stop);
+  const riskDistance=Math.abs(entry-stop);
+  const side=String(s?.side||'').toUpperCase();
+  const valid=Number.isFinite(entry)&&Number.isFinite(stop)&&Number.isFinite(riskDistance)&&riskDistance>0;
+  const delta=valid?riskDistance*MAX_CHASE_R:0;
+  const chasePrice=side==='SHORT'?entry-delta:entry+delta;
+  return {
+    limitEntry:entry,
+    chasePrice,
+    maxChaseR:MAX_CHASE_R,
+    boundaryLabel:side==='SHORT'?'追价下限':'追价上限',
+    skipLabel:side==='SHORT'?'跌破追价下限：SKIP / 等回踩':'超过追价上限：SKIP / 等回踩'
+  };
 }
 function localParts(ts,tz){
   const ps=new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(ts));
@@ -434,6 +450,7 @@ async function telegram(text){
 }
 function signalMessage(s){
   const icon=s.side==='LONG'?'🟢':'🔴';
+  const guard=chaseGuard(s);
   return [
     icon+' HUNTER ADAPTIVE',
     '',
@@ -442,6 +459,9 @@ function signalMessage(s){
     'Session：'+s.sessionLabel,
     '',
     '进场：'+fmt(s.entry,s.symbol),
+    'Limit Entry：'+fmt(guard.limitEntry,s.symbol),
+    guard.boundaryLabel+'：'+fmt(guard.chasePrice,s.symbol)+'（最多 '+guard.maxChaseR.toFixed(2)+'R）',
+    guard.skipLabel,
     '止损：'+fmt(s.stop,s.symbol),
     '目标1：'+fmt(s.tp1,s.symbol),
     '目标2：'+fmt(s.tp2,s.symbol),
@@ -540,4 +560,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,cycle};
+module.exports={VERSION,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,chaseGuard,signalMessage,cycle};
