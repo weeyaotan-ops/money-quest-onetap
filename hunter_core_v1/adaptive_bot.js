@@ -6,7 +6,7 @@ const { cycle: scanMarket } = require('../adaptive_hunter_monitor');
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
-const VERSION='HUNTER_ADAPTIVE_V1_2026-10-02_FAST_CLOSE';
+const VERSION='HUNTER_ADAPTIVE_V1_2026-10-02_LIFECYCLE_V2';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const M15_MS=15*60*1000;
 const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||8000);
@@ -46,6 +46,14 @@ function regimeText(x){
   return '⚪ 中性';
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
+function actionStateText(x,status){
+  if(x==='ACTIONABLE') return '🟢 ACTIONABLE';
+  if(x==='EXPIRED') return '⏳ ENTRY EXPIRED';
+  if(x==='MANAGING') return '🛡️ MANAGING';
+  if(x==='RUNNER') return '🏃 RUNNER';
+  if(x==='CLOSED') return String(status||'CLOSED');
+  return String(status||x||'TRACKING');
+}
 function keyboard(){
   return {inline_keyboard:[
     [{text:'🚨 现在',callback_data:'now'}],
@@ -76,8 +84,9 @@ function nowText(){
     lines.push('✅ 刚确认');
     for(const x of cs){
       lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+sideText(x.side));
-      lines.push(modeText(x.mode));
+      lines.push(modeText(x.mode)+' · 🟢 ACTIONABLE');
       lines.push('进场 '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
+      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
       lines.push('目标1 '+fmt(x.tp1,x.symbol)+' · 目标2 '+fmt(x.tp2,x.symbol));
       lines.push('');
     }
@@ -85,7 +94,7 @@ function nowText(){
   const armed=scan.armed||[];
   if(armed.length){
     lines.push('👀 等回踩');
-    for(const x of armed.slice(0,5)) lines.push(x.symbol+' '+sideText(x.side)+' · '+x.session);
+    for(const x of armed.slice(0,5)) lines.push(x.symbol+' '+sideText(x.side)+' · '+x.session+' · WAITING RETEST');
     lines.push('');
   }
   const markets=Object.values(s.market||{});
@@ -115,9 +124,12 @@ function activeText(){
   if(!xs.length) return lines.concat('⚪ 没有正在追踪的信号。').join('\n');
   for(const x of xs.slice(0,8)){
     lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+sideText(x.side));
-    lines.push(modeText(x.mode)+' · '+String(x.status||'OPEN'));
+    lines.push(modeText(x.mode)+' · '+actionStateText(x.actionState,x.status));
     lines.push('Entry '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
     lines.push('TP1 '+fmt(x.tp1,x.symbol)+' · TP2 '+fmt(x.tp2,x.symbol));
+    if(x.actionState==='ACTIONABLE'&&Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
+    if(x.actionState==='EXPIRED') lines.push('⏳ 未进场就跳过，不要追价');
+    if(x.tp1Hit&&!x.terminal&&!x.runnerActive) lines.push('🛡️ TP1 已到 · SL 已移到 Entry（BE）');
     if(x.runnerActive) lines.push('Runner 正在跑'+(Number.isFinite(x.runnerTrail)?' · Trail '+fmt(x.runnerTrail,x.symbol):''));
     lines.push('');
   }
@@ -203,6 +215,7 @@ function systemText(){
     stale.length?'⚠️ 旧数据：'+stale.map(x=>x.symbol+'('+Number(x.lagMinutes||0).toFixed(0)+'m)').join(' / '):null,
     errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
+    '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
     '',
     '旧 Session Breakout 已退出 Live。'
   ].filter(Boolean).join('\n');
