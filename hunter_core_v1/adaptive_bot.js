@@ -197,7 +197,14 @@ function learnText(){
   return lines.join('\n');
 }
 function systemText(){
-  const s=load(),scan=s.lastScan||{},age=Number(scan.at)?(Date.now()-Number(scan.at))/60000:null;
+  const s=load(),scan=s.lastScan||{},scanAt=Number(scan.at),now=Date.now();
+  const age=scanAt?(now-scanAt)/60000:null;
+  const nextDue=scanAt?nextM15ScanAt(scanAt+1):null;
+  const lateBy=Number.isFinite(nextDue)?(now-nextDue)/60000:null;
+  const scannerStatus=!Number.isFinite(age)?'⚪ Scanner：等待首次扫描':
+    (Number.isFinite(lateBy)&&lateBy>1?'🚨 Scanner 可能卡住':
+    (Number.isFinite(lateBy)&&lateBy>0?'🟡 Scanner：新M15扫描稍慢':
+    (age>8?'🟢 Scanner：等待下一根M15收盘':'🟢 Scanner：持续扫描中')));
   const errs=scan.errors||[];
   const stale=Object.values(s.market||{}).filter(x=>x.regime==='STALE');
   return [
@@ -210,8 +217,9 @@ function systemText(){
     'Daily kill：-2R',
     '',
     '最后扫描：'+sgtTime(scan.at)+' SGT',
-    Number.isFinite(age)?'扫描年龄：'+age.toFixed(1)+'分钟':null,
-    Number.isFinite(age)&&age>8?'🚨 Scanner 可能卡住':'🟢 Scanner：持续扫描中',
+    Number.isFinite(age)?'距上次M15扫描：'+age.toFixed(1)+'分钟':null,
+    Number.isFinite(nextDue)?'下一次M15扫描：'+sgtTime(nextDue)+' SGT':null,
+    scannerStatus,
     stale.length?'⚠️ 旧数据：'+stale.map(x=>x.symbol+'('+Number(x.lagMinutes||0).toFixed(0)+'m)').join(' / '):null,
     errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
