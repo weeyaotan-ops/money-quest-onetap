@@ -67,7 +67,8 @@ function actionStateText(x,status){
 function keyboard(){
   return {inline_keyboard:[
     [{text:'🚨 现在',callback_data:'now'}],
-    [{text:'🌍 市场',callback_data:'market'},{text:'📌 进行中',callback_data:'active'}],
+    [{text:'🌍 市场',callback_data:'market'},{text:'🧠 V2智能',callback_data:'intel'}],
+    [{text:'📌 进行中',callback_data:'active'}],
     [{text:'📊 成绩',callback_data:'results'},{text:'🧠 学习',callback_data:'learn'}],
     [{text:'📡 系统',callback_data:'system'}]
   ]};
@@ -136,6 +137,24 @@ function marketText(){
     lines.push('');
   }
   lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','BSL/SSL + Supply/Demand → 作为智能上下文','Quality score → 先记录验证，不直接挡信号');
+  return lines.join('\n');
+}
+function intelligenceText(){
+  const s=load(),xs=Object.values(s.market||{}),lines=['🧠 HUNTER V2 智能层',''];
+  if(!xs.length) return lines.concat('还没有最新市场数据。').join('\n');
+  xs.sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));
+  for(const x of xs){
+    const intel=x.intelligence||{},st=intel.structure||{},liq=intel.liquidity||{},zones=intel.zones||{};
+    lines.push('• '+x.symbol);
+    lines.push('Regime：'+String(x.regime||'n/a')+(x.side?' · '+sideText(x.side):''));
+    lines.push('Structure：H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
+    lines.push('BSL：'+fmt(liq.bsl,x.symbol)+' · SSL：'+fmt(liq.ssl,x.symbol));
+    lines.push('Demand：'+fmtZone(zones.demand,x.symbol));
+    lines.push('Supply：'+fmtZone(zones.supply,x.symbol));
+    lines.push('');
+  }
+  lines.push('V2 正在运行：结构 + 流动性 + Supply/Demand + Quality Score');
+  lines.push('Quality 目前只记录验证，不会挡掉原本有效 signal。');
   return lines.join('\n');
 }
 function activeText(){
@@ -273,6 +292,7 @@ async function handle(action,id){
     if(action==='start') return menu();
     if(action==='now') return send(nowText(),back('now'));
     if(action==='market') return send(marketText(),back('market'));
+    if(action==='intel') return send(intelligenceText(),back('intel'));
     if(action==='active') return send(activeText(),back('active'));
     if(action==='results') return send(resultsText(),back('results'));
     if(action==='learn') return send(learnText(),back('learn'));
@@ -285,6 +305,7 @@ function normalize(t){
   if(['/start','start','/menu','menu'].includes(x))return'start';
   if(['/now','now','/check','check'].includes(x))return'now';
   if(['/market','market'].includes(x))return'market';
+  if(['/intel','intel','v2','智能'].includes(x))return'intel';
   if(['/active','active'].includes(x))return'active';
   if(['/results','results','/performance','performance'].includes(x))return'results';
   if(['/learn','learn','学习'].includes(x))return'learn';
@@ -301,6 +322,7 @@ async function setCommands(){
     {command:'start',description:'打开主页'},
     {command:'now',description:'现在有什么机会'},
     {command:'market',description:'市场状态'},
+    {command:'intel',description:'V2智能层'},
     {command:'active',description:'进行中的信号'},
     {command:'results',description:'策略成绩'},
     {command:'learn',description:'自动学习'},
