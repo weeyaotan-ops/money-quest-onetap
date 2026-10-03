@@ -4,7 +4,7 @@ const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS,
-  vwapGate, chooseFreshestSnapshot, snapshotFreshness
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -49,6 +49,14 @@ function m15Base(count=80,start=0){
   const freshSnap={provider:'OKX',m15:[c(Date.parse('2026-10-02T00:15:00Z'),1,1,1,1)]};
   assert.ok(snapshotFreshness(oldSnap,now)>snapshotFreshness(freshSnap,now));
   assert.strictEqual(chooseFreshestSnapshot([oldSnap,freshSnap],now).provider,'OKX');
+})();
+
+(function xauWeekendMarketHours(){
+  assert.strictEqual(xauMarketClosed(Date.parse('2026-10-03T06:00:00Z')),true); // Saturday
+  assert.strictEqual(xauMarketClosed(Date.parse('2026-10-02T20:00:00Z')),false); // Friday 16:00 New York
+  assert.strictEqual(xauMarketClosed(Date.parse('2026-10-02T22:00:00Z')),true);  // Friday 18:00 New York
+  assert.strictEqual(xauMarketClosed(Date.parse('2026-10-04T20:00:00Z')),true);  // Sunday 16:00 New York
+  assert.strictEqual(xauMarketClosed(Date.parse('2026-10-04T23:00:00Z')),false); // Sunday 19:00 New York
 })();
 
 (function indicatorsWork(){
