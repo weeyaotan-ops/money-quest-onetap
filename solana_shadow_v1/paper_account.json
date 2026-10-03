@@ -34,12 +34,12 @@
     "No perfect stop fill is assumed during gaps or liquidity collapses.",
     "Costs are charged per the frozen paper portfolio protocol."
   ],
-  "lastRunAt": "2026-10-03T16:11:22.576Z",
-  "scanCount": 38,
+  "lastRunAt": "2026-10-03T19:49:08.652Z",
+  "scanCount": 39,
   "lastScanSummary": {
-    "startedAt": "2026-10-03T16:11:22.576Z",
-    "finishedAt": "2026-10-03T16:12:18.278Z",
-    "discovered": 146,
+    "startedAt": "2026-10-03T19:49:08.652Z",
+    "finishedAt": "2026-10-03T19:50:05.802Z",
+    "discovered": 177,
     "eligible": 0
   }
 }
