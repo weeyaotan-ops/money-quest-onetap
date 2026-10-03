@@ -6,7 +6,7 @@ const { cycle: scanMarket } = require('../adaptive_hunter_monitor');
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
-const VERSION='HUNTER_ADAPTIVE_V1_2026-10-02_LIFECYCLE_V2';
+const VERSION='HUNTER_ADAPTIVE_V2_2026-10-03_INTELLIGENCE';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const M15_MS=15*60*1000;
 const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||1500);
@@ -36,6 +36,15 @@ function fmt(x,symbol){
   if(n>=1000) return n.toFixed(2);
   if(n>=10) return n.toFixed(3);
   return n.toFixed(4);
+}
+function fmtZone(z,symbol){
+  if(!z||!Number.isFinite(Number(z.low))||!Number.isFinite(Number(z.high))) return 'n/a';
+  return fmt(z.low,symbol)+' - '+fmt(z.high,symbol);
+}
+function biasText(x){ return x==='BULLISH'?'Bullish':x==='BEARISH'?'Bearish':'Neutral'; }
+function qualityText(x){
+  const score=Number(x&&x.score);
+  return Number.isFinite(score)?score.toFixed(0)+'/100 · '+String(x.label||''):'n/a';
 }
 function sideText(x){ return x==='LONG'?'做多':x==='SHORT'?'做空':''; }
 function regimeText(x){
@@ -84,8 +93,12 @@ function nowText(){
   if(cs.length){
     lines.push('✅ 刚确认');
     for(const x of cs){
-      lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+sideText(x.side));
+      lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.decision||sideText(x.side)));
       lines.push(modeText(x.mode)+' · 🟢 ACTIONABLE');
+      if(Number.isFinite(Number(x.qualityScore))) lines.push('🧠 Quality '+Number(x.qualityScore).toFixed(0)+'/100 · '+String(x.qualityLabel||''));
+      const intel=x.intelligence||{},liq=intel.liquidity||{};
+      if(intel.structure) lines.push('结构 H4 '+biasText(intel.structure.h4)+' · M15 '+biasText(intel.structure.m15));
+      if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('BSL '+fmt(liq.bsl,x.symbol)+' · SSL '+fmt(liq.ssl,x.symbol));
       lines.push('进场 '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
       lines.push('目标1 '+fmt(x.tp1,x.symbol)+' · 目标2 '+fmt(x.tp2,x.symbol));
@@ -111,6 +124,10 @@ function marketText(){
   for(const x of xs){
     lines.push(regimeText(x.regime)+' '+x.symbol+(x.side?' · '+sideText(x.side):''));
     lines.push('M15收盘 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
+    const intel=x.intelligence||{},st=intel.structure||{},liq=intel.liquidity||{},zones=intel.zones||{};
+    if(st.h4||st.m15) lines.push('结构 H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
+    if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('BSL '+fmt(liq.bsl,x.symbol)+' · SSL '+fmt(liq.ssl,x.symbol));
+    if(zones.demand||zones.supply) lines.push('Demand '+fmtZone(zones.demand,x.symbol)+' · Supply '+fmtZone(zones.supply,x.symbol));
     const lag=Number(x.lagMinutes);
     if(x.regime==='CLOSED') lines.push('数据 '+(x.provider||'n/a')+' · 市场休市（最后收盘）');
     else lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 数据源落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
@@ -118,7 +135,7 @@ function marketText(){
     if(x.regime==='CLOSED') lines.push('周末休市，不会发信号');
     lines.push('');
   }
-  lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','混乱/中性 → 不做','休市 → 等开盘');
+  lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','BSL/SSL + Supply/Demand → 作为智能上下文','Quality score → 先记录验证，不直接挡信号');
   return lines.join('\n');
 }
 function activeText(){
@@ -126,8 +143,9 @@ function activeText(){
   const lines=['📌 进行中',''];
   if(!xs.length) return lines.concat('⚪ 没有正在追踪的信号。').join('\n');
   for(const x of xs.slice(0,8)){
-    lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+sideText(x.side));
+    lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.decision||sideText(x.side)));
     lines.push(modeText(x.mode)+' · '+actionStateText(x.actionState,x.status));
+    if(x.intelligence) lines.push('🧠 Quality '+qualityText(x.intelligence));
     lines.push('Entry '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
     lines.push('TP1 '+fmt(x.tp1,x.symbol)+' · TP2 '+fmt(x.tp2,x.symbol));
     if(x.actionState==='ACTIONABLE'&&Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
@@ -165,7 +183,7 @@ function resultsText(){
     '最近'+r.n+'单：'+fr(r.avg)+' / 胜率 '+pc(r.wr),
     '今天：'+fr(todayR),
     '',
-    '只统计 Hunter Adaptive V1。'
+    '统计同一 Hunter Adaptive 核心策略；V2 开始记录 Quality。'
   ].join('\n');
 }
 function cohort(xs,keyFn){
@@ -181,7 +199,8 @@ function learnText(){
     ...cohort(xs,x=>x.symbol).map(x=>({...x,type:'市场'})),
     ...cohort(xs,x=>x.mode).map(x=>({...x,type:'模式'})),
     ...cohort(xs,x=>x.side).map(x=>({...x,type:'方向'})),
-    ...cohort(xs,x=>x.session).map(x=>({...x,type:'Session'}))
+    ...cohort(xs,x=>x.session).map(x=>({...x,type:'Session'})),
+    ...cohort(xs,x=>x.intelligence&&x.intelligence.label).map(x=>({...x,type:'Quality'}))
   ].filter(x=>x.n>=8&&Number.isFinite(x.avg)).sort((a,b)=>b.avg-a.avg);
   lines.push('已完成 '+xs.length+' 单','');
   if(!groups.length) lines.push('🟡 总样本够，但分组样本还太少。');
@@ -213,7 +232,7 @@ function systemText(){
   const closed=Object.values(s.market||{}).filter(x=>x.regime==='CLOSED');
   return [
     '📡 系统','',
-    '策略：Hunter Adaptive V1',
+    '策略：Hunter Adaptive V2 Intelligence',
     '模式：Signal only',
     '自动下单：关闭',
     '交易市场：XAUUSD / BTC / ETH / SOL',
@@ -235,8 +254,9 @@ function systemText(){
 }
 async function menu(){
   return send([
-    'HUNTER ADAPTIVE V1','',
+    'HUNTER ADAPTIVE V2','',
     '趋势：突破后等回踩才进',
+    '智能层：H4/M15结构 + BSL/SSL + Supply/Demand + Quality',
     '区间：扫高/扫低后收回才进',
     '混乱：不交易',
     '',
