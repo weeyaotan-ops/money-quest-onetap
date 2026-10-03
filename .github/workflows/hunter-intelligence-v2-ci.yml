@@ -1,0 +1,37 @@
+name: Hunter Intelligence V2 CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-intelligence-v2-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout V2 staging
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-intelligence-v2-20261003
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install market data helper
+        run: npm install --no-save dukascopy-node
+
+      - name: Syntax and tests
+        run: |
+          node --check hunter_core_v1/intelligence.js
+          node --check adaptive_hunter_monitor.js
+          node --check hunter_core_v1/adaptive_bot.js
+          node test/intelligence_v2.test.js
+          node test/adaptive_hunter_monitor.test.js
