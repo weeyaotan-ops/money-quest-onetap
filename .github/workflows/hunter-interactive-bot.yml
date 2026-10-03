@@ -1,6 +1,6 @@
 # Hunter Adaptive V1 always-on runtime
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
-# Runtime source refresh: M15 scanner status fix 2026-10-02
+# Runtime source refresh: XAU weekend closure fix 2026-10-03
 name: Hunter Adaptive Telegram Bot
 
 on:
