@@ -1,4 +1,5 @@
 # Hunter Adaptive V2 Intelligence always-on runtime
+# UI refresh: visible V2 intelligence button 2026-10-03
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
 # Runtime source refresh: SOL scanner enabled 2026-10-03
 name: Hunter Adaptive Telegram Bot
