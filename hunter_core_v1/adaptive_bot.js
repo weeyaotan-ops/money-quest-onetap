@@ -216,7 +216,7 @@ function systemText(){
     '策略：Hunter Adaptive V1',
     '模式：Signal only',
     '自动下单：关闭',
-    '交易市场：XAUUSD / BTC / ETH',
+    '交易市场：XAUUSD / BTC / ETH / SOL',
     'Risk：0.5% / signal',
     'Daily kill：-2R',
     '',
