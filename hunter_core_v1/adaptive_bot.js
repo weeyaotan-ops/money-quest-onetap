@@ -43,6 +43,7 @@ function regimeText(x){
   if(x==='RANGE') return '🟡 区间';
   if(x==='CHAOS') return '🔴 混乱';
   if(x==='STALE') return '🔴 数据过旧';
+  if(x==='CLOSED') return '⚪ 休市';
   return '⚪ 中性';
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
@@ -111,11 +112,13 @@ function marketText(){
     lines.push(regimeText(x.regime)+' '+x.symbol+(x.side?' · '+sideText(x.side):''));
     lines.push('M15收盘 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
     const lag=Number(x.lagMinutes);
-    lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 数据源落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
+    if(x.regime==='CLOSED') lines.push('数据 '+(x.provider||'n/a')+' · 市场休市（最后收盘）');
+    else lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 数据源落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
     if(x.regime==='STALE') lines.push('⚠️ 旧数据不会发信号');
+    if(x.regime==='CLOSED') lines.push('周末休市，不会发信号');
     lines.push('');
   }
-  lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','混乱/中性 → 不做');
+  lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','混乱/中性 → 不做','休市 → 等开盘');
   return lines.join('\n');
 }
 function activeText(){
@@ -207,6 +210,7 @@ function systemText(){
     (age>8?'🟢 Scanner：等待下一根M15收盘':'🟢 Scanner：持续扫描中')));
   const errs=scan.errors||[];
   const stale=Object.values(s.market||{}).filter(x=>x.regime==='STALE');
+  const closed=Object.values(s.market||{}).filter(x=>x.regime==='CLOSED');
   return [
     '📡 系统','',
     '策略：Hunter Adaptive V1',
@@ -221,6 +225,7 @@ function systemText(){
     Number.isFinite(nextDue)?'下一次M15扫描：'+sgtTime(nextDue)+' SGT':null,
     scannerStatus,
     stale.length?'⚠️ 旧数据：'+stale.map(x=>x.symbol+'('+Number(x.lagMinutes||0).toFixed(0)+'m)').join(' / '):null,
+    closed.length?'⚪ 休市：'+closed.map(x=>x.symbol).join(' / '):null,
     errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
     '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
@@ -291,7 +296,7 @@ function nextM15ScanAt(now=Date.now()){
 }
 function behindExpectedClose(result,scanAt){
   const expected=expectedM15Close(scanAt);
-  return Object.values(result?.market||{}).filter(x=>Number(x?.lastCandleClose||0)<expected);
+  return Object.values(result?.market||{}).filter(x=>x?.regime!=='CLOSED'&&Number(x?.lastCandleClose||0)<expected);
 }
 async function scannerLoop(stopAt){
   let first=true;
