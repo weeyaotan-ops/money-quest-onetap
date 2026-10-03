@@ -68,6 +68,16 @@ function sgtTime(ts){
 }
 function utcDay(ts){ return new Date(Number(ts)).toISOString().slice(0,10); }
 
+function xauMarketClosed(now=Date.now()){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(Number(now)));
+  const o={}; for(const p of parts) if(p.type!=='literal') o[p.type]=p.value;
+  const minuteOfDay=Number(o.hour)*60+Number(o.minute);
+  if(o.weekday==='Sat') return true;
+  if(o.weekday==='Fri'&&minuteOfDay>=17*60) return true;
+  if(o.weekday==='Sun'&&minuteOfDay<18*60) return true;
+  return false;
+}
+
 async function getJson(url){
   let last=null;
   for(let i=0;i<3;i+=1){
@@ -592,6 +602,14 @@ async function cycle(now=Date.now()){
     const expectedClose=expectedClosedM15(now);
     const feedLag=Math.max(0,expectedClose-lastClose);
     const candleAge=now-lastClose;
+    if(snap.symbol==='XAUUSD'&&xauMarketClosed(now)){
+      state.market[snap.symbol]={
+        symbol:snap.symbol,provider:snap.provider,regime:'CLOSED',side:null,adx:null,lastClose:latest.close,
+        lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,
+        marketClosed:true,feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null
+      };
+      continue;
+    }
     if(feedLag>MAX_FEED_BEHIND_MS||candleAge<-60000){
       state.market[snap.symbol]={
         symbol:snap.symbol,provider:snap.provider,regime:'STALE',side:null,adx:null,lastClose:latest.close,
@@ -672,4 +690,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,chaseGuard,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,signalMessage,cycle};
