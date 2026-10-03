@@ -1,4 +1,4 @@
-# Hunter Adaptive V1 always-on runtime
+# Hunter Adaptive V2 Intelligence always-on runtime
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
 # Runtime source refresh: SOL scanner enabled 2026-10-03
 name: Hunter Adaptive Telegram Bot
@@ -62,8 +62,10 @@ jobs:
 
       - name: Validate adaptive runtime
         run: |
+          node --check hunter_core_v1/intelligence.js
           node --check adaptive_hunter_monitor.js
           node --check hunter_core_v1/adaptive_bot.js
+          node test/intelligence_v2.test.js
           node test/adaptive_hunter_monitor.test.js
 
       - name: Run Telegram + continuous scanner
