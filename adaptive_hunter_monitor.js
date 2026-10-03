@@ -21,7 +21,7 @@ const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
-const SYMBOLS = ['BTCUSDT','ETHUSDT','XAUUSD'];
+const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','XAUUSD'];
 
 const SESSION_DEFS = {
   LONDON: { id:'LONDON', label:'London', tz:'Europe/London', hour:8, minute:0 },
