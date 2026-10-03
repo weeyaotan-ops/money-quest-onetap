@@ -3,11 +3,12 @@
 const fs = require('fs');
 const path = require('path');
 const { getHistoricalRates } = require('dukascopy-node');
+const { marketContext, scoreSignal, decisionLabel, compactIntelligence } = require('./hunter_core_v1/intelligence');
 
 const M15 = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const VERSION = 'HUNTER_ADAPTIVE_V1_2026-10-02_LIFECYCLE_V2';
+const VERSION = 'HUNTER_ADAPTIVE_V2_2026-10-03_INTELLIGENCE';
 const STATE_PATH = process.env.ADAPTIVE_STATE_PATH || '.hunter_state/adaptive_state.json';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -408,7 +409,7 @@ function normalizeState(x){
 function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE_PATH,'utf8')));}catch{return normalizeState({});} }
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
-  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null};
+  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -551,17 +552,46 @@ async function telegram(text){
   const res=await fetch('https://api.telegram.org/bot'+BOT_TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT_ID,text,disable_web_page_preview:true})});
   if(!res.ok) throw new Error('Telegram '+res.status); return true;
 }
+function fmtZone(zone,symbol){
+  if(!zone||!Number.isFinite(Number(zone.low))||!Number.isFinite(Number(zone.high))) return 'n/a';
+  return fmt(zone.low,symbol)+' - '+fmt(zone.high,symbol);
+}
+function biasText(x){
+  if(x==='BULLISH') return 'Bullish';
+  if(x==='BEARISH') return 'Bearish';
+  return 'Neutral';
+}
+function qualityText(intel){
+  const score=Number(intel&&intel.score);
+  if(!Number.isFinite(score)) return 'n/a';
+  const label=String(intel.label||'');
+  const zh=label==='HIGH'?'HIGH':label==='GOOD'?'GOOD':label==='FAIR'?'FAIR':'LOW';
+  return score.toFixed(0)+'/100 · '+zh;
+}
 function signalMessage(s){
   const icon=s.side==='LONG'?'🟢':'🔴';
   const guard=chaseGuard(s);
   const expires=Number(s.signalAtMs)+ENTRY_VALID_MS;
+  const intel=s.intelligence||{};
+  const liq=intel.liquidity||{};
+  const zones=intel.zones||{};
+  const decision=s.decision||decisionLabel(s,intel,Boolean(s.isReentry));
   return [
-    icon+' HUNTER ADAPTIVE',
+    icon+' HUNTER ADAPTIVE V2',
+    '动作：'+decision,
     '状态：🟢 ACTIONABLE',
     '',
     s.symbol+' · '+(s.side==='LONG'?'做多':'做空'),
     '模式：'+(s.mode==='TREND_RETEST'?'趋势突破回踩':'区间扫流动性'),
     'Session：'+s.sessionLabel,
+    '',
+    '🧠 Intelligence',
+    '质量：'+qualityText(intel),
+    '结构：H4 '+biasText(intel.structure&&intel.structure.h4)+' · M15 '+biasText(intel.structure&&intel.structure.m15),
+    'BSL：'+fmt(liq.bsl,s.symbol)+' · SSL：'+fmt(liq.ssl,s.symbol),
+    'Demand：'+fmtZone(zones.demand,s.symbol),
+    'Supply：'+fmtZone(zones.supply,s.symbol),
+    intel.sweptOpposite?'流动性：✅ opposite-side sweep confirmed':'流动性：context tracked',
     '',
     '进场：'+fmt(s.entry,s.symbol),
     'Limit Entry：'+fmt(guard.limitEntry,s.symbol),
@@ -578,6 +608,7 @@ function signalMessage(s){
     '有效到：'+sgtTime(expires)+' SGT（约 '+Math.round(ENTRY_VALID_MS/60000)+'分钟）',
     '过期后不要追，等下一次 setup。',
     '',
+    'Quality score 先记录验证，不改变现有核心进场规则。',
     'Signal only · 不自动下单'
   ].join('\n');
 }
@@ -620,7 +651,13 @@ async function cycle(now=Date.now()){
       continue;
     }
     const reg=regime(snap);
-    state.market[snap.symbol]={symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null};
+    const intelContext=marketContext(snap,reg);
+    state.market[snap.symbol]={
+      symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,
+      lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,
+      feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null,
+      intelligence:{structure:intelContext.structure,liquidity:intelContext.liquidity,zones:intelContext.zones}
+    };
     for(const sid of ['LONDON','NEW_YORK']){
       const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime); if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
@@ -650,7 +687,11 @@ async function cycle(now=Date.now()){
             else if(sig){
               const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
               if(!state.sent[key]){
-                candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs:sig.candle.openTime+M15});
+                const signalAtMs=sig.candle.openTime+M15;
+                const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
+                const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
+                const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
+                candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
                 delete state.armed[armKey];
               }
             }
@@ -660,7 +701,13 @@ async function cycle(now=Date.now()){
         const sig=rangeSignal(snap,box,reg);
         if(sig){
           const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
-          if(!state.sent[key]) candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs:sig.candle.openTime+M15});
+          if(!state.sent[key]){
+            const signalAtMs=sig.candle.openTime+M15;
+            const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
+            const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
+            const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
+            candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+          }
         }
       }
     }
@@ -682,7 +729,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
