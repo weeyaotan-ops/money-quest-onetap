@@ -16,6 +16,7 @@
 # Snowball mode: live capital update + dynamic 0.5/0.75/1.0% risk 2026-10-05
 # One Tap code ready; live Binance credentials remain external 2026-10-05
 # Binance One Tap env aliases wired 2026-10-05
+# Manual trading restored: no Binance auto-execution / auto-balance 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -102,10 +103,8 @@ jobs:
           ADAPTIVE_TAKER_FEE_RATE: "0.0005"
           ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
           ADAPTIVE_DAILY_STOP_R: "-2"
-          EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
-          EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
-          BINANCE_LIVE_TRADING: "1"
-          BINANCE_AUTO_BALANCE: "1"
+          BINANCE_LIVE_TRADING: "0"
+          BINANCE_AUTO_BALANCE: "0"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hunter_core_v1/adaptive_bot.js
