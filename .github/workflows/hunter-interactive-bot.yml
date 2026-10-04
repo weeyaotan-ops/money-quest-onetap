@@ -3,6 +3,7 @@
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
 # Runtime source refresh: SOL scanner enabled 2026-10-03
 # Fast lifecycle refresh: TP/SL/expiry monitor ~2s 2026-10-05
+# Execution overlay: 250U, fee-aware sizing, max 5x 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -82,6 +83,11 @@ jobs:
           ADAPTIVE_LIFECYCLE_POLL_MS: "2000"
           ADAPTIVE_LIVE_PRICE_TIMEOUT_MS: "4500"
           ADAPTIVE_RISK_PCT: "0.005"
+          ADAPTIVE_EQUITY_USDT: "250"
+          ADAPTIVE_MAX_LEVERAGE: "5"
+          ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
+          ADAPTIVE_TAKER_FEE_RATE: "0.0005"
+          ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
           ADAPTIVE_DAILY_STOP_R: "-2"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
