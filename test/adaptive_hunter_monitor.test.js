@@ -3,7 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed
 } = require('../adaptive_hunter_monitor');
 
@@ -204,10 +204,28 @@ function m15Base(count=80,start=0){
   assert.strictEqual(t.actionState,'RUNNER');
 })();
 
-(function livePriceExpiryWithoutQuote(){
-  const t={key:'expire-live',symbol:'XAUUSD',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:M15,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
-  updateTradePrice(t,null,M15+1);
-  assert.strictEqual(t.actionState,'EXPIRED');
+(function pendingEntryDecision(){
+  const t={key:'pending',symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  assert.strictEqual(entryDecision(t,100.06,M15).state,'DO_NOT_CHASE');
+  assert.strictEqual(entryDecision(t,100.03,M15).state,'ENTER');
+  assert.strictEqual(entryDecision(t,98.9,M15).state,'INVALID');
+  assert.strictEqual(entryDecision(t,100.00,10*M15+1).state,'EXPIRED');
+})();
+
+(function unconfirmedTradeDoesNotManageTp(){
+  const t={key:'pending2',symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  updateTradePrice(t,102.5,M15);
+  assert.strictEqual(t.tp1Hit,false);
+  assert.strictEqual(t.tp2Hit,false);
+})();
+
+(function feeAwareExecutionFilter(){
+  const tooTight=executionPlan({symbol:'ETHUSDT',side:'LONG',entry:2702.07,stop:2700.17,tp1:2703.97,tp2:2705.87},250);
+  assert.strictEqual(tooTight.costOk,false);
+  assert.ok(tooTight.costReason!=='OK');
+  const workable=executionPlan({symbol:'ETHUSDT',side:'LONG',entry:2700,stop:2680,tp1:2720,tp2:2740},250);
+  assert.strictEqual(workable.costOk,true);
+  assert.strictEqual(workable.costReason,'OK');
 })();
 
 (function retestLifecycleMessages(){
