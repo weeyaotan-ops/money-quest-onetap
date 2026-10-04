@@ -674,6 +674,9 @@ function clientId(prefix,id){
 async function placeBinanceOrder(params){
   return binanceSigned('POST','/fapi/v1/order',params);
 }
+async function getBinanceOrderByClientId(symbol,clientOrderId){
+  return binanceSigned('GET','/fapi/v1/order',{symbol:binanceSymbol(symbol),origClientOrderId:clientOrderId});
+}
 async function cancelBinanceOrder(symbol,orderId){
   if(!orderId) return;
   return binanceSigned('DELETE','/fapi/v1/order',{symbol:binanceSymbol(symbol),orderId}).catch(()=>null);
@@ -745,7 +748,14 @@ async function executeOneTap(t,quotePrice){
     newClientOrderId:clientId('H_ENTRY',t.signalId)
   };
   if(hedge) entryParams.positionSide=positionSide;
-  const entryOrder=await placeBinanceOrder(entryParams);
+  let entryOrder=null;
+  try{ entryOrder=await placeBinanceOrder(entryParams); }
+  catch(e){
+    // If the HTTP response was lost after Binance accepted the order, recover it by deterministic client id.
+    await sleep(350);
+    entryOrder=await getBinanceOrderByClientId(t.symbol,entryParams.newClientOrderId).catch(()=>null);
+    if(!entryOrder) throw e;
+  }
   const filledQty=floorToStep(Number(entryOrder.executedQty)||quantity,rules.qtyStep);
   const fillPrice=actualFillPrice(entryOrder,quotePrice);
   let stopOrder=null,tp1Order=null,tp2Order=null;
@@ -822,7 +832,7 @@ async function tradeAction(action,message){
       if(!t) return;
       if(!t.terminal){
         t.status='SKIPPED_USER'; t.actionState='CLOSED'; t.terminal=true; t.skippedReason='USER';
-        t.skippedAtMs=Date.now(); t.realizedR=null;
+        t.skippedAtMs=Date.now(); t.realizedR=null; t.autoTradePending=false;
         save(state);
       }
     });
@@ -833,65 +843,106 @@ async function tradeAction(action,message){
 
   const preview=load();
   const pTrade=findTradeBySignalId(preview,id);
-  if(!pTrade) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
-  if(pTrade.terminal) return send('这单已经结束，不能再进。',keyboard());
-  if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经记录为已进场。',keyboard());
+  if(!pTrade) return send('⚠️ 找不到这单，可能已经过期。',keyboard());
+  if(pTrade.terminal) return send('这单已经结束，不能再下。',keyboard());
+  if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经下单过了。',keyboard());
+  if(pTrade.autoTradePending) return send('⏳ 正在下单，请不要重复按。',keyboard());
+  if(!binanceTradeReady()){
+    return send([
+      '⚠️ One Tap 还没连接 Binance 交易权限。','',
+      'Bot 已经准备好，但 GitHub 还需要 BINANCE_API_KEY / BINANCE_API_SECRET。',
+      '不要把 Key 发在 Telegram 或这里。'
+    ].join('\n'),keyboard());
+  }
 
   let quote=null;
   try{ quote=await livePrice(pTrade.symbol); }
-  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' 现在价格，先不要进。等几秒再按。',keyboard()); }
+  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' 价格，先不要下。等几秒再按。',keyboard()); }
 
-  let result=null,confirmed=null;
+  const decision=entryDecision(pTrade,quote.price,Date.now());
+  if(decision.state==='DO_NOT_CHASE') return send(entryStateAlert(pTrade,decision),keyboard());
+  if(['EXPIRED','INVALID'].includes(decision.state)){
+    await withStateLock(async()=>{
+      const state=load(),t=findTradeBySignalId(state,id);
+      if(t){t.entryStatus=decision.state;t.status=decision.state;t.actionState='CLOSED';t.terminal=true;t.realizedR=null;save(state);}
+    });
+    await clearSignalButtons(message);
+    return send(entryStateAlert(pTrade,decision),keyboard());
+  }
+  if(decision.state!=='ENTER') return send('⚠️ 现在不适合下单。',keyboard());
+
+  let reserved=false;
   await withStateLock(async()=>{
-    const state=load();
-    const t=findTradeBySignalId(state,id);
-    if(!t){result={state:'MISSING'};return;}
-    result=entryDecision(t,quote.price,Date.now());
-    if(result.state==='ENTER'){
+    const state=load(),t=findTradeBySignalId(state,id);
+    if(!t||t.terminal||t.entryConfirmed||t.autoTradePending) return;
+    t.autoTradePending=true;
+    t.autoTradeStartedAtMs=Date.now();
+    save(state);
+    reserved=true;
+  });
+  if(!reserved) return send('⏳ 这单正在处理或已经结束。',keyboard());
+
+  try{
+    const live=await executeOneTap(pTrade,quote.price);
+    let confirmed=null;
+    await withStateLock(async()=>{
+      const state=load(),t=findTradeBySignalId(state,id);
+      if(!t) return;
       const now=Date.now();
+      t.autoTradePending=false;
       t.entryConfirmed=true;
       t.entryConfirmedAtMs=now;
-      t.actualEntryPrice=Number(quote.price);
+      t.actualEntryPrice=Number(live.fillPrice);
+      t.entry=Number(live.fillPrice);
+      t.riskDistance=Math.abs(Number(t.entry)-Number(t.initialStop||t.stop));
       t.entryStatus='CONFIRMED';
       t.status='OPEN';
       t.actionState='OPEN';
       t.lastOpenTime=Math.floor(now/M15_MS)*M15_MS;
+      t.execution=live.plan;
+      t.autoManaged=true;
+      t.binance={
+        symbol:live.rules.symbol,
+        positionSide:live.positionSide,
+        hedgeMode:Boolean(live.hedge),
+        entryOrderId:live.entryOrderId,
+        entryQty:live.filledQty,
+        slAlgoId:live.stopAlgoId,
+        tp1OrderId:live.tp1OrderId,
+        tp2OrderId:live.tp2OrderId,
+        leverage:live.plan.leverage,
+        balanceAtEntry:live.balance.wallet,
+        availableAtEntry:live.balance.available
+      };
       confirmed={...t};
       save(state);
-    }else if(['EXPIRED','INVALID'].includes(result.state)){
-      t.entryStatus=result.state;
-      t.status=result.state;
-      t.actionState='CLOSED';
-      t.terminal=true;
-      t.realizedR=null;
-      save(state);
-    }else{
-      t.entryStatus=result.state;
-      save(state);
-    }
-  });
-
-  if(result&&result.state==='ENTER'&&confirmed){
+    });
     await clearSignalButtons(message);
     return send([
-      '✅ 已记录进场','',
+      '🚀 One Tap 已下单','',
       confirmed.symbol+' · '+sideText(confirmed.side),
-      '确认时价格：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
-      '止损：'+fmt(confirmed.stop,confirmed.symbol),
-      '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
-      '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
+      '成交价：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
+      '数量：'+Number(confirmed.binance.entryQty).toFixed(Number(live.rules.quantityPrecision||3)),
+      '逐仓：Isolated · '+confirmed.binance.leverage+'x',
+      '止损：'+fmt(confirmed.stop,confirmed.symbol)+' ✅ 已挂',
+      '目标1：'+fmt(confirmed.tp1,confirmed.symbol)+' ✅ 已挂',
+      '目标2：'+fmt(confirmed.tp2,confirmed.symbol)+' ✅ 已挂',
       '',
-      '从现在开始 Bot 会帮你盯止损和目标。'
+      'Binance 资金：'+Number(live.balance.wallet).toFixed(2)+'U',
+      'Bot 会继续盯剩下仓位。'
+    ].join('\n'),keyboard());
+  }catch(e){
+    await withStateLock(async()=>{
+      const state=load(),t=findTradeBySignalId(state,id);
+      if(t){t.autoTradePending=false;t.autoTradeError=String(e.message||e).slice(0,240);save(state);}
+    });
+    return send([
+      '❌ One Tap 没完成','',
+      String(e.message||e),
+      '',
+      'Bot 不会当作已进场。请先检查 Binance / API 状态。'
     ].join('\n'),keyboard());
   }
-  if(result&&result.state==='DO_NOT_CHASE'){
-    return send(entryStateAlert(pTrade,result)+'\n\nBot 没有记录你进场。',keyboard());
-  }
-  if(result&&['EXPIRED','INVALID'].includes(result.state)){
-    await clearSignalButtons(message);
-    return send(entryStateAlert(pTrade,result),keyboard());
-  }
-  return send('⚠️ 现在不适合进，先别下。',keyboard());
 }
 
 async function fastLifecycleOnce(){
