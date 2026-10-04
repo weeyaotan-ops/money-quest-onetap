@@ -753,10 +753,15 @@ async function executeOneTap(t,quotePrice){
   const initialMargin=quantity*Number(quotePrice)/Math.max(1,plan.leverage);
   if(initialMargin>b.available*0.95) throw new Error('可用资金不足，不能安全下这单');
 
-  await setBinanceIsolated(t.symbol);
-  await setBinanceLeverage(t.symbol,plan.leverage);
   const hedge=await binancePositionMode();
   const positionSide=hedge?(t.side==='LONG'?'LONG':'SHORT'):'BOTH';
+  const existing=await binanceSigned('GET','/fapi/v3/positionRisk',{symbol:rules.symbol});
+  const existingRows=Array.isArray(existing)?existing:[existing];
+  if(existingRows.some(x=>Math.abs(Number(x&&x.positionAmt)||0)>=rules.minQty)){
+    throw new Error('这个币已经有持仓，One Tap 不会自动叠加仓位');
+  }
+  await setBinanceIsolated(t.symbol);
+  await setBinanceLeverage(t.symbol,plan.leverage);
   const entrySide=t.side==='LONG'?'BUY':'SELL';
   const exitSide=t.side==='LONG'?'SELL':'BUY';
   const entryParams={
