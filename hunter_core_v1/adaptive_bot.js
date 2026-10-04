@@ -2,7 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts } = require('../adaptive_hunter_monitor');
+const crypto = require('crypto');
+const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
@@ -19,6 +20,10 @@ const LIVE_PRICE_TIMEOUT_MS=Math.max(1500,Number(process.env.ADAPTIVE_LIVE_PRICE
 const BINANCE_BASE=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const OKX_BASE=process.env.OKX_REST_BASE||'https://www.okx.com';
 const YAHOO_BASE=process.env.YAHOO_FINANCE_BASE||'https://query1.finance.yahoo.com';
+const BINANCE_API_KEY=String(process.env.BINANCE_API_KEY||'');
+const BINANCE_API_SECRET=String(process.env.BINANCE_API_SECRET||'');
+const BINANCE_LIVE_TRADING=String(process.env.BINANCE_LIVE_TRADING||'0')==='1';
+const BINANCE_AUTO_BALANCE=String(process.env.BINANCE_AUTO_BALANCE||'1')==='1';
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
 
@@ -524,7 +529,263 @@ async function xauLivePrice(){
   return value;
 }
 async function livePrice(symbol){
-  return symbol==='XAUUSD'?xauLivePrice():cryptoLivePrice(symbol);
+  if(symbol==='XAUUSD'){
+    try{return await cryptoLivePrice('XAUUSDT');}
+    catch(e){return xauLivePrice();}
+  }
+  return cryptoLivePrice(symbol);
+}
+
+function binanceSymbol(symbol){ return symbol==='XAUUSD'?'XAUUSDT':String(symbol||''); }
+function binanceReady(){ return Boolean(BINANCE_API_KEY&&BINANCE_API_SECRET); }
+function binanceTradeReady(){ return binanceReady()&&BINANCE_LIVE_TRADING; }
+let binanceClockOffsetMs=0;
+let exchangeInfoCache={at:0,body:null};
+
+async function syncBinanceClock(){
+  const d=await fastJson(BINANCE_BASE+'/fapi/v1/time');
+  const serverTime=Number(d&&d.serverTime);
+  if(Number.isFinite(serverTime)) binanceClockOffsetMs=serverTime-Date.now();
+  return binanceClockOffsetMs;
+}
+function cleanParams(params){
+  const out={};
+  for(const [k,v] of Object.entries(params||{})){
+    if(v===undefined||v===null||v==='') continue;
+    out[k]=typeof v==='boolean'?(v?'true':'false'):String(v);
+  }
+  return out;
+}
+async function binanceSignedOnce(method,endpoint,params={}){
+  if(!binanceReady()) throw new Error('BINANCE_API_NOT_CONFIGURED');
+  const p=cleanParams({...params,timestamp:Date.now()+binanceClockOffsetMs,recvWindow:5000});
+  const q=new URLSearchParams(p);
+  const signature=crypto.createHmac('sha256',BINANCE_API_SECRET).update(q.toString()).digest('hex');
+  q.set('signature',signature);
+  const upper=String(method||'GET').toUpperCase();
+  const headers={'X-MBX-APIKEY':BINANCE_API_KEY};
+  let url=BINANCE_BASE+endpoint,body;
+  if(upper==='GET'||upper==='DELETE') url+='?'+q.toString();
+  else{
+    headers['content-type']='application/x-www-form-urlencoded';
+    body=q.toString();
+  }
+  const r=await fetch(url,{method:upper,headers,body,signal:AbortSignal.timeout(10000)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||Number(d&&d.code)<0){
+    const e=new Error('BINANCE '+String(d&&d.code||r.status)+' '+String(d&&d.msg||'request failed'));
+    e.code=Number(d&&d.code); e.binance=d; throw e;
+  }
+  return d;
+}
+async function binanceSigned(method,endpoint,params={}){
+  try{return await binanceSignedOnce(method,endpoint,params);}
+  catch(e){
+    if(Number(e&&e.code)===-1021){
+      await syncBinanceClock();
+      return binanceSignedOnce(method,endpoint,params);
+    }
+    throw e;
+  }
+}
+async function binanceBalance(){
+  const rows=await binanceSigned('GET','/fapi/v3/balance');
+  const usdt=(Array.isArray(rows)?rows:[]).find(x=>String(x&&x.asset)==='USDT');
+  if(!usdt) throw new Error('BINANCE_USDT_BALANCE_MISSING');
+  const wallet=Number(usdt.balance),available=Number(usdt.availableBalance);
+  if(!Number.isFinite(wallet)||!Number.isFinite(available)) throw new Error('BINANCE_BALANCE_INVALID');
+  return {wallet,available,crossWallet:Number(usdt.crossWalletBalance),at:Date.now()};
+}
+async function syncBinanceBalance(){
+  if(!binanceReady()||!BINANCE_AUTO_BALANCE) return null;
+  const b=await binanceBalance();
+  await withStateLock(async()=>{
+    const st=load();
+    if(!st.settings||typeof st.settings!=='object') st.settings={};
+    st.settings.equityUsdt=Math.max(1,b.wallet);
+    st.settings.highWaterEquity=Math.max(b.wallet,Number(st.settings.highWaterEquity)||b.wallet);
+    st.settings.balanceSource='BINANCE';
+    st.settings.balanceSyncedAtMs=b.at;
+    st.settings.availableBalanceUsdt=b.available;
+    st.settings.snowballEnabled=true;
+    st.settings.awaitingCapital=false;
+    save(st);
+  });
+  return b;
+}
+async function binanceExchangeInfo(){
+  if(exchangeInfoCache.body&&Date.now()-exchangeInfoCache.at<10*60*1000) return exchangeInfoCache.body;
+  const body=await fastJson(BINANCE_BASE+'/fapi/v1/exchangeInfo');
+  exchangeInfoCache={at:Date.now(),body};
+  return body;
+}
+function decimalsFromStep(step){
+  const x=String(step);
+  if(!x.includes('.')) return 0;
+  return x.replace(/0+$/,'').split('.')[1]?.length||0;
+}
+function floorToStep(value,step){
+  const v=Number(value),s=Number(step);
+  if(!(s>0)||!Number.isFinite(v)) return v;
+  return Math.floor((v+1e-12)/s)*s;
+}
+function roundToStep(value,step){
+  const v=Number(value),s=Number(step);
+  if(!(s>0)||!Number.isFinite(v)) return v;
+  return Math.round(v/s)*s;
+}
+function fixedStep(value,step){
+  return Number(value).toFixed(decimalsFromStep(step));
+}
+async function binanceRules(symbol){
+  const ex=await binanceExchangeInfo();
+  const bs=binanceSymbol(symbol);
+  const row=(ex.symbols||[]).find(x=>x.symbol===bs);
+  if(!row||row.status!=='TRADING') throw new Error('BINANCE_SYMBOL_NOT_TRADING '+bs);
+  const f=Object.fromEntries((row.filters||[]).map(x=>[x.filterType,x]));
+  const lot=f.MARKET_LOT_SIZE||f.LOT_SIZE||{};
+  const price=f.PRICE_FILTER||{};
+  const notional=f.MIN_NOTIONAL||{};
+  return {
+    symbol:bs,
+    qtyStep:Number(lot.stepSize),
+    minQty:Number(lot.minQty),
+    maxQty:Number(lot.maxQty),
+    tickSize:Number(price.tickSize),
+    minNotional:Number(notional.notional||notional.minNotional||0),
+    quantityPrecision:Number(row.quantityPrecision),
+    pricePrecision:Number(row.pricePrecision)
+  };
+}
+async function binancePositionMode(){
+  const d=await binanceSigned('GET','/fapi/v1/positionSide/dual');
+  return Boolean(d&&d.dualSidePosition);
+}
+async function setBinanceIsolated(symbol){
+  try{return await binanceSigned('POST','/fapi/v1/marginType',{symbol:binanceSymbol(symbol),marginType:'ISOLATED'});}
+  catch(e){ if(Number(e&&e.code)===-4046) return {code:-4046,msg:'already isolated'}; throw e; }
+}
+async function setBinanceLeverage(symbol,leverage){
+  return binanceSigned('POST','/fapi/v1/leverage',{symbol:binanceSymbol(symbol),leverage:Math.max(1,Math.min(5,Math.floor(Number(leverage)||1)))});
+}
+function clientId(prefix,id){
+  return (String(prefix||'H')+'_'+String(id||Date.now()).replace(/[^A-Za-z0-9_-]/g,'')).slice(0,36);
+}
+async function placeBinanceOrder(params){
+  return binanceSigned('POST','/fapi/v1/order',params);
+}
+async function cancelBinanceOrder(symbol,orderId){
+  if(!orderId) return;
+  return binanceSigned('DELETE','/fapi/v1/order',{symbol:binanceSymbol(symbol),orderId}).catch(()=>null);
+}
+async function placeBinanceAlgo(params){
+  return binanceSigned('POST','/fapi/v1/algoOrder',params);
+}
+async function cancelBinanceAlgo(algoId){
+  if(!algoId) return;
+  return binanceSigned('DELETE','/fapi/v1/algoOrder',{algoId}).catch(()=>null);
+}
+async function emergencyClose(symbol,side,positionSide,quantity,rules){
+  const qty=floorToStep(quantity,rules.qtyStep);
+  if(!(qty>=rules.minQty)) return null;
+  const p={
+    symbol:rules.symbol,
+    side:side==='LONG'?'SELL':'BUY',
+    type:'MARKET',
+    quantity:fixedStep(qty,rules.qtyStep),
+    newOrderRespType:'RESULT',
+    newClientOrderId:clientId('H_EMERG',Date.now())
+  };
+  if(positionSide==='BOTH') p.reduceOnly='true';
+  else p.positionSide=positionSide;
+  return placeBinanceOrder(p);
+}
+function actualFillPrice(order,fallback){
+  const avg=Number(order&&order.avgPrice);
+  if(avg>0) return avg;
+  const qty=Number(order&&order.executedQty),quote=Number(order&&order.cumQuote);
+  if(qty>0&&quote>0) return quote/qty;
+  return Number(fallback);
+}
+function splitExitQty(total,rules,mode){
+  const fractions=mode==='TREND_RETEST'?[0.30,0.30]:[0.50,0.50];
+  const q1=floorToStep(total*fractions[0],rules.qtyStep);
+  const q2=floorToStep(total*fractions[1],rules.qtyStep);
+  const remainder=Math.max(0,total-q1-q2);
+  if(q1<rules.minQty||q2<rules.minQty) throw new Error('仓位太小，无法自动分批止盈');
+  return {q1,q2,remainder};
+}
+async function executeOneTap(t,quotePrice){
+  if(!binanceTradeReady()) throw new Error('BINANCE_LIVE_TRADING_NOT_READY');
+  const b=await syncBinanceBalance();
+  const st=load();
+  const equity=Math.max(1,Number(st.settings&&st.settings.equityUsdt)||b.wallet);
+  const peak=Math.max(equity,Number(st.settings&&st.settings.highWaterEquity)||equity);
+  const risk=snowballRisk(t,equity,peak);
+  const liveSignal={...t,entry:Number(quotePrice)};
+  const plan=executionPlan(liveSignal,equity,risk.riskPct);
+  if(!plan.valid||!plan.costOk) throw new Error('现在成本不划算：'+String(plan.costReason||'SKIP'));
+  const rules=await binanceRules(t.symbol);
+  let quantity=floorToStep(plan.quantity,rules.qtyStep);
+  if(!(quantity>=rules.minQty)) throw new Error('仓位低于 Binance 最小数量');
+  if(quantity*Number(quotePrice)<rules.minNotional) throw new Error('仓位低于 Binance 最小下单金额');
+  const initialMargin=quantity*Number(quotePrice)/Math.max(1,plan.leverage);
+  if(initialMargin>b.available*0.95) throw new Error('可用资金不足，不能安全下这单');
+
+  await setBinanceIsolated(t.symbol);
+  await setBinanceLeverage(t.symbol,plan.leverage);
+  const hedge=await binancePositionMode();
+  const positionSide=hedge?(t.side==='LONG'?'LONG':'SHORT'):'BOTH';
+  const entrySide=t.side==='LONG'?'BUY':'SELL';
+  const exitSide=t.side==='LONG'?'SELL':'BUY';
+  const entryParams={
+    symbol:rules.symbol,side:entrySide,type:'MARKET',
+    quantity:fixedStep(quantity,rules.qtyStep),
+    newOrderRespType:'RESULT',
+    newClientOrderId:clientId('H_ENTRY',t.signalId)
+  };
+  if(hedge) entryParams.positionSide=positionSide;
+  const entryOrder=await placeBinanceOrder(entryParams);
+  const filledQty=floorToStep(Number(entryOrder.executedQty)||quantity,rules.qtyStep);
+  const fillPrice=actualFillPrice(entryOrder,quotePrice);
+  let stopOrder=null,tp1Order=null,tp2Order=null;
+  try{
+    const stopPrice=roundToStep(Number(t.stop),rules.tickSize);
+    const tp1Price=roundToStep(Number(t.tp1),rules.tickSize);
+    const tp2Price=roundToStep(Number(t.tp2),rules.tickSize);
+    stopOrder=await placeBinanceAlgo({
+      algoType:'CONDITIONAL',symbol:rules.symbol,side:exitSide,
+      positionSide,type:'STOP_MARKET',
+      triggerPrice:fixedStep(stopPrice,rules.tickSize),
+      closePosition:'true',workingType:'MARK_PRICE',
+      clientAlgoId:clientId('H_SL',t.signalId)
+    });
+    const split=splitExitQty(filledQty,rules,t.mode);
+    const tpBase={symbol:rules.symbol,side:exitSide,type:'LIMIT',timeInForce:'GTC'};
+    if(hedge) tpBase.positionSide=positionSide;
+    else tpBase.reduceOnly='true';
+    tp1Order=await placeBinanceOrder({
+      ...tpBase,quantity:fixedStep(split.q1,rules.qtyStep),price:fixedStep(tp1Price,rules.tickSize),
+      newClientOrderId:clientId('H_TP1',t.signalId)
+    });
+    tp2Order=await placeBinanceOrder({
+      ...tpBase,quantity:fixedStep(split.q2,rules.qtyStep),price:fixedStep(tp2Price,rules.tickSize),
+      newClientOrderId:clientId('H_TP2',t.signalId)
+    });
+    return {
+      balance:b,plan:{...plan,riskLabel:risk.label},rules,hedge,positionSide,
+      entryOrder,entryOrderId:entryOrder.orderId,filledQty,fillPrice,
+      stopAlgoId:stopOrder.algoId||stopOrder.orderId||null,
+      tp1OrderId:tp1Order.orderId||null,tp2OrderId:tp2Order.orderId||null,
+      stopPrice,tp1Price,tp2Price
+    };
+  }catch(e){
+    await cancelBinanceOrder(t.symbol,tp1Order&&tp1Order.orderId);
+    await cancelBinanceOrder(t.symbol,tp2Order&&tp2Order.orderId);
+    await cancelBinanceAlgo(stopOrder&&(stopOrder.algoId||stopOrder.orderId));
+    await emergencyClose(t.symbol,t.side,positionSide,filledQty,rules).catch(()=>null);
+    throw new Error('保护单设置失败，已尝试紧急平仓：'+e.message);
+  }
 }
 function entryStateAlert(t,d){
   const p=Number(d&&d.price);
