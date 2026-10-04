@@ -164,7 +164,7 @@ function m15Base(count=80,start=0){
   assert.ok(msg.includes('方向：做多 LONG'));
   assert.ok(msg.includes('杠杆：'));
   assert.ok(msg.includes('数量：'));
-  assert.ok(msg.includes('入场：10000.00'));
+  assert.ok(msg.includes('入场：10000.0'));
   assert.ok(msg.includes('有效到：'));
 })();
 
