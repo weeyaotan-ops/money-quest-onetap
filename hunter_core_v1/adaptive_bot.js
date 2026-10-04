@@ -221,10 +221,10 @@ function activeText(){
     if(!x.entryConfirmed){
       const st=String(x.entryStatus||'ENTER');
       if(st==='DO_NOT_CHASE') lines.push('⛔ 现在太贵/太低，不要追');
-      else lines.push('⏳ 还没确认进场');
+      else lines.push('⏳ 等你按 One Tap');
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('最迟：'+sgtTime(x.entryExpiresAtMs)+' SGT');
     }else{
-      if(Number.isFinite(Number(x.actualEntryPrice))) lines.push('实际确认价：'+fmt(x.actualEntryPrice,x.symbol));
+      if(Number.isFinite(Number(x.actualEntryPrice))) lines.push('实际成交价：'+fmt(x.actualEntryPrice,x.symbol));
       lines.push('止损：'+fmt(x.stop,x.symbol));
       lines.push('目标1：'+fmt(x.tp1,x.symbol));
       lines.push('目标2：'+fmt(x.tp2,x.symbol));
@@ -374,7 +374,7 @@ function systemText(){
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
     '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
     '⚡ TP/SL 实时监控：约 '+(LIFECYCLE_POLL_MS/1000).toFixed(0)+'秒一次',
-    '✅ 已进场 / Skip：开启',
+    '🚀 One Tap / Skip：开启',
     '🔄 Live Entry Check：开启',
     '',
     '旧 Session Breakout 已退出 Live。'
