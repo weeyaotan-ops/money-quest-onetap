@@ -3,7 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed
 } = require('../adaptive_hunter_monitor');
 
@@ -186,6 +186,28 @@ function m15Base(count=80,start=0){
   assert.strictEqual(t.actionState,'MANAGING');
   assert.strictEqual(t.stop,t.entry);
   assert.ok(lifecycleMessage(t,'TP1').includes('SL → Entry（BE）'));
+})();
+
+(function livePriceLifecycle(){
+  const t={key:'live',symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:10*M15,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  let before=lifecycleSnapshot(t);
+  updateTradePrice(t,101.01,M15);
+  let ev=lifecycleEvents(before,t);
+  assert.ok(ev.includes('TP1'));
+  assert.strictEqual(t.stop,t.entry);
+  assert.strictEqual(t.actionState,'MANAGING');
+
+  before=lifecycleSnapshot(t);
+  updateTradePrice(t,102.01,M15+2000);
+  ev=lifecycleEvents(before,t);
+  assert.ok(ev.includes('TP2'));
+  assert.strictEqual(t.actionState,'RUNNER');
+})();
+
+(function livePriceExpiryWithoutQuote(){
+  const t={key:'expire-live',symbol:'XAUUSD',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:M15,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  updateTradePrice(t,null,M15+1);
+  assert.strictEqual(t.actionState,'EXPIRED');
 })();
 
 (function retestLifecycleMessages(){
