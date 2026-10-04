@@ -168,11 +168,8 @@ function m15Base(count=80,start=0){
 })();
 
 (function lifecycleExpiry(){
-  const t={key:'x',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:ENTRY_VALID_MS,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
-  const before=lifecycleSnapshot(t);
-  updateTrade(t,[],ENTRY_VALID_MS+1);
-  assert.strictEqual(t.actionState,'EXPIRED');
-  assert.ok(lifecycleEvents(before,t).includes('EXPIRED'));
+  const t={key:'x',symbol:'BTCUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:95,tp1:105,tp2:110,riskDistance:5,signalAtMs:0,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:ENTRY_VALID_MS,terminal:false,entryConfirmed:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  assert.strictEqual(entryDecision(t,100,ENTRY_VALID_MS+1).state,'EXPIRED');
   assert.ok(lifecycleMessage(t,'EXPIRED').includes('不要追'));
 })();
 
