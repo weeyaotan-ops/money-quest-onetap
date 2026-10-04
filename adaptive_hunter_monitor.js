@@ -536,7 +536,7 @@ function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
   const signalId=sig.signalId||signalIdFor(sig);
-  return {key:sig.key,signalId,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
+  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -888,7 +888,7 @@ async function cycle(now=Date.now()){
                 const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
                 const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
                 const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-                candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+                candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
                 delete state.armed[armKey];
               }
             }
@@ -903,7 +903,7 @@ async function cycle(now=Date.now()){
             const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
             const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
             const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-            candidates.push({...sig,key,symbol:snap.symbol,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+            candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
           }
         }
       }
@@ -934,7 +934,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
