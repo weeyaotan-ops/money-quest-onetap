@@ -7,6 +7,7 @@ const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEve
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
+const AUTH_USER_ID=String(process.env.TELEGRAM_AUTH_USER_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
 const VERSION='HUNTER_ADAPTIVE_V2_2026-10-03_INTELLIGENCE';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1159,9 +1160,11 @@ async function run(){
       for(const u of us){
         offset=Math.max(offset,Number(u.update_id)+1);
         if(u.callback_query){
-          if(String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)!==CHAT_ID){await answer(u.callback_query.id);continue;}
+          const chatOk=String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)===CHAT_ID;
+          const userOk=!AUTH_USER_ID||String(u.callback_query.from&&u.callback_query.from.id)===AUTH_USER_ID;
+          if(!chatOk||!userOk){await answer(u.callback_query.id);continue;}
           await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
-        }else if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID){
+        }else if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID&&(!AUTH_USER_ID||String(u.message.from&&u.message.from.id)===AUTH_USER_ID)){
           const handled=await handleTextInput(u.message.text);
           if(handled) continue;
           const a=normalize(u.message.text); if(a) await handle(a); else await menu();
