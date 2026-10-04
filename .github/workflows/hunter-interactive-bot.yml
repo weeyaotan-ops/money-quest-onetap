@@ -12,6 +12,7 @@
 # Redeploy after simplified UI test update 2026-10-05
 # Final simple-UI test alignment 2026-10-05
 # Profit mode: 0.75% risk + 30/30/40 trend management 2026-10-05
+# Snowball mode: live capital update + dynamic 0.5/0.75/1.0% risk 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
