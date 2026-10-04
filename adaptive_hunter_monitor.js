@@ -20,7 +20,7 @@ const MAX_FEED_BEHIND_MS = Number(process.env.ADAPTIVE_MAX_FEED_BEHIND_MS || 60 
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.0075);
 const EQUITY_USDT = Math.max(1, Number(process.env.ADAPTIVE_EQUITY_USDT || 250));
-const MAX_LEVERAGE = Math.max(1, Math.floor(Number(process.env.ADAPTIVE_MAX_LEVERAGE || 5)));
+const MAX_LEVERAGE = Math.max(1, Math.min(10, Math.floor(Number(process.env.ADAPTIVE_MAX_LEVERAGE || 10))));
 const MAX_MARGIN_FRACTION = Math.min(0.95, Math.max(0.10, Number(process.env.ADAPTIVE_MAX_MARGIN_FRACTION || 0.60)));
 const TAKER_FEE_RATE = Math.max(0, Number(process.env.ADAPTIVE_TAKER_FEE_RATE || 0.0005));
 const SLIPPAGE_BUFFER_RATE = Math.max(0, Number(process.env.ADAPTIVE_SLIPPAGE_BUFFER_RATE || 0.0002));
@@ -28,7 +28,9 @@ const LIVE_LIFECYCLE = String(process.env.ADAPTIVE_LIVE_LIFECYCLE || '') === '1'
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
-const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','XAUUSD'];
+const SYMBOLS = String(process.env.ADAPTIVE_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD')
+  .split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);
+const SATELLITE_SYMBOLS = new Set(['NEARUSDT','ZECUSDT']);
 
 const SESSION_DEFS = {
   LONDON: { id:'LONDON', label:'London', tz:'Europe/London', hour:8, minute:0 },
@@ -38,18 +40,31 @@ const SESSION_DEFS = {
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 function num(x){ const n=Number(x); return Number.isFinite(n)?n:null; }
+function priceDecimals(symbol){
+  const m={
+    BTCUSDT:1,ETHUSDT:2,SOLUSDT:2,XRPUSDT:4,BNBUSDT:2,DOGEUSDT:5,
+    LINKUSDT:3,LTCUSDT:2,AVAXUSDT:3,SUIUSDT:4,NEARUSDT:3,ZECUSDT:2,XAUUSD:2
+  };
+  return m[String(symbol||'').toUpperCase()] ?? 4;
+}
 function fmt(x,symbol){
   const n=Number(x); if(!Number.isFinite(n)) return 'n/a';
-  if(symbol==='XAUUSD') return n.toFixed(2);
-  if(n>=1000) return n.toFixed(2);
-  if(n>=10) return n.toFixed(3);
-  return n.toFixed(4);
+  return n.toFixed(priceDecimals(symbol));
 }
 function qtyStep(symbol){
-  if(symbol==='BTCUSDT') return 0.001;
-  if(symbol==='ETHUSDT') return 0.001;
-  if(symbol==='SOLUSDT') return 0.01;
-  return 0.001;
+  const m={
+    BTCUSDT:0.001,ETHUSDT:0.001,SOLUSDT:0.01,XRPUSDT:0.1,BNBUSDT:0.01,DOGEUSDT:1,
+    LINKUSDT:0.01,LTCUSDT:0.001,AVAXUSDT:1,SUIUSDT:0.1,NEARUSDT:1,ZECUSDT:0.001,
+    XAUUSD:0.001
+  };
+  return m[String(symbol||'').toUpperCase()] ?? 0.001;
+}
+function minNotional(symbol){
+  const m={
+    BTCUSDT:50,ETHUSDT:20,SOLUSDT:5,XRPUSDT:5,BNBUSDT:5,DOGEUSDT:5,
+    LINKUSDT:20,LTCUSDT:20,AVAXUSDT:5,SUIUSDT:5,NEARUSDT:5,ZECUSDT:5
+  };
+  return m[String(symbol||'').toUpperCase()] ?? 0;
 }
 function floorStep(value,step){
   if(!(step>0)||!Number.isFinite(Number(value))) return Number(value);
@@ -72,6 +87,8 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
   const step=qtyStep(s.symbol);
   let quantity=floorStep(notional/entry,step);
   if(!(quantity>0)) quantity=0;
+  notional=quantity*entry;
+  if(notional>0 && notional<minNotional(s.symbol)) quantity=0;
   notional=quantity*entry;
   const initialMargin=leverage>0?notional/leverage:0;
   const stopLoss=quantity*Math.abs(entry-stop);
@@ -103,7 +120,7 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
   const tp2CostShare=tp2Gross>0?tp2Cost/tp2Gross:1;
   const minTp2Net=0.5*riskBudget;
   let costReason='OK';
-  if(!(quantity>0)) costReason='仓位太小';
+  if(!(quantity>0)) costReason='仓位太小 / 低于 Binance 最小下单金额';
   else if(!(tp1MoveRate>frictionRate&&tp1Net>0)) costReason='TP1 扣成本后不赚钱';
   else if(tp2Net<minTp2Net) costReason='TP2 净利润少于 0.5R';
   else if(tp2CostShare>0.25) costReason='交易成本超过 TP2 毛利 25%';
@@ -118,6 +135,17 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
   };
 }
 
+function universeQualityOk(signal){
+  const score=Number(signal&&signal.intelligence&&signal.intelligence.score);
+  if(SATELLITE_SYMBOLS.has(String(signal&&signal.symbol||''))) return Number.isFinite(score)&&score>=82;
+  return true;
+}
+function universeRank(a,b){
+  const as=Number(a&&a.intelligence&&a.intelligence.score)||0;
+  const bs=Number(b&&b.intelligence&&b.intelligence.score)||0;
+  if(bs!==as) return bs-as;
+  return (Number(a&&a.riskAtr)||999)-(Number(b&&b.riskAtr)||999);
+}
 function snowballRisk(signal,equityUsdt,highWaterEquity){
   const equity=Math.max(1,Number(equityUsdt)||EQUITY_USDT);
   const peak=Math.max(equity,Number(highWaterEquity)||equity);
@@ -915,9 +943,12 @@ async function cycle(now=Date.now()){
     }
   }
   if(!killed){
+    for(let i=candidates.length-1;i>=0;i-=1){
+      if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
+    }
     const crypto=candidates.filter(x=>x.symbol!=='XAUUSD');
     if(crypto.length>1){
-      crypto.sort((a,b)=>a.riskAtr-b.riskAtr);
+      crypto.sort(universeRank);
       const keep=crypto[0].key;
       for(let i=candidates.length-1;i>=0;i-=1) if(candidates[i].symbol!=='XAUUSD'&&candidates[i].key!==keep) candidates.splice(i,1);
     }
