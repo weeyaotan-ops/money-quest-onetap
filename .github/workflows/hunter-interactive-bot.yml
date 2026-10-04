@@ -2,6 +2,7 @@
 # UI refresh: visible V2 intelligence button 2026-10-03
 # Telegram + market scanner run in one process; self-rotates before GitHub timeout.
 # Runtime source refresh: SOL scanner enabled 2026-10-03
+# Fast lifecycle refresh: TP/SL/expiry monitor ~2s 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -78,6 +79,8 @@ jobs:
           ADAPTIVE_RETRY_AFTER_MS: "2000"
           ADAPTIVE_MAX_CLOSE_RETRIES: "8"
           ADAPTIVE_RUNTIME_MS: "18600000"
+          ADAPTIVE_LIFECYCLE_POLL_MS: "2000"
+          ADAPTIVE_LIVE_PRICE_TIMEOUT_MS: "4500"
           ADAPTIVE_RISK_PCT: "0.005"
           ADAPTIVE_DAILY_STOP_R: "-2"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
