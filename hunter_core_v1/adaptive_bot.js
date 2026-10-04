@@ -22,6 +22,7 @@ const OKX_BASE=process.env.OKX_REST_BASE||'https://www.okx.com';
 const YAHOO_BASE=process.env.YAHOO_FINANCE_BASE||'https://query1.finance.yahoo.com';
 const BINANCE_API_KEY=String(process.env.BINANCE_API_KEY||process.env.EXCHANGE_API_KEY||'');
 const BINANCE_API_SECRET=String(process.env.BINANCE_API_SECRET||process.env.EXCHANGE_API_SECRET||'');
+const BINANCE_ED25519_PRIVATE_KEY_PEM=String(process.env.BINANCE_ED25519_PRIVATE_KEY_PEM||'');
 const BINANCE_LIVE_TRADING=String(process.env.BINANCE_LIVE_TRADING||'0')==='1';
 const BINANCE_AUTO_BALANCE=String(process.env.BINANCE_AUTO_BALANCE||'1')==='1';
 
@@ -554,7 +555,7 @@ async function livePrice(symbol){
 }
 
 function binanceSymbol(symbol){ return symbol==='XAUUSD'?'XAUUSDT':String(symbol||''); }
-function binanceReady(){ return Boolean(BINANCE_API_KEY&&BINANCE_API_SECRET); }
+function binanceReady(){ return Boolean(BINANCE_API_KEY&&(BINANCE_API_SECRET||BINANCE_ED25519_PRIVATE_KEY_PEM)); }
 function binanceTradeReady(){ return binanceReady()&&BINANCE_LIVE_TRADING; }
 let binanceClockOffsetMs=0;
 let exchangeInfoCache={at:0,body:null};
@@ -577,7 +578,10 @@ async function binanceSignedOnce(method,endpoint,params={}){
   if(!binanceReady()) throw new Error('BINANCE_API_NOT_CONFIGURED');
   const p=cleanParams({...params,timestamp:Date.now()+binanceClockOffsetMs,recvWindow:5000});
   const q=new URLSearchParams(p);
-  const signature=crypto.createHmac('sha256',BINANCE_API_SECRET).update(q.toString()).digest('hex');
+  const payload=q.toString();
+  const signature=BINANCE_ED25519_PRIVATE_KEY_PEM
+    ? crypto.sign(null,Buffer.from(payload),BINANCE_ED25519_PRIVATE_KEY_PEM).toString('base64')
+    : crypto.createHmac('sha256',BINANCE_API_SECRET).update(payload).digest('hex');
   q.set('signature',signature);
   const upper=String(method||'GET').toUpperCase();
   const headers={'X-MBX-APIKEY':BINANCE_API_KEY};
