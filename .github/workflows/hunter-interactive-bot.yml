@@ -11,6 +11,7 @@
 # Simple UI: four-button foolproof Telegram mode 2026-10-05
 # Redeploy after simplified UI test update 2026-10-05
 # Final simple-UI test alignment 2026-10-05
+# Profit mode: 0.75% risk + 30/30/40 trend management 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
@@ -90,7 +91,7 @@ jobs:
           ADAPTIVE_LIFECYCLE_POLL_MS: "2000"
           ADAPTIVE_LIVE_LIFECYCLE: "1"
           ADAPTIVE_LIVE_PRICE_TIMEOUT_MS: "4500"
-          ADAPTIVE_RISK_PCT: "0.005"
+          ADAPTIVE_RISK_PCT: "0.0075"
           ADAPTIVE_EQUITY_USDT: "250"
           ADAPTIVE_MAX_LEVERAGE: "5"
           ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
