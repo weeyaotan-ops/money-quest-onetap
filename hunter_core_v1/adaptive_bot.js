@@ -138,10 +138,11 @@ function nowText(){
       lines.push('止损：'+fmt(x.stop,x.symbol));
       lines.push('目标1：'+fmt(x.tp1,x.symbol));
       lines.push('目标2：'+fmt(x.tp2,x.symbol));
+      if(x.mode==='TREND_RETEST') lines.push('到目标1卖30% · 目标2再卖30% · 剩40%继续跑');
       if(ex.valid){
         lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
-        lines.push('目标1净赚：'+(Number(ex.tp1Net)>=0?'+':'')+Number(ex.tp1Net).toFixed(2)+'U');
-        lines.push('目标2净赚：'+(Number(ex.tp2Net)>=0?'+':'')+Number(ex.tp2Net).toFixed(2)+'U');
+        lines.push('目标1预计：'+(Number(ex.tp1Net)>=0?'+':'')+Number(ex.tp1Net).toFixed(2)+'U');
+        lines.push('目标2预计：'+(Number(ex.tp2Net)>=0?'+':'')+Number(ex.tp2Net).toFixed(2)+'U');
       }
       if(Number.isFinite(Number(x.qualityScore))) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
@@ -299,7 +300,8 @@ function settingsText(){
   return [
     '⚙️ 设置','',
     '现在本金：'+equity.toFixed(0)+'U',
-    '每单最多亏：约 '+(equity*0.005).toFixed(2)+'U',
+    '每单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
+    '每单风险：0.75%',
     '最高杠杆：5x',
     '模式：逐仓 Isolated',
     '',
@@ -327,7 +329,7 @@ function systemText(){
     '自动下单：关闭',
     '交易市场：XAUUSD / BTC / ETH / SOL',
     '本金：'+equity.toFixed(0)+'U',
-    'Risk：0.5% / signal',
+    'Risk：0.75% / signal',
     'Daily kill：-2R',
     '',
     '最后扫描：'+sgtTime(scan.at)+' SGT',
@@ -352,7 +354,7 @@ async function menu(){
   return send([
     'HUNTER','',
     '本金：'+equity.toFixed(0)+'U',
-    '每单最多亏：约 '+(equity*0.005).toFixed(2)+'U',
+    '每单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
     '',
     '你只需要看 4 个按钮：',
     '🚨 现在能不能下',
