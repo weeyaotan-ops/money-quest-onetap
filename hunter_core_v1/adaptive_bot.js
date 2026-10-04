@@ -737,6 +737,7 @@ function splitExitQty(total,rules,mode){
 }
 async function executeOneTap(t,quotePrice){
   if(!binanceTradeReady()) throw new Error('BINANCE_LIVE_TRADING_NOT_READY');
+  if(t.symbol==='XAUUSD'&&String(t.provider||'')!=='BINANCE_XAUUSDT') throw new Error('XAU 当前 signal 不是 Binance XAUUSDT 数据，One Tap 已安全阻止');
   const b=await syncBinanceBalance();
   const st=load();
   const equity=Math.max(1,Number(st.settings&&st.settings.equityUsdt)||b.wallet);
@@ -845,14 +846,14 @@ async function replaceAutoStop(t,triggerPrice,label='BE'){
   if(old&&old!==t.binance.slAlgoId) await cancelBinanceAlgo(old);
   return true;
 }
-async function syncAutoProtection(t){
+async function syncAutoProtection(t,state){
   if(!t||!t.autoManaged||!t.binance||t.terminal) return;
   if(t.tp1Hit&&!t.binance.beStopSynced){
     try{
       await replaceAutoStop(t,t.entry,'BE');
       t.binance.beStopSynced=true;
     }catch(e){
-      queueAlert(load(),'AUTO_BE_FAIL|'+t.key,'⚠️ '+t.symbol+' 保本止损同步失败，请检查 Binance。',Date.now());
+      if(state) queueAlert(state,'AUTO_BE_FAIL|'+t.key,'⚠️ '+t.symbol+' 保本止损同步失败，请检查 Binance。',Date.now());
       console.error(JSON.stringify({bot:VERSION,autoProtect:'BE_FAIL',symbol:t.symbol,error:e.message}));
     }
   }
@@ -1068,7 +1069,7 @@ async function fastLifecycleOnce(){
       const before=lifecycleSnapshot(t);
       updateTradePrice(t,px,now);
       if(t.autoManaged){
-        try{await syncAutoProtection(t);}
+        try{await syncAutoProtection(t,state);}
         catch(e){console.error(JSON.stringify({bot:VERSION,autoProtect:'ERROR',symbol:t.symbol,error:e.message}));}
       }
       const events=lifecycleEvents(before,t);
@@ -1142,7 +1143,7 @@ async function run(){
   const stopAt=Date.now()+RUNTIME_MS;
   const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
   const lifecyclePromise=fastLifecycleLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,lifecycle:'FATAL',error:e.message})));
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS}));
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS,binanceApi:binanceReady(),liveTrading:binanceTradeReady(),autoBalance:BINANCE_AUTO_BALANCE}));
   while(Date.now()<stopAt){
     try{
       const us=await getUpdates(offset);
