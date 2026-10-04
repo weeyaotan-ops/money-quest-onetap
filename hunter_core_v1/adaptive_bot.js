@@ -141,8 +141,12 @@ function nowText(){
       if(x.mode==='TREND_RETEST') lines.push('到目标1卖30% · 目标2再卖30% · 剩40%继续跑');
       if(ex.valid){
         lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
-        lines.push('目标1预计：'+(Number(ex.tp1Net)>=0?'+':'')+Number(ex.tp1Net).toFixed(2)+'U');
-        lines.push('目标2预计：'+(Number(ex.tp2Net)>=0?'+':'')+Number(ex.tp2Net).toFixed(2)+'U');
+        if(x.mode==='TREND_RETEST'){
+          lines.push('目标1：到价卖30%');
+          lines.push('目标2：到价再卖30%');
+          lines.push('剩下40%继续跑');
+          if(Number.isFinite(Number(ex.runner3Net))) lines.push('如果剩下跑到约3R：整单约 '+(Number(ex.runner3Net)>=0?'+':'')+Number(ex.runner3Net).toFixed(2)+'U');
+        }
       }
       if(Number.isFinite(Number(x.qualityScore))) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
