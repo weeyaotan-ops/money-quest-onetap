@@ -9,6 +9,7 @@
 # Entry confirmation + live entry guard + strict cost filter 2026-10-05
 # Redeploy after entry-confirmation test alignment 2026-10-05
 # Simple UI: four-button foolproof Telegram mode 2026-10-05
+# Redeploy after simplified UI test update 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
