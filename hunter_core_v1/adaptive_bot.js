@@ -93,6 +93,7 @@ function keyboard(){
 function settingsKeyboard(){
   return {inline_keyboard:[
     [{text:'💵 200U',callback_data:'cap:200'},{text:'💵 250U',callback_data:'cap:250'},{text:'💵 300U',callback_data:'cap:300'}],
+    [{text:'✏️ 输入实际资金',callback_data:'cap:custom'}],
     [{text:'🌍 市场资料',callback_data:'market'},{text:'🧠 高级分析',callback_data:'intel'}],
     [{text:'📡 系统状态',callback_data:'system'},{text:'📚 学习数据',callback_data:'learn'}],
     [{text:'🏠 主页',callback_data:'start'}]
@@ -140,6 +141,7 @@ function nowText(){
       lines.push('目标2：'+fmt(x.tp2,x.symbol));
       if(x.mode==='TREND_RETEST') lines.push('到目标1卖30% · 目标2再卖30% · 剩40%继续跑');
       if(ex.valid){
+        lines.push('风险模式：'+String(ex.riskLabel||'标准滚雪球')+' · '+(Number(ex.riskPct||0.0075)*100).toFixed(2)+'%');
         lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
         if(x.mode==='TREND_RETEST'){
           lines.push('目标1：到价卖30%');
@@ -298,20 +300,32 @@ function learnText(){
   lines.push('','学习只负责发现问题，不会自动改 Live。');
   return lines.join('\n');
 }
+function snowballUiStatus(state){
+  const equity=Math.max(1,Number(state&&state.settings&&state.settings.equityUsdt)||250);
+  const peak=Math.max(equity,Number(state&&state.settings&&state.settings.highWaterEquity)||equity);
+  const dd=peak>0?(peak-equity)/peak:0;
+  if(dd>=0.05) return {label:'🛡️ 保护模式',riskPct:0.005,peak,dd};
+  return {label:'🚀 滚雪球 ON',riskPct:0.0075,peak,dd};
+}
 function settingsText(){
   const s=load();
   const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
+  const sb=snowballUiStatus(s);
   return [
     '⚙️ 设置','',
-    '现在本金：'+equity.toFixed(0)+'U',
-    '每单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
-    '每单风险：0.75%',
-    '最高杠杆：5x',
-    '模式：逐仓 Isolated',
+    '💰 现在资金：'+equity.toFixed(2)+'U',
+    '🏔️ 最高资金：'+sb.peak.toFixed(2)+'U',
+    sb.label,
+    sb.dd>0?'离最高点：-'+(sb.dd*100).toFixed(1)+'%':null,
     '',
-    '下面 200U / 250U / 300U 直接按就可以。',
-    '市场资料 / 高级分析 / 系统状态 平时不用看。'
-  ].join('\n');
+    '普通好单：0.75%',
+    'A+ 好单：1.00%',
+    '跌超 5%：自动降到 0.50%',
+    '最高杠杆：5x',
+    '',
+    '每次 Binance 资金变了，就按【✏️ 输入实际资金】。',
+    'Bot 会用新资金自动放大/缩小下一单。'
+  ].filter(Boolean).join('\n');
 }
 function systemText(){
   const s=load(),scan=s.lastScan||{},scanAt=Number(scan.at),now=Date.now();
@@ -355,10 +369,13 @@ function systemText(){
 async function menu(){
   const s=load();
   const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
+  const sb=snowballUiStatus(s);
   return send([
     'HUNTER','',
-    '本金：'+equity.toFixed(0)+'U',
-    '每单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
+    '资金：'+equity.toFixed(2)+'U',
+    sb.label,
+    '普通单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
+    'A+ 单最多亏：约 '+(equity*0.01).toFixed(2)+'U',
     '',
     '你只需要看 4 个按钮：',
     '🚨 现在能不能下',
@@ -370,19 +387,51 @@ async function menu(){
   ].join('\n'),keyboard());
 }
 async function setCapital(value){
-  const equity=Math.max(1,Number(value)||250);
+  const n=Number(value);
+  if(!Number.isFinite(n)||n<20||n>1000000){
+    return send('⚠️ 资金数字不对。\n例如直接输入：268.50',settingsKeyboard());
+  }
+  const equity=Math.round(n*100)/100;
   return withStateLock(async()=>{
     const s=load();
     if(!s.settings||typeof s.settings!=='object') s.settings={};
     s.settings.equityUsdt=equity;
+    s.settings.highWaterEquity=Math.max(equity,Number(s.settings.highWaterEquity)||equity);
+    s.settings.awaitingCapital=false;
+    s.settings.snowballEnabled=true;
     save(s);
-    return send('✅ 本金改成 '+equity.toFixed(0)+'U\n以后新单的杠杆、数量和最多亏多少都会自动重算。',settingsKeyboard());
+    const peak=Number(s.settings.highWaterEquity);
+    const dd=peak>0?(peak-equity)/peak:0;
+    const mode=dd>=0.05?'🛡️ 保护模式：下一单最多 0.50%':'🚀 滚雪球：普通 0.75% · A+ 1.00%';
+    return send('✅ 资金更新：'+equity.toFixed(2)+'U\n'+mode+'\n下一单会自动重新算数量。',settingsKeyboard());
   });
+}
+async function beginCapitalInput(){
+  await withStateLock(async()=>{
+    const s=load();
+    if(!s.settings||typeof s.settings!=='object') s.settings={};
+    s.settings.awaitingCapital=true;
+    save(s);
+  });
+  return send('✏️ 直接发我你 Binance Futures 现在的实际资金。\n\n例如：268.50',settingsKeyboard());
+}
+async function handleTextInput(text){
+  const raw=String(text||'').trim();
+  const direct=raw.match(/^\/?capital\s+([0-9]+(?:\.[0-9]+)?)$/i);
+  if(direct) return setCapital(direct[1]);
+  const s=load();
+  if(s.settings&&s.settings.awaitingCapital){
+    const m=raw.match(/^([0-9]+(?:\.[0-9]+)?)\s*(?:u|usdt)?$/i);
+    if(m) return setCapital(m[1]);
+    return send('只要发数字就可以。\n例如：268.50',settingsKeyboard());
+  }
+  return null;
 }
 async function handle(action,id,message=null){
   await answer(id);
   try{
     if(String(action||'').startsWith('enter:')||String(action||'').startsWith('skip:')) return tradeAction(action,message);
+    if(action==='cap:custom') return beginCapitalInput();
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
     if(action==='settings') return send(settingsText(),settingsKeyboard());
@@ -420,7 +469,8 @@ async function setCommands(){
     {command:'now',description:'现在能不能下'},
     {command:'active',description:'我的单'},
     {command:'results',description:'成绩'},
-    {command:'settings',description:'设置'}
+    {command:'settings',description:'设置'},
+    {command:'capital',description:'更新实际资金，例如 /capital 268.5'}
   ]});
 }
 function expectedM15Close(now=Date.now()){ return Math.floor(Number(now)/M15_MS)*M15_MS; }
@@ -686,6 +736,8 @@ async function run(){
           if(String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)!==CHAT_ID){await answer(u.callback_query.id);continue;}
           await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
         }else if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID){
+          const handled=await handleTextInput(u.message.text);
+          if(handled) continue;
           const a=normalize(u.message.text); if(a) await handle(a); else await menu();
         }
       }
