@@ -18,7 +18,7 @@ const YAHOO_BASE = process.env.YAHOO_FINANCE_BASE || 'https://query1.finance.yah
 const XAUS_BASE = process.env.XAUS_API_BASE || 'https://xaus.com';
 const MAX_FEED_BEHIND_MS = Number(process.env.ADAPTIVE_MAX_FEED_BEHIND_MS || 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
-const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
+const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.0075);
 const EQUITY_USDT = Math.max(1, Number(process.env.ADAPTIVE_EQUITY_USDT || 250));
 const MAX_LEVERAGE = Math.max(1, Math.floor(Number(process.env.ADAPTIVE_MAX_LEVERAGE || 5)));
 const MAX_MARGIN_FRACTION = Math.min(0.95, Math.max(0.10, Number(process.env.ADAPTIVE_MAX_MARGIN_FRACTION || 0.60)));
@@ -83,6 +83,20 @@ function executionPlan(s,equityUsdt=EQUITY_USDT){
   const tp2Fees=quantity*(entry+tp2)*TAKER_FEE_RATE;
   const tp1Net=tp1Gross-tp1Fees-estSlippage;
   const tp2Net=tp2Gross-tp2Fees-estSlippage;
+  const riskDistance=Math.abs(entry-stop);
+  const runner3Price=s.side==='SHORT'?entry-3*riskDistance:entry+3*riskDistance;
+  const stagedGrossBe=0.3*quantity*Math.abs(tp1-entry)+0.3*quantity*Math.abs(tp2-entry);
+  const stagedFeesBe=quantity*entry*TAKER_FEE_RATE+
+    0.3*quantity*tp1*TAKER_FEE_RATE+
+    0.3*quantity*tp2*TAKER_FEE_RATE+
+    0.4*quantity*entry*TAKER_FEE_RATE;
+  const stagedTp2Net=stagedGrossBe-stagedFeesBe-estSlippage;
+  const stagedGross3R=stagedGrossBe+0.4*quantity*Math.abs(runner3Price-entry);
+  const stagedFees3R=quantity*entry*TAKER_FEE_RATE+
+    0.3*quantity*tp1*TAKER_FEE_RATE+
+    0.3*quantity*tp2*TAKER_FEE_RATE+
+    0.4*quantity*runner3Price*TAKER_FEE_RATE;
+  const runner3Net=stagedGross3R-stagedFees3R-estSlippage;
   const tp1MoveRate=Math.abs(tp1-entry)/entry;
   const tp2Cost=Math.max(0,tp2Gross-tp2Net);
   const tp2CostShare=tp2Gross>0?tp2Cost/tp2Gross:1;
@@ -99,7 +113,7 @@ function executionPlan(s,equityUsdt=EQUITY_USDT){
     marginMode:'ISOLATED',leverage,maxLeverage:MAX_LEVERAGE,
     maxMarginFraction:MAX_MARGIN_FRACTION,quantity,qtyDecimals,notional,initialMargin,
     takerFeeRate:TAKER_FEE_RATE,slippageBufferRate:SLIPPAGE_BUFFER_RATE,
-    stopRate,frictionRate,estMaxLoss,tp1Net,tp2Net,tp2Gross,tp2CostShare,minTp2Net,costReason
+    stopRate,frictionRate,estMaxLoss,tp1Net,tp2Net,stagedTp2Net,runner3Net,runner3Price,tp2Gross,tp2CostShare,minTp2Net,costReason
   };
 }
 
@@ -465,7 +479,7 @@ function retestSignal(snap,armed,box,reg){
     const swing=Math.min(...xs.map(x=>x.low)); const stop=swing-0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
     const risk=cur.close-stop;
-    return {mode:'TREND_RETEST',side:'LONG',entry:cur.close,stop,tp1:cur.close+risk,tp2:cur.close+2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'40%@1R · 30%@2R · 30% Runner'};
+    return {mode:'TREND_RETEST',side:'LONG',entry:cur.close,stop,tp1:cur.close+risk,tp2:cur.close+2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
   }else{
     const touched=cur.high>=box.low-0.25*a && cur.high<=box.low+0.60*a;
     const reclaimed=cur.close<box.low && vwapGate('SHORT',cur.close,vwap) && cur.close<=cur.open;
@@ -473,7 +487,7 @@ function retestSignal(snap,armed,box,reg){
     const swing=Math.max(...xs.map(x=>x.high)); const stop=swing+0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
     const risk=stop-cur.close;
-    return {mode:'TREND_RETEST',side:'SHORT',entry:cur.close,stop,tp1:cur.close-risk,tp2:cur.close-2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'40%@1R · 30%@2R · 30% Runner'};
+    return {mode:'TREND_RETEST',side:'SHORT',entry:cur.close,stop,tp1:cur.close-risk,tp2:cur.close-2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
   }
 }
 function rangeSignal(snap,box,reg){
@@ -565,11 +579,11 @@ function lifecycleMessage(t,event){
   const head=t.symbol+' · '+(t.side==='LONG'?'做多':'做空');
   if(event==='EXPIRED') return ['⌛ 太迟了，这单不要','',head,'进场时间已经过了。','不要追，等下一单。'].join('\n');
   if(event==='TP1'){
-    const pct=t.mode==='TREND_RETEST'?'40%':'50%';
+    const pct=t.mode==='TREND_RETEST'?'30%':'50%';
     return ['✅ 到目标1','',head,'现在卖 '+pct,'止损拉到入场价，剩下继续跑。'].join('\n');
   }
   if(event==='TP2'){
-    if(t.mode==='TREND_RETEST') return ['✅ 到目标2','',head,'再卖 30%','剩下 30% 继续跑，Bot 会帮你盯。'].join('\n');
+    if(t.mode==='TREND_RETEST') return ['✅ 到目标2','',head,'再卖 30%','剩下 40% 继续跑，Bot 会帮你盯。'].join('\n');
     return ['✅ 到目标2','',head,'剩下 50% 全部卖掉。','这单完成。'].join('\n');
   }
   if(event==='SL') return ['❌ 止损了','',head,'这单结束。','不要马上追回去。'].join('\n');
@@ -578,7 +592,7 @@ function lifecycleMessage(t,event){
     return ['🏁 剩下仓位已离场','',head,'这单完成。'].join('\n');
   }
   if(event==='AMBIGUOUS') return ['⚠️ 这根K线看不清先后','',head,'同一根K线同时碰到止损和目标。','Bot 不乱算结果。'].join('\n');
-  if(event==='RUNNER') return ['🏃 剩下30%继续跑','',head,'目标2已到，Bot 继续帮你盯剩余仓位。'].join('\n');
+  if(event==='RUNNER') return ['🏃 剩下40%继续跑','',head,'目标2已到，Bot 继续帮你盯剩余仓位。'].join('\n');
   return null;
 }
 async function flushAlerts(state){
@@ -617,7 +631,7 @@ function updateTrade(t,candles,now=Date.now()){
       if(t.tp1Hit&&!t.tp2Hit&&stopHit){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance; t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1; changed=true; break; }
       if(t2){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance; t.tp2Hit=true;t.status='TP2';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.5*r1+0.5*r2;changed=true;break; }
     }else{
-      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ t.status='TP1_BE';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.4;changed=true;break; }
+      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ t.status='TP1_BE';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3;changed=true;break; }
       if(!t.tp2Hit&&t2){ t.tp2Hit=true;t.runnerActive=true;t.status='RUNNER';t.actionState='RUNNER';t.stop=t.entry;changed=true; }
       if(t.runnerActive){
         const history=candles.filter(x=>x.openTime<=c.openTime).slice(-30); const e20=ema20At(history); const a=atr(history,14);
@@ -628,7 +642,7 @@ function updateTrade(t,candles,now=Date.now()){
           const trailHit=t.side==='LONG'?c.low<=t.runnerTrail:c.high>=t.runnerTrail;
           if(trailHit){
             const rr=t.side==='LONG'?(t.runnerTrail-t.entry)/t.riskDistance:(t.entry-t.runnerTrail)/t.riskDistance;
-            t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.4+0.6+0.3*rr;changed=true;break;
+            t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3+0.6+0.4*rr;changed=true;break;
           }
         }
       }
@@ -670,7 +684,7 @@ function updateTradePrice(t,price,now=Date.now()){
       }else{
         const liveStopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
         if(t.tp1Hit&&!t.tp2Hit&&liveStopHit){
-          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.4; changed=true;
+          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.3; changed=true;
         }else if(!t.terminal&&!t.tp2Hit&&t2){
           t.tp2Hit=true; t.runnerActive=true; t.status='RUNNER'; t.actionState='RUNNER'; t.stop=t.entry; changed=true;
         }
@@ -678,7 +692,7 @@ function updateTradePrice(t,price,now=Date.now()){
           const trailHit=t.side==='LONG'?p<=Number(t.runnerTrail):p>=Number(t.runnerTrail);
           if(trailHit){
             const rr=t.side==='LONG'?(Number(t.runnerTrail)-t.entry)/t.riskDistance:(t.entry-Number(t.runnerTrail))/t.riskDistance;
-            t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.4+0.6+0.3*rr; changed=true;
+            t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.3+0.6+0.4*rr; changed=true;
           }
         }
       }
@@ -764,8 +778,10 @@ function signalMessage(s){
     '',
     '本金：'+ex.equityUsdt.toFixed(0)+'U',
     '这单最多亏：约 '+ex.estMaxLoss.toFixed(2)+'U',
-    '目标1预计净赚：'+(ex.tp1Net>=0?'+':'')+ex.tp1Net.toFixed(2)+'U',
-    '目标2预计净赚：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+'U',
+    '目标1：到价卖 30%',
+    '目标2：到价再卖 30%',
+    '剩下：40% 继续跑',
+    '若剩余跑到约3R：预计整单净赚 '+(ex.runner3Net>=0?'+':'')+ex.runner3Net.toFixed(2)+'U',
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
     '有效到：'+sgtTime(expires)+' SGT',
