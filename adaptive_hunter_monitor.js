@@ -136,7 +136,7 @@ function signalIdFor(s){
 function signalKeyboard(s){
   const id=String(s&&s.signalId||signalIdFor(s));
   return {inline_keyboard:[[
-    {text:'🚀 One Tap 下单',callback_data:'enter:'+id},
+    {text:'✅ 我已手动进场',callback_data:'enter:'+id},
     {text:'⏭️ Skip',callback_data:'skip:'+id}
   ]]};
 }
@@ -804,7 +804,8 @@ function signalMessage(s){
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
     '有效到：'+sgtTime(expires)+' SGT',
-    '想做就按【🚀 One Tap 下单】',
+    '先在 Binance 手动下单',
+    '成交后按【✅ 我已手动进场】',
     '不做就按【⏭️ Skip】'
   ].filter(Boolean).join('\n');
 }
