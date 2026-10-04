@@ -48,7 +48,7 @@ function fmt(x,symbol){
 function qtyStep(symbol){
   if(symbol==='BTCUSDT') return 0.001;
   if(symbol==='ETHUSDT') return 0.001;
-  if(symbol==='SOLUSDT') return 0.1;
+  if(symbol==='SOLUSDT') return 0.01;
   return 0.001;
 }
 function floorStep(value,step){
@@ -136,7 +136,7 @@ function signalIdFor(s){
 function signalKeyboard(s){
   const id=String(s&&s.signalId||signalIdFor(s));
   return {inline_keyboard:[[
-    {text:'✅ 已进场',callback_data:'enter:'+id},
+    {text:'🚀 One Tap 下单',callback_data:'enter:'+id},
     {text:'⏭️ Skip',callback_data:'skip:'+id}
   ]]};
 }
@@ -349,17 +349,21 @@ async function xausGoldSnapshot(now){
   return {symbol:'XAUUSD',provider:'XAUS_SPOT',m15,h4};
 }
 async function goldSnapshot(now){
-  const [xausResult,dukaResult,yahooResult]=await Promise.allSettled([
+  const [binanceGoldResult,xausResult,dukaResult,yahooResult]=await Promise.allSettled([
+    Promise.all([binanceCandles('XAUUSDT','15m',300,now),binanceCandles('XAUUSDT','4h',120,now)])
+      .then(([m15,h4])=>({symbol:'XAUUSD',provider:'BINANCE_XAUUSDT',m15,h4})),
     xausGoldSnapshot(now),
     Promise.all([duka('XAUUSD','m15',7,now),duka('XAUUSD','h1',30,now)])
       .then(([m15,h1])=>({symbol:'XAUUSD',provider:'DUKASCOPY',m15,h4:aggregateH4(h1)})),
     yahooGoldSnapshot(now)
   ]);
   const candidates=[];
+  if(binanceGoldResult.status==='fulfilled') candidates.push(binanceGoldResult.value);
   if(xausResult.status==='fulfilled') candidates.push(xausResult.value);
   if(dukaResult.status==='fulfilled') candidates.push(dukaResult.value);
   if(yahooResult.status==='fulfilled') candidates.push(yahooResult.value);
   const feedErrors=[
+    binanceGoldResult.status==='rejected'?'BINANCE_XAU:'+(binanceGoldResult.reason?.message||'failed'):null,
     xausResult.status==='rejected'?'XAUS:'+(xausResult.reason?.message||'failed'):null,
     dukaResult.status==='rejected'?'DUKA:'+(dukaResult.reason?.message||'failed'):null,
     yahooResult.status==='rejected'?'YAHOO:'+(yahooResult.reason?.message||'failed'):null
@@ -796,7 +800,7 @@ function signalMessage(s){
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
     '有效到：'+sgtTime(expires)+' SGT',
-    '成交后按【✅ 已进场】',
+    '想做就按【🚀 One Tap 下单】',
     '不做就按【⏭️ Skip】'
   ].filter(Boolean).join('\n');
 }
