@@ -24,6 +24,7 @@ const MAX_LEVERAGE = Math.max(1, Math.floor(Number(process.env.ADAPTIVE_MAX_LEVE
 const MAX_MARGIN_FRACTION = Math.min(0.95, Math.max(0.10, Number(process.env.ADAPTIVE_MAX_MARGIN_FRACTION || 0.60)));
 const TAKER_FEE_RATE = Math.max(0, Number(process.env.ADAPTIVE_TAKER_FEE_RATE || 0.0005));
 const SLIPPAGE_BUFFER_RATE = Math.max(0, Number(process.env.ADAPTIVE_SLIPPAGE_BUFFER_RATE || 0.0002));
+const LIVE_LIFECYCLE = String(process.env.ADAPTIVE_LIVE_LIFECYCLE || '') === '1';
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
@@ -54,14 +55,15 @@ function floorStep(value,step){
   if(!(step>0)||!Number.isFinite(Number(value))) return Number(value);
   return Math.floor((Number(value)+1e-12)/step)*step;
 }
-function executionPlan(s){
+function executionPlan(s,equityUsdt=EQUITY_USDT){
   const entry=Number(s&&s.entry),stop=Number(s&&s.stop),tp1=Number(s&&s.tp1),tp2=Number(s&&s.tp2);
   if(![entry,stop,tp1,tp2].every(Number.isFinite)||entry<=0) return {valid:false,costOk:false};
   const stopRate=Math.abs(entry-stop)/entry;
   const frictionRate=2*TAKER_FEE_RATE+SLIPPAGE_BUFFER_RATE;
   const riskRate=stopRate+frictionRate;
-  const riskBudget=EQUITY_USDT*RISK_PCT;
-  const maxMargin=EQUITY_USDT*MAX_MARGIN_FRACTION;
+  const capital=Math.max(1,Number(equityUsdt)||EQUITY_USDT);
+  const riskBudget=capital*RISK_PCT;
+  const maxMargin=capital*MAX_MARGIN_FRACTION;
   let notional=riskRate>0?riskBudget/riskRate:0;
   notional=Math.min(notional,maxMargin*MAX_LEVERAGE);
   let leverage=Math.ceil(notional/Math.max(maxMargin,1e-9));
@@ -85,7 +87,7 @@ function executionPlan(s){
   const costOk=quantity>0&&tp1MoveRate>frictionRate&&tp1Net>0;
   const qtyDecimals=step>=1?0:Math.max(0,String(step).split('.')[1]?.length||0);
   return {
-    valid:true,costOk,equityUsdt:EQUITY_USDT,riskPct:RISK_PCT,riskBudget,
+    valid:true,costOk,equityUsdt:capital,riskPct:RISK_PCT,riskBudget,
     marginMode:'ISOLATED',leverage,maxLeverage:MAX_LEVERAGE,
     maxMarginFraction:MAX_MARGIN_FRACTION,quantity,qtyDecimals,notional,initialMargin,
     takerFeeRate:TAKER_FEE_RATE,slippageBufferRate:SLIPPAGE_BUFFER_RATE,
@@ -587,7 +589,7 @@ function updateTrade(t,candles,now=Date.now()){
     }
     t.lastOpenTime=c.openTime;
   }
-  if(!t.terminal&&t.actionState==='ACTIONABLE'&&Number.isFinite(Number(t.entryExpiresAtMs))&&Number(now)>=Number(t.entryExpiresAtMs)){
+  if(!LIVE_LIFECYCLE&&!t.terminal&&t.actionState==='ACTIONABLE'&&Number.isFinite(Number(t.entryExpiresAtMs))&&Number(now)>=Number(t.entryExpiresAtMs)){
     t.actionState='EXPIRED'; t.expiredAtMs=Number(t.entryExpiresAtMs); if(t.status==='ACTIONABLE') t.status='EXPIRED'; changed=true;
   }
   return changed;
@@ -734,6 +736,7 @@ function signalMessage(s){
 }
 async function cycle(now=Date.now()){
   const state=loadState(),date=sgtDate(now);
+  const equityUsdt=Math.max(1,Number(state.settings&&state.settings.equityUsdt)||EQUITY_USDT);
   const results=await Promise.allSettled(SYMBOLS.map(s=>snapshot(s,now)));
   const snaps=[]; const errors=[];
   results.forEach((r,i)=>{if(r.status==='fulfilled')snaps.push(r.value);else errors.push({symbol:SYMBOLS[i],error:String(r.reason&&r.reason.message||r.reason)});});
@@ -842,15 +845,19 @@ async function cycle(now=Date.now()){
   }
   await flushAlerts(state);
   for(const s of candidates){
-    s.execution=executionPlan(s);
+    s.execution=executionPlan(s,equityUsdt);
     try{
       if(await telegram(signalMessage(s))){
-        state.sent[s.key]={atMs:now,symbol:s.symbol,side:s.side};
-        state.trades[s.key]=tradeFromSignal(s);
+        state.sent[s.key]={atMs:now,symbol:s.symbol,side:s.side,costOk:Boolean(s.execution&&s.execution.costOk)};
+        if(s.execution&&s.execution.costOk){
+          state.trades[s.key]=tradeFromSignal(s);
+        }else{
+          state.trades[s.key]={...tradeFromSignal(s),status:'SKIPPED_COST',actionState:'CLOSED',terminal:true,realizedR:null,skippedReason:'COST'};
+        }
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||executionPlan(x),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||executionPlan(x,equityUsdt),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
