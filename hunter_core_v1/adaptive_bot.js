@@ -20,8 +20,8 @@ const LIVE_PRICE_TIMEOUT_MS=Math.max(1500,Number(process.env.ADAPTIVE_LIVE_PRICE
 const BINANCE_BASE=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const OKX_BASE=process.env.OKX_REST_BASE||'https://www.okx.com';
 const YAHOO_BASE=process.env.YAHOO_FINANCE_BASE||'https://query1.finance.yahoo.com';
-const BINANCE_API_KEY=String(process.env.BINANCE_API_KEY||'');
-const BINANCE_API_SECRET=String(process.env.BINANCE_API_SECRET||'');
+const BINANCE_API_KEY=String(process.env.BINANCE_API_KEY||process.env.EXCHANGE_API_KEY||'');
+const BINANCE_API_SECRET=String(process.env.BINANCE_API_SECRET||process.env.EXCHANGE_API_SECRET||'');
 const BINANCE_LIVE_TRADING=String(process.env.BINANCE_LIVE_TRADING||'0')==='1';
 const BINANCE_AUTO_BALANCE=String(process.env.BINANCE_AUTO_BALANCE||'1')==='1';
 
