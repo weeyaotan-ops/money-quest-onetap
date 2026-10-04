@@ -57,10 +57,11 @@ function sgtTime(ts){
 }
 function fmt(x,symbol){
   const n=Number(x); if(!Number.isFinite(n)) return 'n/a';
-  if(symbol==='XAUUSD') return n.toFixed(2);
-  if(n>=1000) return n.toFixed(2);
-  if(n>=10) return n.toFixed(3);
-  return n.toFixed(4);
+  const d={
+    BTCUSDT:1,ETHUSDT:2,SOLUSDT:2,XRPUSDT:4,BNBUSDT:2,DOGEUSDT:5,
+    LINKUSDT:3,LTCUSDT:2,AVAXUSDT:3,SUIUSDT:4,NEARUSDT:3,ZECUSDT:2,XAUUSD:2
+  }[String(symbol||'').toUpperCase()] ?? 4;
+  return n.toFixed(d);
 }
 function fmtZone(z,symbol){
   if(!z||!Number.isFinite(Number(z.low))||!Number.isFinite(Number(z.high))) return 'n/a';
@@ -330,7 +331,7 @@ function settingsText(){
     '普通好单：0.75%',
     'A+ 好单：1.00%',
     '跌超 5%：自动降到 0.50%',
-    '最高杠杆建议：5x',
+    '杠杆：Bot 自动算最低够用 · 最高 10x',
     '',
     'Binance 余额有变化时，按【✏️ 输入实际资金】更新。',
     'Bot 只给你要填的数字，不会替你下单。'
@@ -355,11 +356,12 @@ function systemText(){
     '策略：Hunter Adaptive V2 Intelligence',
     '模式：Signal only',
     '自动下单：关闭',
-    '交易市场：XAUUSD / BTC / ETH / SOL',
+    '交易市场：XAU / BTC / ETH / SOL / XRP / BNB / DOGE / LINK / LTC / AVAX / SUI / NEAR / ZEC',
     '本金：'+equity.toFixed(2)+'U',
     'Snowball：ON',
     '资金：手动更新',
     'Risk：'+(sb.riskPct*100).toFixed(2)+'% base · A+最高 1.00%',
+    'Leverage：自动选最低够用 · Hard cap 10x',
     'Daily kill：-2R',
     '',
     '最后扫描：'+sgtTime(scan.at)+' SGT',
