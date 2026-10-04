@@ -482,7 +482,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function boot() {
-  if (!C.JUPITER_API_KEY) throw new Error('MISSING_JUPITER_API_KEY');
+  if (LIVE && !C.JUPITER_API_KEY) throw new Error('MISSING_JUPITER_API_KEY');
   if (LIVE && !C.BS58_PRIVATE_KEY) throw new Error('MISSING_BS58_PRIVATE_KEY');
   new PublicKey(TARGET);
 
