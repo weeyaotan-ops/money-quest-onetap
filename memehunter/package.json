@@ -1,11 +1,11 @@
 {
   "name": "solana-memehunter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/engine.js && node --check src/jupiter.js && node --check src/solana.js && node --check src/rugcheck.js && node --check src/discovery.js && node --check src/db.js && node --check src/telegram.js",
+    "start": "node src/decu_mirror.js",
+    "check": "node --check src/decu_mirror.js && node --check src/config.js && node --check src/solana.js && node --check src/telegram.js",
     "wallet:new": "node scripts/create-wallet.js"
   },
   "engines": {
