@@ -814,6 +814,76 @@ async function executeOneTap(t,quotePrice){
     throw new Error('保护单设置失败，已尝试紧急平仓：'+e.message);
   }
 }
+async function binancePositionQty(t){
+  if(!t||!t.binance) return 0;
+  const rows=await binanceSigned('GET','/fapi/v3/positionRisk',{symbol:t.binance.symbol||binanceSymbol(t.symbol)});
+  const xs=Array.isArray(rows)?rows:[rows];
+  const ps=String(t.binance.positionSide||'BOTH');
+  const row=xs.find(x=>String(x&&x.positionSide||'BOTH')===ps)||xs[0];
+  return Math.abs(Number(row&&row.positionAmt)||0);
+}
+async function replaceAutoStop(t,triggerPrice,label='BE'){
+  if(!t||!t.autoManaged||!t.binance) return false;
+  const rules=await binanceRules(t.symbol);
+  const price=roundToStep(Number(triggerPrice),rules.tickSize);
+  if(!(price>0)) return false;
+  const old=t.binance.slAlgoId;
+  const side=t.side==='LONG'?'SELL':'BUY';
+  const newStop=await placeBinanceAlgo({
+    algoType:'CONDITIONAL',
+    symbol:rules.symbol,
+    side,
+    positionSide:t.binance.positionSide||'BOTH',
+    type:'STOP_MARKET',
+    triggerPrice:fixedStep(price,rules.tickSize),
+    closePosition:'true',
+    workingType:'MARK_PRICE',
+    clientAlgoId:clientId('H_'+label,t.signalId+'_'+Date.now().toString(36))
+  });
+  t.binance.slAlgoId=newStop.algoId||newStop.orderId||null;
+  t.binance.exchangeStopPrice=price;
+  if(old&&old!==t.binance.slAlgoId) await cancelBinanceAlgo(old);
+  return true;
+}
+async function syncAutoProtection(t){
+  if(!t||!t.autoManaged||!t.binance||t.terminal) return;
+  if(t.tp1Hit&&!t.binance.beStopSynced){
+    try{
+      await replaceAutoStop(t,t.entry,'BE');
+      t.binance.beStopSynced=true;
+    }catch(e){
+      queueAlert(load(),'AUTO_BE_FAIL|'+t.key,'⚠️ '+t.symbol+' 保本止损同步失败，请检查 Binance。',Date.now());
+      console.error(JSON.stringify({bot:VERSION,autoProtect:'BE_FAIL',symbol:t.symbol,error:e.message}));
+    }
+  }
+  if(t.runnerActive&&Number.isFinite(Number(t.runnerTrail))){
+    const next=Number(t.runnerTrail),last=Number(t.binance.runnerStopSynced);
+    const rules=await binanceRules(t.symbol);
+    if(!Number.isFinite(last)||Math.abs(next-last)>=rules.tickSize*0.5){
+      try{
+        await replaceAutoStop(t,next,'TRAIL');
+        t.binance.runnerStopSynced=next;
+      }catch(e){
+        console.error(JSON.stringify({bot:VERSION,autoProtect:'TRAIL_FAIL',symbol:t.symbol,error:e.message}));
+      }
+    }
+  }
+}
+async function cleanupAutoIfFlat(t){
+  if(!t||!t.autoManaged||!t.binance) return;
+  try{
+    const q=await binancePositionQty(t);
+    if(q>0) return;
+    await Promise.all([
+      cancelBinanceOrder(t.symbol,t.binance.tp1OrderId),
+      cancelBinanceOrder(t.symbol,t.binance.tp2OrderId),
+      cancelBinanceAlgo(t.binance.slAlgoId)
+    ]);
+    t.binance.cleanedAtMs=Date.now();
+  }catch(e){
+    console.error(JSON.stringify({bot:VERSION,autoCleanup:'ERROR',symbol:t.symbol,error:e.message}));
+  }
+}
 function entryStateAlert(t,d){
   const p=Number(d&&d.price);
   const nowPrice=Number.isFinite(p)?fmt(p,t.symbol):'n/a';
@@ -992,15 +1062,21 @@ async function fastLifecycleOnce(){
         const shouldAlert=(d.state==='DO_NOT_CHASE'&&prev!=='DO_NOT_CHASE')||
           (d.state==='ENTER'&&prev==='DO_NOT_CHASE')||
           (['EXPIRED','INVALID'].includes(d.state)&&prev!==d.state);
-        if(shouldAlert){
-          queueAlert(state,'ENTRY|'+t.key+'|'+d.state+'|'+now,entryStateAlert(t,d),now);
-        }
+        if(shouldAlert) queueAlert(state,'ENTRY|'+t.key+'|'+d.state+'|'+now,entryStateAlert(t,d),now);
         continue;
       }
       const before=lifecycleSnapshot(t);
       updateTradePrice(t,px,now);
-      for(const event of lifecycleEvents(before,t)){
+      if(t.autoManaged){
+        try{await syncAutoProtection(t);}
+        catch(e){console.error(JSON.stringify({bot:VERSION,autoProtect:'ERROR',symbol:t.symbol,error:e.message}));}
+      }
+      const events=lifecycleEvents(before,t);
+      for(const event of events){
         queueAlert(state,'LIVE|TRADE|'+t.key+'|'+event,lifecycleMessage(t,event),now);
+      }
+      if(t.autoManaged&&t.terminal){
+        await cleanupAutoIfFlat(t);
       }
     }
     state.liveLifecycle={
@@ -1014,6 +1090,7 @@ async function fastLifecycleOnce(){
     save(state);
   });
 }
+
 async function fastLifecycleLoop(stopAt){
   while(Date.now()<stopAt){
     const started=Date.now();
