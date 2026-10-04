@@ -55,14 +55,15 @@ function floorStep(value,step){
   if(!(step>0)||!Number.isFinite(Number(value))) return Number(value);
   return Math.floor((Number(value)+1e-12)/step)*step;
 }
-function executionPlan(s,equityUsdt=EQUITY_USDT){
+function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
   const entry=Number(s&&s.entry),stop=Number(s&&s.stop),tp1=Number(s&&s.tp1),tp2=Number(s&&s.tp2);
   if(![entry,stop,tp1,tp2].every(Number.isFinite)||entry<=0) return {valid:false,costOk:false};
   const stopRate=Math.abs(entry-stop)/entry;
   const frictionRate=2*TAKER_FEE_RATE+SLIPPAGE_BUFFER_RATE;
   const riskRate=stopRate+frictionRate;
   const capital=Math.max(1,Number(equityUsdt)||EQUITY_USDT);
-  const riskBudget=capital*RISK_PCT;
+  const appliedRiskPct=Math.min(0.02,Math.max(0.001,Number(riskPct)||RISK_PCT));
+  const riskBudget=capital*appliedRiskPct;
   const maxMargin=capital*MAX_MARGIN_FRACTION;
   let notional=riskRate>0?riskBudget/riskRate:0;
   notional=Math.min(notional,maxMargin*MAX_LEVERAGE);
@@ -109,7 +110,7 @@ function executionPlan(s,equityUsdt=EQUITY_USDT){
   const costOk=costReason==='OK';
   const qtyDecimals=step>=1?0:Math.max(0,String(step).split('.')[1]?.length||0);
   return {
-    valid:true,costOk,equityUsdt:capital,riskPct:RISK_PCT,riskBudget,
+    valid:true,costOk,equityUsdt:capital,riskPct:appliedRiskPct,riskBudget,
     marginMode:'ISOLATED',leverage,maxLeverage:MAX_LEVERAGE,
     maxMarginFraction:MAX_MARGIN_FRACTION,quantity,qtyDecimals,notional,initialMargin,
     takerFeeRate:TAKER_FEE_RATE,slippageBufferRate:SLIPPAGE_BUFFER_RATE,
@@ -117,6 +118,15 @@ function executionPlan(s,equityUsdt=EQUITY_USDT){
   };
 }
 
+function snowballRisk(signal,equityUsdt,highWaterEquity){
+  const equity=Math.max(1,Number(equityUsdt)||EQUITY_USDT);
+  const peak=Math.max(equity,Number(highWaterEquity)||equity);
+  const drawdown=peak>0?(peak-equity)/peak:0;
+  const score=Number(signal&&signal.intelligence&&signal.intelligence.score);
+  if(drawdown>=0.05) return {riskPct:0.005,label:'保护模式',drawdown,peak};
+  if(Number.isFinite(score)&&score>=90) return {riskPct:0.01,label:'A+ 加速',drawdown,peak};
+  return {riskPct:0.0075,label:'标准滚雪球',drawdown,peak};
+}
 function signalIdFor(s){
   const symbol=String(s&&s.symbol||'X').replace(/[^A-Z0-9]/gi,'').slice(0,12);
   const side=String(s&&s.side||'').toUpperCase()==='SHORT'?'S':'L';
@@ -777,6 +787,7 @@ function signalMessage(s){
     '目标2：'+fmt(s.tp2,s.symbol),
     '',
     '本金：'+ex.equityUsdt.toFixed(0)+'U',
+    '滚雪球：'+String(ex.riskLabel||'标准滚雪球')+' · '+(ex.riskPct*100).toFixed(2)+'%',
     '这单最多亏：约 '+ex.estMaxLoss.toFixed(2)+'U',
     '目标1：到价卖 30%',
     '目标2：到价再卖 30%',
@@ -791,7 +802,11 @@ function signalMessage(s){
 }
 async function cycle(now=Date.now()){
   const state=loadState(),date=sgtDate(now);
-  const equityUsdt=Math.max(1,Number(state.settings&&state.settings.equityUsdt)||EQUITY_USDT);
+  if(!state.settings||typeof state.settings!=='object') state.settings={};
+  const equityUsdt=Math.max(1,Number(state.settings.equityUsdt)||EQUITY_USDT);
+  const highWaterEquity=Math.max(equityUsdt,Number(state.settings.highWaterEquity)||equityUsdt);
+  state.settings.highWaterEquity=highWaterEquity;
+  state.settings.snowballEnabled=true;
   const results=await Promise.allSettled(SYMBOLS.map(s=>snapshot(s,now)));
   const snaps=[]; const errors=[];
   results.forEach((r,i)=>{if(r.status==='fulfilled')snaps.push(r.value);else errors.push({symbol:SYMBOLS[i],error:String(r.reason&&r.reason.message||r.reason)});});
@@ -900,7 +915,8 @@ async function cycle(now=Date.now()){
   }
   await flushAlerts(state);
   for(const s of candidates){
-    s.execution=executionPlan(s,equityUsdt);
+    const risk=snowballRisk(s,equityUsdt,highWaterEquity);
+    s.execution={...executionPlan(s,equityUsdt,risk.riskPct),riskLabel:risk.label,drawdown:risk.drawdown,highWaterEquity:risk.peak};
     s.signalId=signalIdFor(s);
     try{
       const sent=await telegram(signalMessage(s),s.execution&&s.execution.costOk?signalKeyboard(s):null);
@@ -914,7 +930,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||executionPlan(x,equityUsdt),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -922,4 +938,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,entryDecision,signalIdFor,signalKeyboard,executionPlan,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,executionPlan,signalMessage,cycle};
