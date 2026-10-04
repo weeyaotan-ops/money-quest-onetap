@@ -591,22 +591,26 @@ function armEndMessage(a,reason='EXPIRED'){
 }
 function lifecycleMessage(t,event){
   const head=t.symbol+' · '+(t.side==='LONG'?'做多':'做空');
+  const auto=Boolean(t.autoManaged);
   if(event==='EXPIRED') return ['⌛ 太迟了，这单不要','',head,'进场时间已经过了。','不要追，等下一单。'].join('\n');
   if(event==='TP1'){
     const pct=t.mode==='TREND_RETEST'?'30%':'50%';
+    if(auto) return ['✅ 到目标1','',head,'Bot 已自动处理 '+pct,'止损会自动拉到入场价。'].join('\n');
     return ['✅ 到目标1','',head,'现在卖 '+pct,'止损拉到入场价，剩下继续跑。'].join('\n');
   }
   if(event==='TP2'){
-    if(t.mode==='TREND_RETEST') return ['✅ 到目标2','',head,'再卖 30%','剩下 40% 继续跑，Bot 会帮你盯。'].join('\n');
+    if(t.mode==='TREND_RETEST'){
+      if(auto) return ['✅ 到目标2','',head,'Bot 已自动处理 30%','剩下 40% 自动继续跑。'].join('\n');
+      return ['✅ 到目标2','',head,'再卖 30%','剩下 40% 继续跑，Bot 会帮你盯。'].join('\n');
+    }
+    if(auto) return ['✅ 到目标2','',head,'Bot 已自动处理剩余仓位。','这单完成。'].join('\n');
     return ['✅ 到目标2','',head,'剩下 50% 全部卖掉。','这单完成。'].join('\n');
   }
-  if(event==='SL') return ['❌ 止损了','',head,'这单结束。','不要马上追回去。'].join('\n');
-  if(event==='TP1_BE') return ['🛡️ 保本离场','',head,'目标1已经拿到，剩下的在入场价离场。','这单结束。'].join('\n');
-  if(event==='RUNNER_EXIT'){
-    return ['🏁 剩下仓位已离场','',head,'这单完成。'].join('\n');
-  }
+  if(event==='SL') return ['❌ 止损了','',head,auto?'Binance 保护单会自动处理。':'这单结束。','不要马上追回去。'].join('\n');
+  if(event==='TP1_BE') return ['🛡️ 保本离场','',head,'目标1已经拿到，剩下仓位在入场价保护。','这单结束。'].join('\n');
+  if(event==='RUNNER_EXIT') return ['🏁 剩下仓位已离场','',head,'这单完成。'].join('\n');
   if(event==='AMBIGUOUS') return ['⚠️ 这根K线看不清先后','',head,'同一根K线同时碰到止损和目标。','Bot 不乱算结果。'].join('\n');
-  if(event==='RUNNER') return ['🏃 剩下40%继续跑','',head,'目标2已到，Bot 继续帮你盯剩余仓位。'].join('\n');
+  if(event==='RUNNER') return ['🏃 剩下40%继续跑','',head,auto?'Bot 会自动跟着保护。':'Bot 继续帮你盯剩余仓位。'].join('\n');
   return null;
 }
 async function flushAlerts(state){
