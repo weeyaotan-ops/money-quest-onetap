@@ -563,23 +563,22 @@ function armEndMessage(a,reason='EXPIRED'){
 }
 function lifecycleMessage(t,event){
   const head=t.symbol+' · '+(t.side==='LONG'?'做多':'做空');
-  if(event==='EXPIRED') return ['⌛ ENTRY EXPIRED','',head,'进场窗口已结束。','未进场：跳过，不要追。','已进场：继续按原 SL / TP 管理。'].join('\n');
+  if(event==='EXPIRED') return ['⌛ 太迟了，这单不要','',head,'进场时间已经过了。','不要追，等下一单。'].join('\n');
   if(event==='TP1'){
     const pct=t.mode==='TREND_RETEST'?'40%':'50%';
-    return ['✅ TP1 HIT','',head,'先止盈 '+pct,'SL → Entry（BE）','剩余仓位继续跑 TP2。'].join('\n');
+    return ['✅ 到目标1','',head,'现在卖 '+pct,'止损拉到入场价，剩下继续跑。'].join('\n');
   }
   if(event==='TP2'){
-    if(t.mode==='TREND_RETEST') return ['✅ TP2 HIT','',head,'再止盈 30%','剩余 30% → Runner','Runner 用动态 Trail 管理。'].join('\n');
-    return ['✅ TP2 HIT','',head,'剩余 50% 止盈。','这单完成。'].join('\n');
+    if(t.mode==='TREND_RETEST') return ['✅ 到目标2','',head,'再卖 30%','剩下 30% 继续跑，Bot 会帮你盯。'].join('\n');
+    return ['✅ 到目标2','',head,'剩下 50% 全部卖掉。','这单完成。'].join('\n');
   }
-  if(event==='SL') return ['❌ SL HIT','',head,'结构失效，停止这单。','纸面结果：-1R'].join('\n');
-  if(event==='TP1_BE') return ['🟦 BE EXIT','',head,'TP1 已拿到，剩余仓位在 Entry 保本离场。','这单结束。'].join('\n');
+  if(event==='SL') return ['❌ 止损了','',head,'这单结束。','不要马上追回去。'].join('\n');
+  if(event==='TP1_BE') return ['🛡️ 保本离场','',head,'目标1已经拿到，剩下的在入场价离场。','这单结束。'].join('\n');
   if(event==='RUNNER_EXIT'){
-    const rr=Number(t.realizedR);
-    return ['🏁 RUNNER EXIT','',head,Number.isFinite(rr)?'纸面结果：'+(rr>=0?'+':'')+rr.toFixed(2)+'R':'Runner 已触发动态退出。','这单完成。'].join('\n');
+    return ['🏁 剩下仓位已离场','',head,'这单完成。'].join('\n');
   }
-  if(event==='AMBIGUOUS') return ['⚠️ CANDLE AMBIGUOUS','',head,'同一根 M15 同时触及 SL / TP，无法确认先后。','这单不计入确定结果。'].join('\n');
-  if(event==='RUNNER') return ['🏃 RUNNER ACTIVE','',head,'TP2 已完成，剩余仓位进入 Runner。'].join('\n');
+  if(event==='AMBIGUOUS') return ['⚠️ 这根K线看不清先后','',head,'同一根K线同时碰到止损和目标。','Bot 不乱算结果。'].join('\n');
+  if(event==='RUNNER') return ['🏃 剩下30%继续跑','',head,'目标2已到，Bot 继续帮你盯剩余仓位。'].join('\n');
   return null;
 }
 async function flushAlerts(state){
@@ -730,62 +729,49 @@ function qualityText(intel){
   return score.toFixed(0)+'/100 · '+zh;
 }
 function signalMessage(s){
-  const icon=s.side==='LONG'?'🟢':'🔴';
-  const guard=chaseGuard(s);
   const ex=s.execution||executionPlan(s);
   const expires=Number(s.signalAtMs)+ENTRY_VALID_MS;
-  const intel=s.intelligence||{};
-  const liq=intel.liquidity||{};
-  const zones=intel.zones||{};
-  const decision=s.decision||decisionLabel(s,intel,Boolean(s.isReentry));
+  const score=Number(s.intelligence&&s.intelligence.score);
+  const side=s.side==='LONG'?'做多 LONG':'做空 SHORT';
+  const qtyUnit=String(s.symbol||'').replace('USDT','');
+  if(!ex.costOk){
+    return [
+      '❌ 这单不要做',
+      '',
+      s.symbol+' · '+side,
+      '原因：'+String(ex.costReason||'手续费和利润不划算'),
+      '',
+      '入场：'+fmt(s.entry,s.symbol),
+      '目标1：'+fmt(s.tp1,s.symbol),
+      '目标2：'+fmt(s.tp2,s.symbol),
+      '预计目标2净赚：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+'U',
+      '',
+      '结论：SKIP，等下一单。'
+    ].join('\n');
+  }
   return [
-    icon+' HUNTER ADAPTIVE V2',
-    '动作：'+decision,
-    '状态：'+(ex.costOk?'🟢 ACTIONABLE':'⛔ COST SKIP'),
+    '✅ 可以进 · '+s.symbol,
     '',
-    s.symbol+' · '+(s.side==='LONG'?'做多':'做空'),
-    '模式：'+(s.mode==='TREND_RETEST'?'趋势突破回踩':'区间扫流动性'),
-    'Session：'+s.sessionLabel,
+    '方向：'+side,
+    '逐仓：Isolated',
+    '杠杆：'+ex.leverage+'x',
+    '数量：'+ex.quantity.toFixed(ex.qtyDecimals)+' '+qtyUnit,
     '',
-    '🧠 Intelligence',
-    '质量：'+qualityText(intel),
-    '结构：H4 '+biasText(intel.structure&&intel.structure.h4)+' · M15 '+biasText(intel.structure&&intel.structure.m15),
-    'BSL：'+fmt(liq.bsl,s.symbol)+' · SSL：'+fmt(liq.ssl,s.symbol),
-    'Demand：'+fmtZone(zones.demand,s.symbol),
-    'Supply：'+fmtZone(zones.supply,s.symbol),
-    intel.sweptOpposite?'流动性：✅ opposite-side sweep confirmed':'流动性：context tracked',
-    '',
-    '进场：'+fmt(s.entry,s.symbol),
-    'Limit Entry：'+fmt(guard.limitEntry,s.symbol),
-    guard.boundaryLabel+'：'+fmt(guard.chasePrice,s.symbol)+'（最多 '+guard.maxChaseR.toFixed(2)+'R）',
-    guard.skipLabel,
+    '入场：'+fmt(s.entry,s.symbol),
     '止损：'+fmt(s.stop,s.symbol),
     '目标1：'+fmt(s.tp1,s.symbol),
     '目标2：'+fmt(s.tp2,s.symbol),
-    '管理：'+s.plan,
-    '风险：'+(RISK_PCT*100).toFixed(2)+'% equity',
     '',
-    '💰 照填模式（本金 '+ex.equityUsdt.toFixed(0)+'U）',
-    'Margin：Isolated',
-    'Leverage：'+ex.leverage+'x',
-    'Order：Limit',
-    'Quantity：'+ex.quantity.toFixed(ex.qtyDecimals)+' '+String(s.symbol||'').replace('USDT',''),
-    'Position Size：约 '+ex.notional.toFixed(2)+' USDT',
-    'Initial Margin：约 '+ex.initialMargin.toFixed(2)+' USDT',
-    '最大预计亏损：约 '+ex.estMaxLoss.toFixed(2)+' USDT（含 fee/buffer）',
-    'TP1 扣成本：'+(ex.tp1Net>=0?'+':'')+ex.tp1Net.toFixed(2)+' USDT',
-    'TP2 扣成本：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+' USDT',
-    ex.costOk?'成本检查：✅ 可做':'成本检查：❌ SKIP（'+String(ex.costReason||'利润不足以覆盖成本')+'）',
+    '本金：'+ex.equityUsdt.toFixed(0)+'U',
+    '这单最多亏：约 '+ex.estMaxLoss.toFixed(2)+'U',
+    '目标1预计净赚：'+(ex.tp1Net>=0?'+':'')+ex.tp1Net.toFixed(2)+'U',
+    '目标2预计净赚：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+'U',
+    Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
-    '结构SL：约 '+s.riskAtr.toFixed(2)+'× M15 ATR',
-    '确认：'+sgtTime(s.signalAtMs)+' SGT',
-    '有效到：'+sgtTime(expires)+' SGT（约 '+Math.round(ENTRY_VALID_MS/60000)+'分钟）',
-    '过期后不要追，等下一次 setup。',
-    ex.costOk?'👇 下单成交后按【✅ 已进场】；不做就按【⏭️ Skip】':'',
-    '',
-    'Quality score 先记录验证，不改变现有核心进场规则。',
-    'Signal only · 不自动下单'
-  ].join('\n');
+    '有效到：'+sgtTime(expires)+' SGT',
+    '成交后按【✅ 已进场】',
+    '不做就按【⏭️ Skip】'
+  ].filter(Boolean).join('\n');
 }
 async function cycle(now=Date.now()){
   const state=loadState(),date=sgtDate(now);
