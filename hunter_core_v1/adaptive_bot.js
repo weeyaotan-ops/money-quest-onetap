@@ -330,6 +330,7 @@ function settingsText(){
 function systemText(){
   const s=load(),scan=s.lastScan||{},scanAt=Number(scan.at),now=Date.now();
   const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
+  const sb=snowballUiStatus(s);
   const age=scanAt?(now-scanAt)/60000:null;
   const nextDue=scanAt?nextM15ScanAt(scanAt+1):null;
   const lateBy=Number.isFinite(nextDue)?(now-nextDue)/60000:null;
@@ -346,8 +347,9 @@ function systemText(){
     '模式：Signal only',
     '自动下单：关闭',
     '交易市场：XAUUSD / BTC / ETH / SOL',
-    '本金：'+equity.toFixed(0)+'U',
-    'Risk：0.75% / signal',
+    '本金：'+equity.toFixed(2)+'U',
+    'Snowball：ON',
+    'Risk：'+(sb.riskPct*100).toFixed(2)+'% base · A+最高 1.00%',
     'Daily kill：-2R',
     '',
     '最后扫描：'+sgtTime(scan.at)+' SGT',
