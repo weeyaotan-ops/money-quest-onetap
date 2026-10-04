@@ -538,6 +538,59 @@ function updateTrade(t,candles,now=Date.now()){
   }
   return changed;
 }
+function updateTradePrice(t,price,now=Date.now()){
+  if(t.terminal) return false;
+  ensureTradeLifecycle(t);
+  let changed=false;
+  const p=Number(price);
+  if(Number.isFinite(p)){
+    const stopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
+    const t1=t.side==='LONG'?p>=Number(t.tp1):p<=Number(t.tp1);
+    const t2=t.side==='LONG'?p>=Number(t.tp2):p<=Number(t.tp2);
+
+    if(!t.tp1Hit&&stopHit){
+      t.status='SL'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=-1; changed=true;
+    }else if(!t.terminal){
+      if(!t.tp1Hit&&t1){
+        t.tp1Hit=true; changed=true; t.status='TP1'; t.actionState='MANAGING';
+        t.stop=t.entry; t.beActive=true; t.beActivatedAtMs=Number(now);
+      }
+      if(t.mode==='RANGE_SWEEP'){
+        const liveStopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
+        if(t.tp1Hit&&!t.tp2Hit&&liveStopHit){
+          const r1=Math.abs(t.tp1-t.entry)/t.riskDistance;
+          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1; changed=true;
+        }else if(!t.terminal&&t2){
+          const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance;
+          t.tp2Hit=true; t.status='TP2'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1+0.5*r2; changed=true;
+        }
+      }else{
+        const liveStopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
+        if(t.tp1Hit&&!t.tp2Hit&&liveStopHit){
+          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.4; changed=true;
+        }else if(!t.terminal&&!t.tp2Hit&&t2){
+          t.tp2Hit=true; t.runnerActive=true; t.status='RUNNER'; t.actionState='RUNNER'; t.stop=t.entry; changed=true;
+        }
+        if(!t.terminal&&t.runnerActive&&Number.isFinite(Number(t.runnerTrail))){
+          const trailHit=t.side==='LONG'?p<=Number(t.runnerTrail):p>=Number(t.runnerTrail);
+          if(trailHit){
+            const rr=t.side==='LONG'?(Number(t.runnerTrail)-t.entry)/t.riskDistance:(t.entry-Number(t.runnerTrail))/t.riskDistance;
+            t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.4+0.6+0.3*rr; changed=true;
+          }
+        }
+      }
+    }
+    t.lastLivePrice=p;
+    t.lastLivePriceAtMs=Number(now);
+  }
+
+  if(!t.terminal&&t.actionState==='ACTIONABLE'&&Number.isFinite(Number(t.entryExpiresAtMs))&&Number(now)>=Number(t.entryExpiresAtMs)){
+    t.actionState='EXPIRED'; t.expiredAtMs=Number(t.entryExpiresAtMs);
+    if(t.status==='ACTIONABLE') t.status='EXPIRED';
+    changed=true;
+  }
+  return changed;
+}
 function dailyResolvedR(state,date){
   return Object.values(state.trades).filter(t=>t.terminal&&Number.isFinite(t.realizedR)&&sgtDate(t.signalAtMs)===date).reduce((a,t)=>a+t.realizedR,0);
 }
@@ -737,4 +790,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,signalMessage,cycle};
