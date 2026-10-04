@@ -97,8 +97,8 @@ function keyboard(){
 }
 function settingsKeyboard(){
   return {inline_keyboard:[
-    [{text:'💵 200U',callback_data:'cap:200'},{text:'💵 250U',callback_data:'cap:250'},{text:'💵 300U',callback_data:'cap:300'}],
-    [{text:'✏️ 输入实际资金',callback_data:'cap:custom'}],
+    [{text:'🔄 同步 Binance 资金',callback_data:'balance:sync'}],
+    [{text:'✏️ 手动资金（备用）',callback_data:'cap:custom'}],
     [{text:'🌍 市场资料',callback_data:'market'},{text:'🧠 高级分析',callback_data:'intel'}],
     [{text:'📡 系统状态',callback_data:'system'},{text:'📚 学习数据',callback_data:'learn'}],
     [{text:'🏠 主页',callback_data:'start'}]
@@ -316,10 +316,17 @@ function settingsText(){
   const s=load();
   const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
   const sb=snowballUiStatus(s);
+  const connected=binanceReady();
+  const live=binanceTradeReady();
+  const synced=Number(s.settings&&s.settings.balanceSyncedAtMs);
   return [
     '⚙️ 设置','',
+    'Binance：'+(connected?'✅ 已连接':'❌ 未连接 API'),
+    'One Tap：'+(live?'✅ 自动交易 ON':'⚪ 等待 API / Live 开关'),
+    '资金来源：'+(connected?'Binance 自动读取':'手动备用'),
     '💰 现在资金：'+equity.toFixed(2)+'U',
     '🏔️ 最高资金：'+sb.peak.toFixed(2)+'U',
+    synced?'最后同步：'+sgtTime(synced)+' SGT':null,
     sb.label,
     sb.dd>0?'离最高点：-'+(sb.dd*100).toFixed(1)+'%':null,
     '',
@@ -328,8 +335,7 @@ function settingsText(){
     '跌超 5%：自动降到 0.50%',
     '最高杠杆：5x',
     '',
-    '每次 Binance 资金变了，就按【✏️ 输入实际资金】。',
-    'Bot 会用新资金自动放大/缩小下一单。'
+    connected?'Bot 会在每次扫描前自动读取 Binance Futures 资金。':'API 未连接时才需要手动输入资金。'
   ].filter(Boolean).join('\n');
 }
 function systemText(){
@@ -350,10 +356,11 @@ function systemText(){
     '📡 系统','',
     '策略：Hunter Adaptive V2 Intelligence',
     '模式：Signal only',
-    '自动下单：关闭',
+    '自动下单：'+(binanceTradeReady()?'✅ One Tap ON':'⚪ 未启用'),
     '交易市场：XAUUSD / BTC / ETH / SOL',
     '本金：'+equity.toFixed(2)+'U',
     'Snowball：ON',
+    'Binance资金：'+(binanceReady()?'自动同步':'手动备用'),
     'Risk：'+(sb.riskPct*100).toFixed(2)+'% base · A+最高 1.00%',
     'Daily kill：-2R',
     '',
@@ -434,10 +441,20 @@ async function handleTextInput(text){
   }
   return null;
 }
+async function manualBalanceSync(){
+  if(!binanceReady()) return send('⚠️ Binance API 还没连接。',settingsKeyboard());
+  try{
+    const b=await syncBinanceBalance();
+    return send('✅ Binance 资金已同步\n钱包：'+b.wallet.toFixed(2)+'U\n可用：'+b.available.toFixed(2)+'U',settingsKeyboard());
+  }catch(e){
+    return send('❌ Binance 资金同步失败\n'+String(e.message||e),settingsKeyboard());
+  }
+}
 async function handle(action,id,message=null){
   await answer(id);
   try{
     if(String(action||'').startsWith('enter:')||String(action||'').startsWith('skip:')) return tradeAction(action,message);
+    if(action==='balance:sync') return manualBalanceSync();
     if(action==='cap:custom') return beginCapitalInput();
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
@@ -1020,6 +1037,10 @@ async function scannerLoop(stopAt){
     for(let attempt=1;attempt<=MAX_CLOSE_RETRIES&&Date.now()<stopAt;attempt+=1){
       const scanAt=Date.now();
       try{
+        if(binanceReady()&&BINANCE_AUTO_BALANCE){
+          try{await syncBinanceBalance();}
+          catch(e){console.error(JSON.stringify({bot:VERSION,balance:'SYNC_ERROR',error:e.message}));}
+        }
         const r=await withStateLock(()=>scanMarket(scanAt));
         const behind=behindExpectedClose(r,scanAt);
         console.log(JSON.stringify({bot:VERSION,scanner:'OK',at:r?.at,attempt,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0,behind:behind.map(x=>x.symbol)}));
@@ -1037,6 +1058,10 @@ async function scannerLoop(stopAt){
 
 async function run(){
   await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
+  if(binanceReady()&&BINANCE_AUTO_BALANCE){
+    try{await syncBinanceBalance();}
+    catch(e){console.error(JSON.stringify({bot:VERSION,balance:'STARTUP_SYNC_ERROR',error:e.message}));}
+  }
   const stopAt=Date.now()+RUNTIME_MS;
   const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
   const lifecyclePromise=fastLifecycleLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,lifecycle:'FATAL',error:e.message})));
