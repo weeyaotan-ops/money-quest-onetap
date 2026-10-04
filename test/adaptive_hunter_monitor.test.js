@@ -183,7 +183,7 @@ function m15Base(count=80,start=0){
   assert.ok(ev.includes('TP1'));
   assert.strictEqual(t.actionState,'MANAGING');
   assert.strictEqual(t.stop,t.entry);
-  assert.ok(lifecycleMessage(t,'TP1').includes('SL → Entry（BE）'));
+  assert.ok(lifecycleMessage(t,'TP1').includes('止损拉到入场价'));
 })();
 
 (function livePriceLifecycle(){
