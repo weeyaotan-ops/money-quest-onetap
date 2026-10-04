@@ -3,7 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, executionPlan,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed
 } = require('../adaptive_hunter_monitor');
 
@@ -230,6 +230,13 @@ function m15Base(count=80,start=0){
   const a={symbol:'BTCUSDT',side:'LONG',sessionLabel:'London',expiresOpenTime:4*M15};
   assert.ok(armedMessage(a).includes('WAITING RETEST'));
   assert.ok(armEndMessage(a,'EXPIRED').includes('SETUP EXPIRED'));
+})();
+
+
+(function snowballRiskSizing(){
+  assert.strictEqual(snowballRisk({intelligence:{score:80}},250,250).riskPct,0.0075);
+  assert.strictEqual(snowballRisk({intelligence:{score:92}},250,250).riskPct,0.01);
+  assert.strictEqual(snowballRisk({intelligence:{score:95}},235,250).riskPct,0.005);
 })();
 
 console.log('adaptive_hunter_monitor tests: PASS');
