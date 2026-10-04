@@ -1,7 +1,8 @@
 'use strict';
 
 const fs = require('fs');
-const { cycle: scanMarket } = require('../adaptive_hunter_monitor');
+const path = require('path');
+const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, queueAlert, flushAlerts } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
@@ -13,6 +14,11 @@ const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||1500)
 const RETRY_AFTER_MS=Number(process.env.ADAPTIVE_RETRY_AFTER_MS||2000);
 const MAX_CLOSE_RETRIES=Number(process.env.ADAPTIVE_MAX_CLOSE_RETRIES||8);
 const RUNTIME_MS=Number(process.env.ADAPTIVE_RUNTIME_MS||18600000);
+const LIFECYCLE_POLL_MS=Math.max(1000,Number(process.env.ADAPTIVE_LIFECYCLE_POLL_MS||2000));
+const LIVE_PRICE_TIMEOUT_MS=Math.max(1500,Number(process.env.ADAPTIVE_LIVE_PRICE_TIMEOUT_MS||4500));
+const BINANCE_BASE=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
+const OKX_BASE=process.env.OKX_REST_BASE||'https://www.okx.com';
+const YAHOO_BASE=process.env.YAHOO_FINANCE_BASE||'https://query1.finance.yahoo.com';
 
 if(!BOT_TOKEN||!CHAT_ID){ console.error('Missing Telegram credentials'); process.exit(1); }
 
@@ -21,6 +27,18 @@ function load(){
     const s=JSON.parse(fs.readFileSync(STATE_PATH,'utf8'));
     return s&&typeof s==='object'?s:{};
   }catch{return {};}
+}
+function save(s){
+  fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true});
+  const tmp=STATE_PATH+'.bot.tmp';
+  fs.writeFileSync(tmp,JSON.stringify(s,null,2));
+  fs.renameSync(tmp,STATE_PATH);
+}
+let stateBusy=false;
+async function withStateLock(fn){
+  while(stateBusy) await sleep(50);
+  stateBusy=true;
+  try{return await fn();}finally{stateBusy=false;}
 }
 function sgtDate(ts=Date.now()){
   const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(ts));
@@ -267,6 +285,7 @@ function systemText(){
     errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
     '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
+    '⚡ TP/SL 实时监控：约 '+(LIFECYCLE_POLL_MS/1000).toFixed(0)+'秒一次',
     '',
     '旧 Session Breakout 已退出 Live。'
   ].filter(Boolean).join('\n');
@@ -340,6 +359,91 @@ function behindExpectedClose(result,scanAt){
   const expected=expectedM15Close(scanAt);
   return Object.values(result?.market||{}).filter(x=>x?.regime!=='CLOSED'&&Number(x?.lastCandleClose||0)<expected);
 }
+const livePriceCache=new Map();
+async function fastJson(url){
+  const r=await fetch(url,{headers:{'user-agent':'hunter-adaptive-live/1.0'},signal:AbortSignal.timeout(LIVE_PRICE_TIMEOUT_MS)});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+function okxId(symbol){ return String(symbol).replace(/USDT$/,'')+'-USDT-SWAP'; }
+async function cryptoLivePrice(symbol){
+  try{
+    const q=new URLSearchParams({symbol});
+    const b=await fastJson(BINANCE_BASE+'/fapi/v1/ticker/price?'+q.toString());
+    const p=Number(b&&b.price);
+    if(Number.isFinite(p)) return {price:p,provider:'BINANCE_FUTURES'};
+  }catch(e){}
+  const q=new URLSearchParams({instId:okxId(symbol)});
+  const b=await fastJson(OKX_BASE+'/api/v5/market/ticker?'+q.toString());
+  const p=Number(b&&b.data&&b.data[0]&&b.data[0].last);
+  if(!Number.isFinite(p)) throw new Error('NO_LIVE_PRICE '+symbol);
+  return {price:p,provider:'OKX_SWAP'};
+}
+async function xauLivePrice(){
+  const now=Date.now(),cached=livePriceCache.get('XAUUSD');
+  if(cached&&now-cached.at<10000) return cached.value;
+  const q=new URLSearchParams({interval:'1m',range:'1d',includePrePost:'true',events:'history'});
+  const b=await fastJson(YAHOO_BASE+'/v8/finance/chart/'+encodeURIComponent('XAUUSD=X')+'?'+q.toString());
+  const result=b&&b.chart&&b.chart.result&&b.chart.result[0];
+  const meta=Number(result&&result.meta&&result.meta.regularMarketPrice);
+  let p=meta;
+  if(!Number.isFinite(p)){
+    const closes=result&&result.indicators&&result.indicators.quote&&result.indicators.quote[0]&&result.indicators.quote[0].close||[];
+    for(let i=closes.length-1;i>=0;i-=1){ const n=Number(closes[i]); if(Number.isFinite(n)){p=n;break;} }
+  }
+  if(!Number.isFinite(p)) throw new Error('NO_LIVE_PRICE XAUUSD');
+  const value={price:p,provider:'YAHOO_XAU_SPOT'};
+  livePriceCache.set('XAUUSD',{at:now,value});
+  return value;
+}
+async function livePrice(symbol){
+  return symbol==='XAUUSD'?xauLivePrice():cryptoLivePrice(symbol);
+}
+async function fastLifecycleOnce(){
+  const preview=load();
+  const active=Object.values(preview.trades||{}).filter(t=>t&&!t.terminal);
+  if(!active.length) return;
+  const symbols=[...new Set(active.map(t=>String(t.symbol||'')).filter(Boolean))];
+  const prices={}; const errors=[];
+  await Promise.all(symbols.map(async symbol=>{
+    try{prices[symbol]=await livePrice(symbol);}
+    catch(e){errors.push({symbol,error:e.message});}
+  }));
+  await withStateLock(async()=>{
+    const state=load();
+    if(!Array.isArray(state.pendingAlerts)) state.pendingAlerts=[];
+    const now=Date.now();
+    for(const t of Object.values(state.trades||{}).filter(x=>x&&!x.terminal)){
+      ensureTradeLifecycle(t);
+      const before=lifecycleSnapshot(t);
+      const px=prices[t.symbol]&&prices[t.symbol].price;
+      updateTradePrice(t,px,now);
+      for(const event of lifecycleEvents(before,t)){
+        queueAlert(state,'LIVE|TRADE|'+t.key+'|'+event,lifecycleMessage(t,event),now);
+      }
+    }
+    state.liveLifecycle={
+      at:now,
+      pollMs:LIFECYCLE_POLL_MS,
+      prices:Object.fromEntries(Object.entries(prices).map(([symbol,v])=>[symbol,{price:v.price,provider:v.provider,at:now}])),
+      errors
+    };
+    save(state);
+    await flushAlerts(state);
+    save(state);
+  });
+}
+async function fastLifecycleLoop(stopAt){
+  while(Date.now()<stopAt){
+    const started=Date.now();
+    try{await fastLifecycleOnce();}
+    catch(e){console.error(JSON.stringify({bot:VERSION,lifecycle:'ERROR',error:e.message}));}
+    const wait=Math.max(250,LIFECYCLE_POLL_MS-(Date.now()-started));
+    if(Date.now()+wait>=stopAt) break;
+    await sleep(wait);
+  }
+}
+
 async function scannerLoop(stopAt){
   let first=true;
   while(Date.now()<stopAt){
@@ -352,7 +456,7 @@ async function scannerLoop(stopAt){
     for(let attempt=1;attempt<=MAX_CLOSE_RETRIES&&Date.now()<stopAt;attempt+=1){
       const scanAt=Date.now();
       try{
-        const r=await scanMarket(scanAt);
+        const r=await withStateLock(()=>scanMarket(scanAt));
         const behind=behindExpectedClose(r,scanAt);
         console.log(JSON.stringify({bot:VERSION,scanner:'OK',at:r?.at,attempt,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0,behind:behind.map(x=>x.symbol)}));
         if(!behind.length) break;
@@ -371,7 +475,8 @@ async function run(){
   await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
   const stopAt=Date.now()+RUNTIME_MS;
   const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS}));
+  const lifecyclePromise=fastLifecycleLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,lifecycle:'FATAL',error:e.message})));
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS}));
   while(Date.now()<stopAt){
     try{
       const us=await getUpdates(offset);
@@ -386,7 +491,7 @@ async function run(){
       }
     }catch(e){console.error(JSON.stringify({bot:VERSION,error:e.message}));await sleep(2500);}
   }
-  await scannerPromise;
+  await Promise.all([scannerPromise,lifecyclePromise]);
   console.log(JSON.stringify({bot:VERSION,status:'ROTATE'}));
 }
 run().catch(e=>{console.error(JSON.stringify({bot:VERSION,fatal:e.message}));process.exit(1);});
