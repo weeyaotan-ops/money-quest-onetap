@@ -6,6 +6,7 @@
 # Execution overlay: 250U fallback, fee-aware sizing, max 5x 2026-10-05
 # Capital presets: Telegram 200/250/300U persisted setting 2026-10-05
 # Hotfix restart: missing live quote no longer treated as zero 2026-10-05
+# Entry confirmation + live entry guard + strict cost filter 2026-10-05
 name: Hunter Adaptive Telegram Bot
 
 on:
