@@ -2,7 +2,7 @@ name: MemeHunter CI
 
 on:
   push:
-    branches: [solana-memehunter-v1]
+    branches: [solana-memehunter-v1, decu-mirror-auto-v1]
     paths:
       - 'memehunter/**'
       - '.github/workflows/memehunter-ci.yml'
