@@ -1,3 +1,4 @@
+# Expanded crypto universe + dynamic leverage hard cap 10x 2026-10-05
 # Redeploy latest One Tap safety guards 2026-10-05
 # Hunter Adaptive V2 Intelligence always-on runtime
 # UI refresh: visible V2 intelligence button 2026-10-03
@@ -98,7 +99,8 @@ jobs:
           ADAPTIVE_LIVE_PRICE_TIMEOUT_MS: "4500"
           ADAPTIVE_RISK_PCT: "0.0075"
           ADAPTIVE_EQUITY_USDT: "250"
-          ADAPTIVE_MAX_LEVERAGE: "5"
+          ADAPTIVE_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD"
+          ADAPTIVE_MAX_LEVERAGE: "10"
           ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
           ADAPTIVE_TAKER_FEE_RATE: "0.0005"
           ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
