@@ -113,7 +113,7 @@ function nowText(){
     lines.push('✅ 刚确认');
     for(const x of cs){
       lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.decision||sideText(x.side)));
-      lines.push(modeText(x.mode)+' · 🟢 ACTIONABLE');
+      lines.push(modeText(x.mode)+' · '+(x.execution&&x.execution.costOk===false?'⛔ COST SKIP':'🟢 ACTIONABLE'));
       if(Number.isFinite(Number(x.qualityScore))) lines.push('🧠 Quality '+Number(x.qualityScore).toFixed(0)+'/100 · '+String(x.qualityLabel||''));
       const intel=x.intelligence||{},liq=intel.liquidity||{};
       if(intel.structure) lines.push('结构 H4 '+biasText(intel.structure.h4)+' · M15 '+biasText(intel.structure.m15));
@@ -121,6 +121,10 @@ function nowText(){
       lines.push('进场 '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
       lines.push('目标1 '+fmt(x.tp1,x.symbol)+' · 目标2 '+fmt(x.tp2,x.symbol));
+      if(x.execution&&x.execution.valid){
+        lines.push('照填：Isolated · '+x.execution.leverage+'x · Qty '+Number(x.execution.quantity).toFixed(Number(x.execution.qtyDecimals||0)));
+        lines.push('Initial Margin '+Number(x.execution.initialMargin).toFixed(2)+'U · Max Loss '+Number(x.execution.estMaxLoss).toFixed(2)+'U');
+      }
       lines.push('');
     }
   }else lines.push('⚪ 现在没有新的确认信号','');
@@ -185,6 +189,7 @@ function activeText(){
     if(x.intelligence) lines.push('🧠 Quality '+qualityText(x.intelligence));
     lines.push('Entry '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
     lines.push('TP1 '+fmt(x.tp1,x.symbol)+' · TP2 '+fmt(x.tp2,x.symbol));
+    if(x.execution&&x.execution.costOk===false) lines.push('⛔ 成本检查：SKIP');
     if(x.actionState==='ACTIONABLE'&&Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
     if(x.actionState==='EXPIRED') lines.push('⏳ 未进场就跳过，不要追价');
     if(x.tp1Hit&&!x.terminal&&!x.runnerActive) lines.push('🛡️ TP1 已到 · SL 已移到 Entry（BE）');
