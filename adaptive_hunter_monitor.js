@@ -598,7 +598,7 @@ function updateTradePrice(t,price,now=Date.now()){
   if(t.terminal) return false;
   ensureTradeLifecycle(t);
   let changed=false;
-  const p=Number(price);
+  const p=(price===null||price===undefined||price==='')?NaN:Number(price);
   if(Number.isFinite(p)){
     const stopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
     const t1=t.side==='LONG'?p>=Number(t.tp1):p<=Number(t.tp1);
