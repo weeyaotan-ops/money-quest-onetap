@@ -87,6 +87,7 @@ function keyboard(){
     [{text:'🚨 现在',callback_data:'now'}],
     [{text:'🌍 市场',callback_data:'market'},{text:'🧠 V2智能',callback_data:'intel'}],
     [{text:'📌 进行中',callback_data:'active'}],
+    [{text:'💵 本金 200U',callback_data:'cap:200'},{text:'250U',callback_data:'cap:250'},{text:'300U',callback_data:'cap:300'}],
     [{text:'📊 成绩',callback_data:'results'},{text:'🧠 学习',callback_data:'learn'}],
     [{text:'📡 系统',callback_data:'system'}]
   ]};
@@ -262,6 +263,7 @@ function learnText(){
 }
 function systemText(){
   const s=load(),scan=s.lastScan||{},scanAt=Number(scan.at),now=Date.now();
+  const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
   const age=scanAt?(now-scanAt)/60000:null;
   const nextDue=scanAt?nextM15ScanAt(scanAt+1):null;
   const lateBy=Number.isFinite(nextDue)?(now-nextDue)/60000:null;
@@ -278,6 +280,7 @@ function systemText(){
     '模式：Signal only',
     '自动下单：关闭',
     '交易市场：XAUUSD / BTC / ETH / SOL',
+    '本金：'+equity.toFixed(0)+'U',
     'Risk：0.5% / signal',
     'Daily kill：-2R',
     '',
@@ -296,8 +299,11 @@ function systemText(){
   ].filter(Boolean).join('\n');
 }
 async function menu(){
+  const s=load();
+  const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
   return send([
     'HUNTER ADAPTIVE V2','',
+    '当前本金：'+equity.toFixed(0)+'U',
     '趋势：突破后等回踩才进',
     '智能层：H4/M15结构 + BSL/SSL + Supply/Demand + Quality',
     '区间：扫高/扫低后收回才进',
@@ -310,9 +316,20 @@ async function menu(){
     '0.5% risk · 当天 -2R 停止新信号'
   ].join('\n'),keyboard());
 }
+async function setCapital(value){
+  const equity=Math.max(1,Number(value)||250);
+  return withStateLock(async()=>{
+    const s=load();
+    if(!s.settings||typeof s.settings!=='object') s.settings={};
+    s.settings.equityUsdt=equity;
+    save(s);
+    return send('💵 本金已设为 '+equity.toFixed(0)+'U\n之后的新 signal 会自动重算 Leverage / Quantity / Initial Margin / Max Loss。',keyboard());
+  });
+}
 async function handle(action,id){
   await answer(id);
   try{
+    if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
     if(action==='now') return send(nowText(),back('now'));
     if(action==='market') return send(marketText(),back('market'));
