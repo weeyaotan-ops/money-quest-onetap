@@ -75,22 +75,27 @@ function regimeText(x){
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
-  if(x==='ACTIONABLE') return '🟢 ACTIONABLE';
-  if(x==='OPEN') return '✅ IN POSITION';
-  if(x==='EXPIRED') return '⏳ ENTRY EXPIRED';
-  if(x==='MANAGING') return '🛡️ MANAGING';
-  if(x==='RUNNER') return '🏃 RUNNER';
-  if(x==='CLOSED') return String(status||'CLOSED');
-  return String(status||x||'TRACKING');
+  if(x==='ACTIONABLE') return '等你决定';
+  if(x==='OPEN') return '已进场';
+  if(x==='EXPIRED') return '太迟了，不做';
+  if(x==='MANAGING') return '目标1已到';
+  if(x==='RUNNER') return '剩余仓位继续跑';
+  if(x==='CLOSED') return '已结束';
+  return String(status||x||'追踪中');
 }
 function keyboard(){
   return {inline_keyboard:[
-    [{text:'🚨 现在',callback_data:'now'}],
-    [{text:'🌍 市场',callback_data:'market'},{text:'🧠 V2智能',callback_data:'intel'}],
-    [{text:'📌 进行中',callback_data:'active'}],
-    [{text:'💵 本金 200U',callback_data:'cap:200'},{text:'250U',callback_data:'cap:250'},{text:'300U',callback_data:'cap:300'}],
-    [{text:'📊 成绩',callback_data:'results'},{text:'🧠 学习',callback_data:'learn'}],
-    [{text:'📡 系统',callback_data:'system'}]
+    [{text:'🚨 现在能不能下',callback_data:'now'}],
+    [{text:'📌 我的单',callback_data:'active'},{text:'📊 成绩',callback_data:'results'}],
+    [{text:'⚙️ 设置',callback_data:'settings'}]
+  ]};
+}
+function settingsKeyboard(){
+  return {inline_keyboard:[
+    [{text:'💵 200U',callback_data:'cap:200'},{text:'💵 250U',callback_data:'cap:250'},{text:'💵 300U',callback_data:'cap:300'}],
+    [{text:'🌍 市场资料',callback_data:'market'},{text:'🧠 高级分析',callback_data:'intel'}],
+    [{text:'📡 系统状态',callback_data:'system'},{text:'📚 学习数据',callback_data:'learn'}],
+    [{text:'🏠 主页',callback_data:'start'}]
   ]};
 }
 function back(action){
@@ -106,40 +111,53 @@ async function send(text,markup=keyboard()){ return tg('sendMessage',{chat_id:CH
 async function answer(id){ if(id) await tg('answerCallbackQuery',{callback_query_id:id}).catch(()=>{}); }
 
 function nowText(){
-  const s=load(),scan=s.lastScan||{},lines=['🚨 现在',''];
+  const s=load(),scan=s.lastScan||{},lines=['🚨 现在能不能下',''];
   if(scan.killed){
-    lines.push('🛑 今日停止新信号','今天纸面结果已到 '+Number(scan.dailyR||0).toFixed(2)+'R，达到保护线。','');
+    return ['🛑 今天先停','已经碰到今天的亏损保护线。','不要再开新单。'].join('\n');
   }
   const cs=scan.candidates||[];
   if(cs.length){
-    lines.push('✅ 刚确认');
     for(const x of cs){
-      lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.decision||sideText(x.side)));
-      lines.push(modeText(x.mode)+' · '+(x.execution&&x.execution.costOk===false?'⛔ COST SKIP':'🟢 ACTIONABLE'));
-      if(Number.isFinite(Number(x.qualityScore))) lines.push('🧠 Quality '+Number(x.qualityScore).toFixed(0)+'/100 · '+String(x.qualityLabel||''));
-      const intel=x.intelligence||{},liq=intel.liquidity||{};
-      if(intel.structure) lines.push('结构 H4 '+biasText(intel.structure.h4)+' · M15 '+biasText(intel.structure.m15));
-      if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('BSL '+fmt(liq.bsl,x.symbol)+' · SSL '+fmt(liq.ssl,x.symbol));
-      lines.push('进场 '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
-      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
-      lines.push('目标1 '+fmt(x.tp1,x.symbol)+' · 目标2 '+fmt(x.tp2,x.symbol));
-      if(x.execution&&x.execution.valid){
-        lines.push('照填：Isolated · '+x.execution.leverage+'x · Qty '+Number(x.execution.quantity).toFixed(Number(x.execution.qtyDecimals||0)));
-        lines.push('Initial Margin '+Number(x.execution.initialMargin).toFixed(2)+'U · Max Loss '+Number(x.execution.estMaxLoss).toFixed(2)+'U');
+      const ex=x.execution||{};
+      const side=x.side==='LONG'?'做多 LONG':'做空 SHORT';
+      if(ex.costOk===false){
+        lines.push('❌ '+x.symbol+' 不做');
+        lines.push('原因：'+String(ex.costReason||'手续费和利润不划算'));
+        lines.push('');
+        continue;
       }
+      lines.push('✅ '+x.symbol+' 可以进');
+      lines.push('');
+      lines.push('方向：'+side);
+      if(ex.valid){
+        lines.push('逐仓：Isolated');
+        lines.push('杠杆：'+ex.leverage+'x');
+        lines.push('数量：'+Number(ex.quantity).toFixed(Number(ex.qtyDecimals||0))+' '+String(x.symbol||'').replace('USDT',''));
+      }
+      lines.push('入场：'+fmt(x.entry,x.symbol));
+      lines.push('止损：'+fmt(x.stop,x.symbol));
+      lines.push('目标1：'+fmt(x.tp1,x.symbol));
+      lines.push('目标2：'+fmt(x.tp2,x.symbol));
+      if(ex.valid){
+        lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
+        lines.push('目标1净赚：'+(Number(ex.tp1Net)>=0?'+':'')+Number(ex.tp1Net).toFixed(2)+'U');
+        lines.push('目标2净赚：'+(Number(ex.tp2Net)>=0?'+':'')+Number(ex.tp2Net).toFixed(2)+'U');
+      }
+      if(Number.isFinite(Number(x.qualityScore))) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
+      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
       lines.push('');
     }
-  }else lines.push('⚪ 现在没有新的确认信号','');
+    return lines.join('\n');
+  }
   const armed=scan.armed||[];
   if(armed.length){
-    lines.push('👀 等回踩');
-    for(const x of armed.slice(0,5)) lines.push(x.symbol+' '+sideText(x.side)+' · '+x.session+' · WAITING RETEST');
-    lines.push('');
+    lines.push('👀 现在还不能进');
+    lines.push('Bot 正在等价格回来。');
+    for(const x of armed.slice(0,4)) lines.push('• '+x.symbol+' · '+(x.side==='LONG'?'等做多':'等做空'));
+    return lines.join('\n');
   }
-  const markets=Object.values(s.market||{});
-  const chaos=markets.filter(x=>x.regime==='CHAOS');
-  if(chaos.length) lines.push('🔴 混乱市场：'+chaos.map(x=>x.symbol).join(' / '),'不交易。','');
-  lines.push('最后扫描：'+sgtTime(scan.at)+' SGT');
+  lines.push('⚪ 现在没有可以下的单');
+  lines.push('不用做，等 Bot 通知。');
   return lines.join('\n');
 }
 function marketText(){
@@ -183,24 +201,24 @@ function intelligenceText(){
 }
 function activeText(){
   const s=load(),xs=Object.values(s.trades||{}).filter(x=>!x.terminal).sort((a,b)=>b.signalAtMs-a.signalAtMs);
-  const lines=['📌 进行中',''];
-  if(!xs.length) return lines.concat('⚪ 没有正在追踪的信号。').join('\n');
+  const lines=['📌 我的单',''];
+  if(!xs.length) return lines.concat('⚪ 现在没有进行中的单。').join('\n');
   for(const x of xs.slice(0,8)){
-    lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.decision||sideText(x.side)));
-    lines.push(modeText(x.mode)+' · '+actionStateText(x.actionState,x.status));
-    if(x.intelligence) lines.push('🧠 Quality '+qualityText(x.intelligence));
-    lines.push('Entry '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
-    lines.push('TP1 '+fmt(x.tp1,x.symbol)+' · TP2 '+fmt(x.tp2,x.symbol));
-    if(x.execution&&x.execution.costOk===false) lines.push('⛔ 成本检查：SKIP');
+    lines.push((x.side==='LONG'?'🟢 ':'🔴 ')+x.symbol+' · '+(x.side==='LONG'?'做多':'做空'));
+    lines.push('状态：'+actionStateText(x.actionState,x.status));
     if(!x.entryConfirmed){
-      lines.push('等待确认：'+String(x.entryStatus||'ENTER')+' · 下单后按 ✅ 已进场');
-      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
+      const st=String(x.entryStatus||'ENTER');
+      if(st==='DO_NOT_CHASE') lines.push('⛔ 现在太贵/太低，不要追');
+      else lines.push('⏳ 还没确认进场');
+      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('最迟：'+sgtTime(x.entryExpiresAtMs)+' SGT');
     }else{
-      lines.push('✅ 已确认进场'+(Number.isFinite(Number(x.actualEntryPrice))?' · 当时价 '+fmt(x.actualEntryPrice,x.symbol):''));
+      if(Number.isFinite(Number(x.actualEntryPrice))) lines.push('实际确认价：'+fmt(x.actualEntryPrice,x.symbol));
+      lines.push('止损：'+fmt(x.stop,x.symbol));
+      lines.push('目标1：'+fmt(x.tp1,x.symbol));
+      lines.push('目标2：'+fmt(x.tp2,x.symbol));
+      if(x.tp1Hit&&!x.runnerActive) lines.push('✅ 目标1已到，止损已拉到保本');
+      if(x.runnerActive) lines.push('🏃 剩下仓位继续跑');
     }
-    if(x.actionState==='EXPIRED') lines.push('⏳ 未进场就跳过，不要追价');
-    if(x.tp1Hit&&!x.terminal&&!x.runnerActive) lines.push('🛡️ TP1 已到 · SL 已移到 Entry（BE）');
-    if(x.runnerActive) lines.push('Runner 正在跑'+(Number.isFinite(x.runnerTrail)?' · Trail '+fmt(x.runnerTrail,x.symbol):''));
     lines.push('');
   }
   return lines.join('\n');
@@ -216,24 +234,32 @@ function calcStats(xs){
   return {n:rs.length,avg:rs.reduce((a,b)=>a+b,0)/rs.length,wr:rs.filter(x=>x>0).length/rs.length,total:rs.reduce((a,b)=>a+b,0),dd,lossStreak:maxLs};
 }
 function resultsText(){
-  const all=resolvedTrades(),recent=all.slice(-20),a=calcStats(all),r=calcStats(recent),today=sgtDate();
-  const todayR=all.filter(x=>sgtDate(x.signalAtMs)===today).reduce((sum,x)=>sum+Number(x.realizedR),0);
-  const fr=n=>Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'R':'样本不足';
-  const pc=n=>Number.isFinite(n)?(n*100).toFixed(1)+'%':'样本不足';
+  const all=resolvedTrades(),today=sgtDate();
+  const wins=all.filter(x=>Number(x.realizedR)>0).length;
+  const losses=all.filter(x=>Number(x.realizedR)<0).length;
+  const flat=all.length-wins-losses;
+  const todayTrades=all.filter(x=>sgtDate(x.signalAtMs)===today);
+  const todayWins=todayTrades.filter(x=>Number(x.realizedR)>0).length;
+  const todayLosses=todayTrades.filter(x=>Number(x.realizedR)<0).length;
+  const wr=all.length?wins/all.length:null;
+  const recent=all.slice(-20);
+  const recentWins=recent.filter(x=>Number(x.realizedR)>0).length;
+  const recentWr=recent.length?recentWins/recent.length:null;
+  const a=calcStats(all);
   return [
     '📊 成绩','',
-    '已完成：'+a.n+'单',
-    '总结果：'+fr(a.total),
-    '平均：'+fr(a.avg),
-    '胜率：'+pc(a.wr),
-    '最大回撤：'+a.dd.toFixed(2)+'R',
-    '最长连亏：'+a.lossStreak+'单',
+    '完成：'+all.length+' 单',
+    '赢：'+wins+' 单',
+    '输：'+losses+' 单',
+    flat?'打平：'+flat+' 单':null,
+    '胜率：'+(Number.isFinite(wr)?(wr*100).toFixed(1)+'%':'还没数据'),
     '',
-    '最近'+r.n+'单：'+fr(r.avg)+' / 胜率 '+pc(r.wr),
-    '今天：'+fr(todayR),
+    '今天：'+todayWins+' 赢 / '+todayLosses+' 输',
+    recent.length?'最近 '+recent.length+' 单胜率：'+(recentWr*100).toFixed(1)+'%':null,
+    '最长连续亏：'+a.lossStreak+' 单',
     '',
-    '统计同一 Hunter Adaptive 核心策略；V2 开始记录 Quality。'
-  ].join('\n');
+    '这里只看 Bot 策略成绩，不等于 Binance 实际 USDT 盈亏。'
+  ].filter(Boolean).join('\n');
 }
 function cohort(xs,keyFn){
   const m={}; for(const x of xs){const k=keyFn(x)||'UNKNOWN'; if(!m[k])m[k]=[];m[k].push(x);}
@@ -266,6 +292,20 @@ function learnText(){
   else lines.push('🟡 还没有足够清楚的优势。');
   lines.push('','学习只负责发现问题，不会自动改 Live。');
   return lines.join('\n');
+}
+function settingsText(){
+  const s=load();
+  const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
+  return [
+    '⚙️ 设置','',
+    '现在本金：'+equity.toFixed(0)+'U',
+    '每单最多亏：约 '+(equity*0.005).toFixed(2)+'U',
+    '最高杠杆：5x',
+    '模式：逐仓 Isolated',
+    '',
+    '下面 200U / 250U / 300U 直接按就可以。',
+    '市场资料 / 高级分析 / 系统状态 平时不用看。'
+  ].join('\n');
 }
 function systemText(){
   const s=load(),scan=s.lastScan||{},scanAt=Number(scan.at),now=Date.now();
@@ -310,18 +350,17 @@ async function menu(){
   const s=load();
   const equity=Math.max(1,Number(s.settings&&s.settings.equityUsdt)||250);
   return send([
-    'HUNTER ADAPTIVE V2','',
-    '当前本金：'+equity.toFixed(0)+'U',
-    '趋势：突破后等回踩才进',
-    '智能层：H4/M15结构 + BSL/SSL + Supply/Demand + Quality',
-    '区间：扫高/扫低后收回才进',
-    '混乱：不交易',
+    'HUNTER','',
+    '本金：'+equity.toFixed(0)+'U',
+    '每单最多亏：约 '+(equity*0.005).toFixed(2)+'U',
     '',
-    'SL：结构失效 + 波动缓冲',
-    'Trend：40%@1R · 30%@2R · 30% Runner',
-    'Range：50%@中线 · 50%@另一边Box',
+    '你只需要看 4 个按钮：',
+    '🚨 现在能不能下',
+    '📌 我的单',
+    '📊 成绩',
+    '⚙️ 设置',
     '',
-    '0.5% risk · 当天 -2R 停止新信号'
+    '有好单 Bot 会直接告诉你要填什么数字。'
   ].join('\n'),keyboard());
 }
 async function setCapital(value){
@@ -331,7 +370,7 @@ async function setCapital(value){
     if(!s.settings||typeof s.settings!=='object') s.settings={};
     s.settings.equityUsdt=equity;
     save(s);
-    return send('💵 本金已设为 '+equity.toFixed(0)+'U\n之后的新 signal 会自动重算 Leverage / Quantity / Initial Margin / Max Loss。',keyboard());
+    return send('✅ 本金改成 '+equity.toFixed(0)+'U\n以后新单的杠杆、数量和最多亏多少都会自动重算。',settingsKeyboard());
   });
 }
 async function handle(action,id,message=null){
@@ -340,13 +379,14 @@ async function handle(action,id,message=null){
     if(String(action||'').startsWith('enter:')||String(action||'').startsWith('skip:')) return tradeAction(action,message);
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
+    if(action==='settings') return send(settingsText(),settingsKeyboard());
     if(action==='now') return send(nowText(),back('now'));
-    if(action==='market') return send(marketText(),back('market'));
-    if(action==='intel') return send(intelligenceText(),back('intel'));
+    if(action==='market') return send(marketText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'market'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
+    if(action==='intel') return send(intelligenceText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'intel'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
     if(action==='active') return send(activeText(),back('active'));
     if(action==='results') return send(resultsText(),back('results'));
-    if(action==='learn') return send(learnText(),back('learn'));
-    if(action==='system') return send(systemText(),back('system'));
+    if(action==='learn') return send(learnText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'learn'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
+    if(action==='system') return send(systemText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'system'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
     return menu();
   }catch(e){console.error(e);return send('⚠️ 暂时读取失败，等一下再试。',back('start'));}
 }
@@ -359,6 +399,7 @@ function normalize(t){
   if(['/active','active'].includes(x))return'active';
   if(['/results','results','/performance','performance'].includes(x))return'results';
   if(['/learn','learn','学习'].includes(x))return'learn';
+  if(['/settings','settings','设置'].includes(x))return'settings';
   if(['/system','system','/status','status'].includes(x))return'system';
   return null;
 }
@@ -369,14 +410,11 @@ async function getUpdates(offset){
 }
 async function setCommands(){
   await tg('setMyCommands',{commands:[
-    {command:'start',description:'打开主页'},
-    {command:'now',description:'现在有什么机会'},
-    {command:'market',description:'市场状态'},
-    {command:'intel',description:'V2智能层'},
-    {command:'active',description:'进行中的信号'},
-    {command:'results',description:'策略成绩'},
-    {command:'learn',description:'自动学习'},
-    {command:'system',description:'系统状态'}
+    {command:'start',description:'主页'},
+    {command:'now',description:'现在能不能下'},
+    {command:'active',description:'我的单'},
+    {command:'results',description:'成绩'},
+    {command:'settings',description:'设置'}
   ]});
 }
 function expectedM15Close(now=Date.now()){ return Math.floor(Number(now)/M15_MS)*M15_MS; }
@@ -433,18 +471,14 @@ async function livePrice(symbol){
 function entryStateAlert(t,d){
   const p=Number(d&&d.price);
   const nowPrice=Number.isFinite(p)?fmt(p,t.symbol):'n/a';
-  const guard=d&&d.guard;
   if(d.state==='DO_NOT_CHASE'){
-    return ['🔴 DO NOT CHASE','',t.symbol+' · '+sideText(t.side),'当前价：'+nowPrice,
-      guard?(guard.boundaryLabel+'：'+fmt(guard.chasePrice,t.symbol)):null,
-      '价格已经超出追价范围。','先不要进，等它回到 Entry 区。'].filter(Boolean).join('\n');
+    return ['⛔ 先别进 '+t.symbol,'','现在价格：'+nowPrice,'跑太远了，不要追。','等价格回来，Bot 会再通知。'].join('\n');
   }
   if(d.state==='ENTER'){
-    return ['🟢 ENTRY AVAILABLE','',t.symbol+' · '+sideText(t.side),'当前价：'+nowPrice,
-      '价格已回到可进范围。','如果成交，马上按【✅ 已进场】。'].join('\n');
+    return ['✅ '+t.symbol+' 价格回来了','','现在价格：'+nowPrice,'现在又可以考虑进。','成交后按【✅ 已进场】。'].join('\n');
   }
-  if(d.state==='EXPIRED') return ['⌛ ENTRY EXPIRED','',t.symbol+' · '+sideText(t.side),'进场时间已过。','这次跳过，不要追。'].join('\n');
-  if(d.state==='INVALID') return ['⚪ SETUP INVALID','',t.symbol+' · '+sideText(t.side),'价格已经破坏原本结构。','这次不进。'].join('\n');
+  if(d.state==='EXPIRED') return ['⌛ '+t.symbol+' 太迟了','','这单不要了。','等下一单。'].join('\n');
+  if(d.state==='INVALID') return ['❌ '+t.symbol+' 这单失效','','价格已经走坏。','不要进。'].join('\n');
   return null;
 }
 function findTradeBySignalId(state,id){
@@ -474,19 +508,19 @@ async function tradeAction(action,message){
       }
     });
     await clearSignalButtons(message);
-    if(!t) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
-    return send('⏭️ 已 Skip '+t.symbol+'。\n这单不会再发 TP / SL 管理通知。',keyboard());
+    if(!t) return send('⚠️ 找不到这单，可能已经过期。',keyboard());
+    return send('⏭️ 已放弃 '+t.symbol+'。\n这单不会再通知你。',keyboard());
   }
 
   const preview=load();
   const pTrade=findTradeBySignalId(preview,id);
   if(!pTrade) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
-  if(pTrade.terminal) return send('这条 signal 已结束，不能再确认进场。',keyboard());
-  if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经确认过进场。',keyboard());
+  if(pTrade.terminal) return send('这单已经结束，不能再进。',keyboard());
+  if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经记录为已进场。',keyboard());
 
   let quote=null;
   try{ quote=await livePrice(pTrade.symbol); }
-  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' live price，先不要乱进。等几秒再按。',keyboard()); }
+  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' 现在价格，先不要进。等几秒再按。',keyboard()); }
 
   let result=null,confirmed=null;
   await withStateLock(async()=>{
@@ -523,22 +557,22 @@ async function tradeAction(action,message){
     return send([
       '✅ 已记录进场','',
       confirmed.symbol+' · '+sideText(confirmed.side),
-      '当时 live price：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
-      'SL：'+fmt(confirmed.stop,confirmed.symbol),
-      'TP1：'+fmt(confirmed.tp1,confirmed.symbol),
-      'TP2：'+fmt(confirmed.tp2,confirmed.symbol),
+      '确认时价格：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
+      '止损：'+fmt(confirmed.stop,confirmed.symbol),
+      '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
+      '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
       '',
-      '从现在开始才会实时管理 TP / SL。'
+      '从现在开始 Bot 会帮你盯止损和目标。'
     ].join('\n'),keyboard());
   }
   if(result&&result.state==='DO_NOT_CHASE'){
-    return send(entryStateAlert(pTrade,result)+'\n\n没有记录为已进场。',keyboard());
+    return send(entryStateAlert(pTrade,result)+'\n\nBot 没有记录你进场。',keyboard());
   }
   if(result&&['EXPIRED','INVALID'].includes(result.state)){
     await clearSignalButtons(message);
     return send(entryStateAlert(pTrade,result),keyboard());
   }
-  return send('⚠️ 现在不适合确认进场。',keyboard());
+  return send('⚠️ 现在不适合进，先别下。',keyboard());
 }
 
 async function fastLifecycleOnce(){
