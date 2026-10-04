@@ -157,7 +157,7 @@ function m15Base(count=80,start=0){
 
   const msg=signalMessage({
     symbol:'BTCUSDT',side:'LONG',mode:'TREND_RETEST',sessionLabel:'London',
-    entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'40%@1R · 30%@2R · 30% Runner',
+    entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'30%@1R · 30%@2R · 40% Runner',
     riskAtr:1.15,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
   });
   assert.ok(msg.includes('✅ 可以进 · BTCUSDT'));
