@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, queueAlert, flushAlerts } = require('../adaptive_hunter_monitor');
+const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
@@ -76,6 +76,7 @@ function regimeText(x){
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
   if(x==='ACTIONABLE') return '🟢 ACTIONABLE';
+  if(x==='OPEN') return '✅ IN POSITION';
   if(x==='EXPIRED') return '⏳ ENTRY EXPIRED';
   if(x==='MANAGING') return '🛡️ MANAGING';
   if(x==='RUNNER') return '🏃 RUNNER';
@@ -191,7 +192,12 @@ function activeText(){
     lines.push('Entry '+fmt(x.entry,x.symbol)+' · SL '+fmt(x.stop,x.symbol));
     lines.push('TP1 '+fmt(x.tp1,x.symbol)+' · TP2 '+fmt(x.tp2,x.symbol));
     if(x.execution&&x.execution.costOk===false) lines.push('⛔ 成本检查：SKIP');
-    if(x.actionState==='ACTIONABLE'&&Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
+    if(!x.entryConfirmed){
+      lines.push('等待确认：'+String(x.entryStatus||'ENTER')+' · 下单后按 ✅ 已进场');
+      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到 '+sgtTime(x.entryExpiresAtMs)+' SGT');
+    }else{
+      lines.push('✅ 已确认进场'+(Number.isFinite(Number(x.actualEntryPrice))?' · 当时价 '+fmt(x.actualEntryPrice,x.symbol):''));
+    }
     if(x.actionState==='EXPIRED') lines.push('⏳ 未进场就跳过，不要追价');
     if(x.tp1Hit&&!x.terminal&&!x.runnerActive) lines.push('🛡️ TP1 已到 · SL 已移到 Entry（BE）');
     if(x.runnerActive) lines.push('Runner 正在跑'+(Number.isFinite(x.runnerTrail)?' · Trail '+fmt(x.runnerTrail,x.symbol):''));
@@ -294,6 +300,8 @@ function systemText(){
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
     '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
     '⚡ TP/SL 实时监控：约 '+(LIFECYCLE_POLL_MS/1000).toFixed(0)+'秒一次',
+    '✅ 已进场 / Skip：开启',
+    '🔄 Live Entry Check：开启',
     '',
     '旧 Session Breakout 已退出 Live。'
   ].filter(Boolean).join('\n');
@@ -326,9 +334,10 @@ async function setCapital(value){
     return send('💵 本金已设为 '+equity.toFixed(0)+'U\n之后的新 signal 会自动重算 Leverage / Quantity / Initial Margin / Max Loss。',keyboard());
   });
 }
-async function handle(action,id){
+async function handle(action,id,message=null){
   await answer(id);
   try{
+    if(String(action||'').startsWith('enter:')||String(action||'').startsWith('skip:')) return tradeAction(action,message);
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
     if(action==='now') return send(nowText(),back('now'));
@@ -421,6 +430,117 @@ async function xauLivePrice(){
 async function livePrice(symbol){
   return symbol==='XAUUSD'?xauLivePrice():cryptoLivePrice(symbol);
 }
+function entryStateAlert(t,d){
+  const p=Number(d&&d.price);
+  const nowPrice=Number.isFinite(p)?fmt(p,t.symbol):'n/a';
+  const guard=d&&d.guard;
+  if(d.state==='DO_NOT_CHASE'){
+    return ['🔴 DO NOT CHASE','',t.symbol+' · '+sideText(t.side),'当前价：'+nowPrice,
+      guard?(guard.boundaryLabel+'：'+fmt(guard.chasePrice,t.symbol)):null,
+      '价格已经超出追价范围。','先不要进，等它回到 Entry 区。'].filter(Boolean).join('\n');
+  }
+  if(d.state==='ENTER'){
+    return ['🟢 ENTRY AVAILABLE','',t.symbol+' · '+sideText(t.side),'当前价：'+nowPrice,
+      '价格已回到可进范围。','如果成交，马上按【✅ 已进场】。'].join('\n');
+  }
+  if(d.state==='EXPIRED') return ['⌛ ENTRY EXPIRED','',t.symbol+' · '+sideText(t.side),'进场时间已过。','这次跳过，不要追。'].join('\n');
+  if(d.state==='INVALID') return ['⚪ SETUP INVALID','',t.symbol+' · '+sideText(t.side),'价格已经破坏原本结构。','这次不进。'].join('\n');
+  return null;
+}
+function findTradeBySignalId(state,id){
+  return Object.values(state.trades||{}).find(t=>String(t&&t.signalId||'')===String(id||''))||null;
+}
+async function clearSignalButtons(message){
+  const messageId=Number(message&&message.message_id);
+  if(!Number.isFinite(messageId)) return;
+  await tg('editMessageReplyMarkup',{chat_id:CHAT_ID,message_id:messageId,reply_markup:{inline_keyboard:[]}}).catch(()=>{});
+}
+async function tradeAction(action,message){
+  const raw=String(action||'');
+  const parts=raw.split(':');
+  const verb=parts[0],id=parts.slice(1).join(':');
+  if(!id||!['enter','skip'].includes(verb)) return menu();
+
+  if(verb==='skip'){
+    let t=null;
+    await withStateLock(async()=>{
+      const state=load();
+      t=findTradeBySignalId(state,id);
+      if(!t) return;
+      if(!t.terminal){
+        t.status='SKIPPED_USER'; t.actionState='CLOSED'; t.terminal=true; t.skippedReason='USER';
+        t.skippedAtMs=Date.now(); t.realizedR=null;
+        save(state);
+      }
+    });
+    await clearSignalButtons(message);
+    if(!t) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
+    return send('⏭️ 已 Skip '+t.symbol+'。\n这单不会再发 TP / SL 管理通知。',keyboard());
+  }
+
+  const preview=load();
+  const pTrade=findTradeBySignalId(preview,id);
+  if(!pTrade) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
+  if(pTrade.terminal) return send('这条 signal 已结束，不能再确认进场。',keyboard());
+  if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经确认过进场。',keyboard());
+
+  let quote=null;
+  try{ quote=await livePrice(pTrade.symbol); }
+  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' live price，先不要乱进。等几秒再按。',keyboard()); }
+
+  let result=null,confirmed=null;
+  await withStateLock(async()=>{
+    const state=load();
+    const t=findTradeBySignalId(state,id);
+    if(!t){result={state:'MISSING'};return;}
+    result=entryDecision(t,quote.price,Date.now());
+    if(result.state==='ENTER'){
+      const now=Date.now();
+      t.entryConfirmed=true;
+      t.entryConfirmedAtMs=now;
+      t.actualEntryPrice=Number(quote.price);
+      t.entryStatus='CONFIRMED';
+      t.status='OPEN';
+      t.actionState='OPEN';
+      t.lastOpenTime=Math.floor(now/M15_MS)*M15_MS;
+      confirmed={...t};
+      save(state);
+    }else if(['EXPIRED','INVALID'].includes(result.state)){
+      t.entryStatus=result.state;
+      t.status=result.state;
+      t.actionState='CLOSED';
+      t.terminal=true;
+      t.realizedR=null;
+      save(state);
+    }else{
+      t.entryStatus=result.state;
+      save(state);
+    }
+  });
+
+  if(result&&result.state==='ENTER'&&confirmed){
+    await clearSignalButtons(message);
+    return send([
+      '✅ 已记录进场','',
+      confirmed.symbol+' · '+sideText(confirmed.side),
+      '当时 live price：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
+      'SL：'+fmt(confirmed.stop,confirmed.symbol),
+      'TP1：'+fmt(confirmed.tp1,confirmed.symbol),
+      'TP2：'+fmt(confirmed.tp2,confirmed.symbol),
+      '',
+      '从现在开始才会实时管理 TP / SL。'
+    ].join('\n'),keyboard());
+  }
+  if(result&&result.state==='DO_NOT_CHASE'){
+    return send(entryStateAlert(pTrade,result)+'\n\n没有记录为已进场。',keyboard());
+  }
+  if(result&&['EXPIRED','INVALID'].includes(result.state)){
+    await clearSignalButtons(message);
+    return send(entryStateAlert(pTrade,result),keyboard());
+  }
+  return send('⚠️ 现在不适合确认进场。',keyboard());
+}
+
 async function fastLifecycleOnce(){
   const preview=load();
   const active=Object.values(preview.trades||{}).filter(t=>t&&!t.terminal);
@@ -437,8 +557,26 @@ async function fastLifecycleOnce(){
     const now=Date.now();
     for(const t of Object.values(state.trades||{}).filter(x=>x&&!x.terminal)){
       ensureTradeLifecycle(t);
-      const before=lifecycleSnapshot(t);
       const px=prices[t.symbol]&&prices[t.symbol].price;
+      if(!t.entryConfirmed){
+        const d=entryDecision(t,px,now);
+        const prev=String(t.entryStatus||'');
+        t.entryStatus=d.state;
+        if(['EXPIRED','INVALID'].includes(d.state)){
+          t.status=d.state; t.actionState='CLOSED'; t.terminal=true; t.realizedR=null;
+          if(d.state==='EXPIRED') t.expiredAtMs=now;
+        }else{
+          t.status='ACTIONABLE'; t.actionState='ACTIONABLE';
+        }
+        const shouldAlert=(d.state==='DO_NOT_CHASE'&&prev!=='DO_NOT_CHASE')||
+          (d.state==='ENTER'&&prev==='DO_NOT_CHASE')||
+          (['EXPIRED','INVALID'].includes(d.state)&&prev!==d.state);
+        if(shouldAlert){
+          queueAlert(state,'ENTRY|'+t.key+'|'+d.state+'|'+now,entryStateAlert(t,d),now);
+        }
+        continue;
+      }
+      const before=lifecycleSnapshot(t);
       updateTradePrice(t,px,now);
       for(const event of lifecycleEvents(before,t)){
         queueAlert(state,'LIVE|TRADE|'+t.key+'|'+event,lifecycleMessage(t,event),now);
@@ -506,7 +644,7 @@ async function run(){
         offset=Math.max(offset,Number(u.update_id)+1);
         if(u.callback_query){
           if(String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)!==CHAT_ID){await answer(u.callback_query.id);continue;}
-          await handle(String(u.callback_query.data||''),u.callback_query.id);
+          await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
         }else if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID){
           const a=normalize(u.message.text); if(a) await handle(a); else await menu();
         }
