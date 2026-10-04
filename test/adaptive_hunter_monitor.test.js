@@ -160,10 +160,11 @@ function m15Base(count=80,start=0){
     entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'40%@1R · 30%@2R · 30% Runner',
     riskAtr:1.15,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
   });
-  assert.ok(msg.includes('Limit Entry：10000.00'));
-  assert.ok(msg.includes('追价上限：10005.00（最多 0.05R）'));
-  assert.ok(msg.includes('超过追价上限：SKIP / 等回踩'));
-  assert.ok(msg.includes('状态：🟢 ACTIONABLE'));
+  assert.ok(msg.includes('✅ 可以进 · BTCUSDT'));
+  assert.ok(msg.includes('方向：做多 LONG'));
+  assert.ok(msg.includes('杠杆：'));
+  assert.ok(msg.includes('数量：'));
+  assert.ok(msg.includes('入场：10000.00'));
   assert.ok(msg.includes('有效到：'));
 })();
 
