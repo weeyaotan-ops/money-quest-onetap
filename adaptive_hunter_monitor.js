@@ -19,6 +19,11 @@ const XAUS_BASE = process.env.XAUS_API_BASE || 'https://xaus.com';
 const MAX_FEED_BEHIND_MS = Number(process.env.ADAPTIVE_MAX_FEED_BEHIND_MS || 60 * 1000);
 const DAILY_STOP_R = Number(process.env.ADAPTIVE_DAILY_STOP_R || -2);
 const RISK_PCT = Number(process.env.ADAPTIVE_RISK_PCT || 0.005);
+const EQUITY_USDT = Math.max(1, Number(process.env.ADAPTIVE_EQUITY_USDT || 250));
+const MAX_LEVERAGE = Math.max(1, Math.floor(Number(process.env.ADAPTIVE_MAX_LEVERAGE || 5)));
+const MAX_MARGIN_FRACTION = Math.min(0.95, Math.max(0.10, Number(process.env.ADAPTIVE_MAX_MARGIN_FRACTION || 0.60)));
+const TAKER_FEE_RATE = Math.max(0, Number(process.env.ADAPTIVE_TAKER_FEE_RATE || 0.0005));
+const SLIPPAGE_BUFFER_RATE = Math.max(0, Number(process.env.ADAPTIVE_SLIPPAGE_BUFFER_RATE || 0.0002));
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
@@ -39,6 +44,55 @@ function fmt(x,symbol){
   if(n>=10) return n.toFixed(3);
   return n.toFixed(4);
 }
+function qtyStep(symbol){
+  if(symbol==='BTCUSDT') return 0.001;
+  if(symbol==='ETHUSDT') return 0.001;
+  if(symbol==='SOLUSDT') return 0.1;
+  return 0.001;
+}
+function floorStep(value,step){
+  if(!(step>0)||!Number.isFinite(Number(value))) return Number(value);
+  return Math.floor((Number(value)+1e-12)/step)*step;
+}
+function executionPlan(s){
+  const entry=Number(s&&s.entry),stop=Number(s&&s.stop),tp1=Number(s&&s.tp1),tp2=Number(s&&s.tp2);
+  if(![entry,stop,tp1,tp2].every(Number.isFinite)||entry<=0) return {valid:false,costOk:false};
+  const stopRate=Math.abs(entry-stop)/entry;
+  const frictionRate=2*TAKER_FEE_RATE+SLIPPAGE_BUFFER_RATE;
+  const riskRate=stopRate+frictionRate;
+  const riskBudget=EQUITY_USDT*RISK_PCT;
+  const maxMargin=EQUITY_USDT*MAX_MARGIN_FRACTION;
+  let notional=riskRate>0?riskBudget/riskRate:0;
+  notional=Math.min(notional,maxMargin*MAX_LEVERAGE);
+  let leverage=Math.ceil(notional/Math.max(maxMargin,1e-9));
+  leverage=Math.max(1,Math.min(MAX_LEVERAGE,leverage));
+  const step=qtyStep(s.symbol);
+  let quantity=floorStep(notional/entry,step);
+  if(!(quantity>0)) quantity=0;
+  notional=quantity*entry;
+  const initialMargin=leverage>0?notional/leverage:0;
+  const stopLoss=quantity*Math.abs(entry-stop);
+  const estFeesToStop=quantity*(entry+stop)*TAKER_FEE_RATE;
+  const estSlippage=notional*SLIPPAGE_BUFFER_RATE;
+  const estMaxLoss=stopLoss+estFeesToStop+estSlippage;
+  const tp1Gross=quantity*Math.abs(tp1-entry);
+  const tp2Gross=quantity*Math.abs(tp2-entry);
+  const tp1Fees=quantity*(entry+tp1)*TAKER_FEE_RATE;
+  const tp2Fees=quantity*(entry+tp2)*TAKER_FEE_RATE;
+  const tp1Net=tp1Gross-tp1Fees-estSlippage;
+  const tp2Net=tp2Gross-tp2Fees-estSlippage;
+  const tp1MoveRate=Math.abs(tp1-entry)/entry;
+  const costOk=quantity>0&&tp1MoveRate>frictionRate&&tp1Net>0;
+  const qtyDecimals=step>=1?0:Math.max(0,String(step).split('.')[1]?.length||0);
+  return {
+    valid:true,costOk,equityUsdt:EQUITY_USDT,riskPct:RISK_PCT,riskBudget,
+    marginMode:'ISOLATED',leverage,maxLeverage:MAX_LEVERAGE,
+    maxMarginFraction:MAX_MARGIN_FRACTION,quantity,qtyDecimals,notional,initialMargin,
+    takerFeeRate:TAKER_FEE_RATE,slippageBufferRate:SLIPPAGE_BUFFER_RATE,
+    stopRate,frictionRate,estMaxLoss,tp1Net,tp2Net
+  };
+}
+
 function chaseGuard(s){
   const entry=Number(s?.entry), stop=Number(s?.stop);
   const riskDistance=Math.abs(entry-stop);
@@ -409,7 +463,7 @@ function normalizeState(x){
 function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE_PATH,'utf8')));}catch{return normalizeState({});} }
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
-  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null};
+  return {key:sig.key,symbol:sig.symbol,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -624,6 +678,7 @@ function qualityText(intel){
 function signalMessage(s){
   const icon=s.side==='LONG'?'🟢':'🔴';
   const guard=chaseGuard(s);
+  const ex=s.execution||executionPlan(s);
   const expires=Number(s.signalAtMs)+ENTRY_VALID_MS;
   const intel=s.intelligence||{};
   const liq=intel.liquidity||{};
@@ -632,7 +687,7 @@ function signalMessage(s){
   return [
     icon+' HUNTER ADAPTIVE V2',
     '动作：'+decision,
-    '状态：🟢 ACTIONABLE',
+    '状态：'+(ex.costOk?'🟢 ACTIONABLE':'⛔ COST SKIP'),
     '',
     s.symbol+' · '+(s.side==='LONG'?'做多':'做空'),
     '模式：'+(s.mode==='TREND_RETEST'?'趋势突破回踩':'区间扫流动性'),
@@ -655,6 +710,18 @@ function signalMessage(s){
     '目标2：'+fmt(s.tp2,s.symbol),
     '管理：'+s.plan,
     '风险：'+(RISK_PCT*100).toFixed(2)+'% equity',
+    '',
+    '💰 照填模式（本金 '+ex.equityUsdt.toFixed(0)+'U）',
+    'Margin：Isolated',
+    'Leverage：'+ex.leverage+'x',
+    'Order：Limit',
+    'Quantity：'+ex.quantity.toFixed(ex.qtyDecimals)+' '+String(s.symbol||'').replace('USDT',''),
+    'Position Size：约 '+ex.notional.toFixed(2)+' USDT',
+    'Initial Margin：约 '+ex.initialMargin.toFixed(2)+' USDT',
+    '最大预计亏损：约 '+ex.estMaxLoss.toFixed(2)+' USDT（含 fee/buffer）',
+    'TP1 扣成本：'+(ex.tp1Net>=0?'+':'')+ex.tp1Net.toFixed(2)+' USDT',
+    'TP2 扣成本：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+' USDT',
+    ex.costOk?'成本检查：✅ 可做':'成本检查：❌ SKIP（利润不足以覆盖成本）',
     '',
     '结构SL：约 '+s.riskAtr.toFixed(2)+'× M15 ATR',
     '确认：'+sgtTime(s.signalAtMs)+' SGT',
@@ -775,6 +842,7 @@ async function cycle(now=Date.now()){
   }
   await flushAlerts(state);
   for(const s of candidates){
+    s.execution=executionPlan(s);
     try{
       if(await telegram(signalMessage(s))){
         state.sent[s.key]={atMs:now,symbol:s.symbol,side:s.side};
@@ -782,7 +850,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||executionPlan(x),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -790,4 +858,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,executionPlan,signalMessage,cycle};
