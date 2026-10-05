@@ -174,7 +174,12 @@ function nowText(){
   if(scan.killed){
     return ['🛑 今天先停','已经碰到今天的亏损保护线。','不要再开新单。'].join('\n');
   }
-  const cs=scan.candidates||[];
+  const openConfirmed=Object.values(s.trades||{}).filter(t=>t&&!t.terminal&&t.entryConfirmed);
+  const cs=(scan.candidates||[]).filter(x=>!openConfirmed.some(t=>
+    String(t.symbol)===String(x.symbol)&&
+    String(t.side)===String(x.side)&&
+    Number(t.signalAtMs)===Number(x.signalAtMs)
+  ));
   if(cs.length){
     for(const x of cs){
       const ex=x.execution||{};
@@ -212,6 +217,15 @@ function nowText(){
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
       lines.push('');
     }
+    return lines.join('\n');
+  }
+  if(openConfirmed.length){
+    lines.push('✅ 你已经在单里');
+    for(const t of openConfirmed.slice(0,3)){
+      lines.push('• '+t.symbol+' · '+(t.side==='LONG'?'做多':'做空')+' · 正在盯 SL / TP');
+    }
+    lines.push('');
+    lines.push('同一条 signal 不需要再进。');
     return lines.join('\n');
   }
   const armed=scan.armed||[];
@@ -492,14 +506,15 @@ async function menu(){
     '普通单最多亏：约 '+(equity*0.0075).toFixed(2)+'U',
     'A+ 单最多亏：约 '+(equity*0.01).toFixed(2)+'U',
     '',
-    '你只需要看 4 个按钮：',
+    '主要看这几个按钮：',
     '🚨 现在能不能下',
+    latestPendingTrade(s)?'✅ 我已经进场':null,
     '📌 我的单',
     '📊 成绩',
     '⚙️ 设置',
     '',
     '有好单 Bot 会直接告诉你要填什么数字。'
-  ].join('\n'),keyboard());
+  ].filter(Boolean).join('\n'),keyboard());
 }
 async function setCapital(value){
   const n=Number(value);
