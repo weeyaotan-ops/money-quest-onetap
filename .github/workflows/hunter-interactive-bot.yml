@@ -1,3 +1,4 @@
+# Entry quality: ATR entry zones + nearby resistance/support guard 2026-10-05
 # No-signal guidance: exact breakout/retest/sweep conditions 2026-10-05
 # Zone overlap invalidation + clearer wait/action status 2026-10-05
 # Expanded crypto universe + dynamic leverage hard cap 10x 2026-10-05
@@ -103,6 +104,10 @@ jobs:
           ADAPTIVE_EQUITY_USDT: "250"
           ADAPTIVE_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD"
           ADAPTIVE_MAX_LEVERAGE: "10"
+          ADAPTIVE_ENTRY_PULLBACK_ATR: "0.25"
+          ADAPTIVE_ENTRY_CHASE_ATR: "0.03"
+          ADAPTIVE_BARRIER_BLOCK_ATR: "0.30"
+          ADAPTIVE_BARRIER_BLOCK_R: "0.75"
           ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
           ADAPTIVE_TAKER_FEE_RATE: "0.0005"
           ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
