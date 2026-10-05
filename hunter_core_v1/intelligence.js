@@ -1,6 +1,6 @@
 'use strict';
 
-function finite(x){ return Number.isFinite(Number(x)); }
+function finite(x){ return x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x)); }
 function n(x){ return Number(x); }
 function clamp(x,min,max){ return Math.max(min,Math.min(max,x)); }
 function round(x,d=2){ if(!finite(x)) return null; const p=10**d; return Math.round(Number(x)*p)/p; }
