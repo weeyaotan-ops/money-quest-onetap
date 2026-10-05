@@ -200,7 +200,8 @@ function barrierRoomAt(s,price){
   const p=Number(price);
   const entry=Number(s?.entry), stop=Number(s?.stop);
   const side=String(s?.side||'').toUpperCase();
-  const barrier=Number(s?.intelligence?.entryRoom?.barrier);
+  const barrierRaw=s?.intelligence?.entryRoom?.barrier;
+  const barrier=(barrierRaw===null||barrierRaw===undefined||barrierRaw==='')?NaN:Number(barrierRaw);
   const atr15=Number(s?.atr15 ?? s?.intelligence?.a15);
   const riskDistance=Math.abs(entry-stop);
   if(!Number.isFinite(p)||!Number.isFinite(barrier)||!Number.isFinite(riskDistance)||!(riskDistance>0)) return {state:'CLEAR',barrier:null,distance:null,barrierAtr:null,barrierR:null};
@@ -637,7 +638,7 @@ function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
   const signalId=sig.signalId||signalIdFor(sig);
-  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
+  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:sig.intelligence?.entryRoom?.state==='BLOCK'?'BLOCKED_BARRIER':'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -870,10 +871,12 @@ function signalMessage(s){
   const zone=s.entryZone||entryZone(s);
   const room=s.intelligence&&s.intelligence.entryRoom;
   const barrierLabel=s.side==='LONG'?'前方阻力':'前方支撑';
-  const barrierLine=room&&Number.isFinite(Number(room.barrier))
-    ?barrierLabel+'：'+fmt(room.barrier,s.symbol)+(Number.isFinite(Number(room.barrierR))?' · '+Number(room.barrierR).toFixed(2)+'R':'')
+  const hasBarrier=room&&room.barrier!==null&&room.barrier!==undefined&&room.barrier!==''&&Number.isFinite(Number(room.barrier));
+  const barrierLine=hasBarrier
+    ?barrierLabel+'：'+fmt(room.barrier,s.symbol)+(room.barrierR!==null&&room.barrierR!==undefined&&Number.isFinite(Number(room.barrierR))?' · '+Number(room.barrierR).toFixed(2)+'R':'')
     :null;
-  const roomLine=room&&room.state==='TIGHT'?'价位判断：空间偏紧，尽量等好价':'价位判断：正常';
+  const roomLine=room&&room.state==='BLOCK'?'价位判断：先别进，前方空间太近':room&&room.state==='TIGHT'?'价位判断：空间偏紧，尽量等好价':'价位判断：正常';
+  const signalHeader=room&&room.state==='BLOCK'?'🧱 先别进 · '+s.symbol:'✅ 可以进 · '+s.symbol;
   if(!ex.costOk){
     return [
       '❌ 这单不要做',
@@ -892,7 +895,7 @@ function signalMessage(s){
     ].join('\n');
   }
   return [
-    '✅ 可以进 · '+s.symbol,
+    signalHeader,
     '',
     '方向：'+side,
     '逐仓：Isolated',
@@ -918,8 +921,8 @@ function signalMessage(s){
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
     '有效到：'+sgtTime(expires)+' SGT',
-    '先在 Binance 手动下单',
-    '成交后按【✅ 我已手动进场】',
+    room&&room.state==='BLOCK'?'先等 Bot 通知进入安全价区':'先在 Binance 手动下单',
+    room&&room.state==='BLOCK'?'价格合适后再手动下单':'成交后按【✅ 我已手动进场】',
     '不做就按【⏭️ Skip】'
   ].filter(Boolean).join('\n');
 }
@@ -1039,8 +1042,7 @@ async function cycle(now=Date.now()){
   }
   if(!killed){
     for(let i=candidates.length-1;i>=0;i-=1){
-      if(candidates[i].intelligence?.entryRoom?.state==='BLOCK') candidates.splice(i,1);
-      else if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
+      if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
     }
     const crypto=candidates.filter(x=>x.symbol!=='XAUUSD');
     if(crypto.length>1){
