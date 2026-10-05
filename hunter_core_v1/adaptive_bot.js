@@ -317,7 +317,9 @@ function activeText(){
     lines.push('状态：'+actionStateText(x.actionState,x.status));
     if(!x.entryConfirmed){
       const st=String(x.entryStatus||'ENTER');
-      if(st==='DO_NOT_CHASE') lines.push('⛔ 现在太贵/太低，不要追');
+      if(st==='DO_NOT_CHASE') lines.push('⛔ 已经跑太远，不要追');
+      else if(st==='BLOCKED_BARRIER') lines.push('🧱 前方阻力/支撑太近，先不要进');
+      else if(st==='WAIT_ZONE') lines.push('⏳ 价格不在可进区间，继续等');
       else lines.push('⏳ 等你按 One Tap');
       if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('最迟：'+sgtTime(x.entryExpiresAtMs)+' SGT');
     }else{
@@ -989,11 +991,22 @@ async function cleanupAutoIfFlat(t){
 function entryStateAlert(t,d){
   const p=Number(d&&d.price);
   const nowPrice=Number.isFinite(p)?fmt(p,t.symbol):'n/a';
+  const z=d&&d.zone;
+  const zoneLine=z&&z.valid?'可进区间：'+fmt(z.low,t.symbol)+' – '+fmt(z.high,t.symbol):null;
   if(d.state==='DO_NOT_CHASE'){
-    return ['⛔ 先别进 '+t.symbol,'','现在价格：'+nowPrice,'跑太远了，不要追。','等价格回来，Bot 会再通知。'].join('\n');
+    return ['⛔ 先别进 '+t.symbol,'','现在价格：'+nowPrice,zoneLine,'已经跑太远，不要追。','等价格回到区间，Bot 会再通知。'].filter(Boolean).join('\n');
+  }
+  if(d.state==='BLOCKED_BARRIER'){
+    const barrier=Number(d&&d.room&&d.room.barrier);
+    const barrierLabel=t.side==='LONG'?'前方阻力':'前方支撑';
+    return ['🧱 先别进 '+t.symbol,'','现在价格：'+nowPrice,Number.isFinite(barrier)?barrierLabel+'：'+fmt(barrier,t.symbol):null,'空间太近，风险回报不够。','等价格给更好位置或下一次重新确认。'].filter(Boolean).join('\n');
+  }
+  if(d.state==='WAIT_ZONE'){
+    return ['⏳ '+t.symbol+' 继续等','','现在价格：'+nowPrice,zoneLine,'价格暂时不在安全入场区。','回到区间后 Bot 会再通知。'].filter(Boolean).join('\n');
   }
   if(d.state==='ENTER'){
-    return ['✅ '+t.symbol+' 价格回来了','','现在价格：'+nowPrice,'现在又可以考虑进。','成交后按【✅ 已进场】。'].join('\n');
+    const grade=d.priceGrade==='GOOD'?'好价':'正常价';
+    return ['✅ '+t.symbol+' 价格回来了','','现在价格：'+nowPrice,zoneLine,'价位：'+grade,'现在可以考虑进。','成交后按【✅ 已进场】。'].filter(Boolean).join('\n');
   }
   if(d.state==='EXPIRED') return ['⌛ '+t.symbol+' 太迟了','','这单不要了。','等下一单。'].join('\n');
   if(d.state==='INVALID') return ['❌ '+t.symbol+' 这单失效','','价格已经走坏。','不要进。'].join('\n');
@@ -1094,7 +1107,7 @@ async function tradeAction(action,message){
       '从现在开始只帮你盯止损和目标。'
     ].join('\n'),keyboard());
   }
-  if(result&&['DO_NOT_CHASE','EXPIRED','INVALID'].includes(result.state)){
+  if(result&&['DO_NOT_CHASE','BLOCKED_BARRIER','WAIT_ZONE','EXPIRED','INVALID'].includes(result.state)){
     if(['EXPIRED','INVALID'].includes(result.state)) await clearSignalButtons(message);
     return send(entryStateAlert(pTrade,result),keyboard());
   }
@@ -1128,8 +1141,9 @@ async function fastLifecycleOnce(){
         }else{
           t.status='ACTIONABLE'; t.actionState='ACTIONABLE';
         }
-        const shouldAlert=(d.state==='DO_NOT_CHASE'&&prev!=='DO_NOT_CHASE')||
-          (d.state==='ENTER'&&prev==='DO_NOT_CHASE')||
+        const guarded=['DO_NOT_CHASE','BLOCKED_BARRIER','WAIT_ZONE'];
+        const shouldAlert=(guarded.includes(d.state)&&prev!==d.state)||
+          (d.state==='ENTER'&&guarded.includes(prev))||
           (['EXPIRED','INVALID'].includes(d.state)&&prev!==d.state);
         if(shouldAlert) queueAlert(state,'ENTRY|'+t.key+'|'+d.state+'|'+now,entryStateAlert(t,d),now);
         continue;
