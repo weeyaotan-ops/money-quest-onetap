@@ -305,7 +305,7 @@ function intelligenceText(){
     lines.push('');
   }
   lines.push('V2 正在运行：结构 + 流动性 + Supply/Demand + Quality Score');
-  lines.push('重叠过多的 Zone 会自动作废；Quality 继续只记录验证，不会挡掉原本有效 signal。');
+  lines.push('重叠过多的 Zone 会自动作废；前方阻力/支撑太近会先等，不会硬进。');
   return lines.join('\n');
 }
 function activeText(){
@@ -997,7 +997,8 @@ function entryStateAlert(t,d){
     return ['⛔ 先别进 '+t.symbol,'','现在价格：'+nowPrice,zoneLine,'已经跑太远，不要追。','等价格回到区间，Bot 会再通知。'].filter(Boolean).join('\n');
   }
   if(d.state==='BLOCKED_BARRIER'){
-    const barrier=Number(d&&d.room&&d.room.barrier);
+    const barrierRaw=d&&d.room&&d.room.barrier;
+    const barrier=(barrierRaw===null||barrierRaw===undefined||barrierRaw==='')?NaN:Number(barrierRaw);
     const barrierLabel=t.side==='LONG'?'前方阻力':'前方支撑';
     return ['🧱 先别进 '+t.symbol,'','现在价格：'+nowPrice,Number.isFinite(barrier)?barrierLabel+'：'+fmt(barrier,t.symbol):null,'空间太近，风险回报不够。','等价格给更好位置或下一次重新确认。'].filter(Boolean).join('\n');
   }
