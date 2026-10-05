@@ -4,7 +4,7 @@ const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
-  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -77,6 +77,29 @@ function m15Base(count=80,start=0){
   const snap={symbol:'XAUUSD',h4:flatH4(),m15:m15Base(100)};
   const r=regime(snap);
   assert.ok(['RANGE','NEUTRAL'].includes(r.type));
+})();
+
+(function setupWatchExplainsNextStep(){
+  const session={id:'LONDON',label:'London'};
+  const box={high:105,low:95,activeFrom:2*M15,activeUntil:20*M15};
+  const latest=c(5*M15,100,101,99,100);
+
+  const long=setupWatch('BTCUSDT',{type:'TREND',side:'LONG',a15:2},box,session,latest);
+  assert.strictEqual(long.status,'WAIT_BREAKOUT');
+  assert.strictEqual(long.trigger,105);
+  assert.ok(long.instruction.includes('M15'));
+
+  const short=setupWatch('XAUUSD',{type:'TREND',side:'SHORT',a15:2},box,session,latest);
+  assert.strictEqual(short.status,'WAIT_BREAKOUT');
+  assert.strictEqual(short.trigger,95);
+
+  const range=setupWatch('ETHUSDT',{type:'RANGE',a15:2},box,session,latest);
+  assert.strictEqual(range.status,'WAIT_SWEEP_RECLAIM');
+  assert.strictEqual(range.boxLow,95);
+  assert.strictEqual(range.boxHigh,105);
+
+  const noBox=setupWatch('SOLUSDT',{type:'TREND',side:'LONG'},null,session,latest);
+  assert.strictEqual(noBox.status,'WAIT_BOX');
 })();
 
 (function freshBreakoutOnly(){
