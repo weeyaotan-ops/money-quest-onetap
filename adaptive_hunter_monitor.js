@@ -28,6 +28,7 @@ const LIVE_LIFECYCLE = String(process.env.ADAPTIVE_LIVE_LIFECYCLE || '') === '1'
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
 const ENTRY_PULLBACK_ATR = Math.min(0.50, Math.max(0.05, Number(process.env.ADAPTIVE_ENTRY_PULLBACK_ATR || 0.25)));
 const ENTRY_CHASE_ATR = Math.min(0.10, Math.max(0, Number(process.env.ADAPTIVE_ENTRY_CHASE_ATR || 0.03)));
+const ENTRY_REARM_ATR = Math.min(0.25, Math.max(0.01, Number(process.env.ADAPTIVE_ENTRY_REARM_ATR || 0.08)));
 const BARRIER_BLOCK_ATR = Math.min(1.00, Math.max(0.05, Number(process.env.ADAPTIVE_BARRIER_BLOCK_ATR || 0.30)));
 const BARRIER_BLOCK_R = Math.min(2.00, Math.max(0.10, Number(process.env.ADAPTIVE_BARRIER_BLOCK_R || 0.75)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
@@ -43,7 +44,7 @@ const SESSION_DEFS = {
 };
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-function num(x){ const n=Number(x); return Number.isFinite(n)?n:null; }
+function num(x){ if(x===null||x===undefined||x==='') return null; const n=Number(x); return Number.isFinite(n)?n:null; }
 function priceDecimals(symbol){
   const m={
     BTCUSDT:1,ETHUSDT:2,SOLUSDT:2,XRPUSDT:4,BNBUSDT:2,DOGEUSDT:5,
@@ -52,6 +53,7 @@ function priceDecimals(symbol){
   return m[String(symbol||'').toUpperCase()] ?? 4;
 }
 function fmt(x,symbol){
+  if(x===null||x===undefined||x==='') return 'n/a';
   const n=Number(x); if(!Number.isFinite(n)) return 'n/a';
   return n.toFixed(priceDecimals(symbol));
 }
@@ -210,7 +212,10 @@ function barrierRoomAt(s,price){
   const barrierAtr=Number.isFinite(atr15)&&atr15>0?distance/atr15:null;
   const barrierR=distance/riskDistance;
   let state='CLEAR';
-  if((Number.isFinite(barrierAtr)&&barrierAtr<BARRIER_BLOCK_ATR)||barrierR<BARRIER_BLOCK_R) state='BLOCK';
+  const wasBlocked=String(s?.entryStatus||'')==='BLOCKED_BARRIER';
+  const blockAtr=wasBlocked?BARRIER_BLOCK_ATR+0.05:BARRIER_BLOCK_ATR;
+  const blockR=wasBlocked?BARRIER_BLOCK_R+0.10:BARRIER_BLOCK_R;
+  if((Number.isFinite(barrierAtr)&&barrierAtr<blockAtr)||barrierR<blockR) state='BLOCK';
   else if((Number.isFinite(barrierAtr)&&barrierAtr<0.55)||barrierR<1.00) state='TIGHT';
   return {state,barrier,distance,barrierAtr,barrierR};
 }
@@ -228,14 +233,17 @@ function entryDecision(t,price,now=Date.now()){
   if(t.side==='SHORT'&&Number.isFinite(stop)&&p>=stop) return {state:'INVALID',price:p,guard,zone};
   const room=barrierRoomAt(t,p);
   if(room.state==='BLOCK') return {state:'BLOCKED_BARRIER',price:p,guard,zone,room};
+  const atr15=Number(t?.atr15 ?? t?.intelligence?.a15);
+  const rearm=Number.isFinite(atr15)&&atr15>0?atr15*ENTRY_REARM_ATR:Math.abs(Number(t.entry)-Number(t.stop))*0.10;
+  const prev=String(t.entryStatus||'');
   if(t.side==='LONG'){
-    if(p>zone.high) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
-    if(p<zone.low) return {state:'WAIT_ZONE',price:p,guard,zone,room};
+    if(p>zone.high || (prev==='DO_NOT_CHASE'&&p>zone.high-rearm)) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
+    if(p<zone.low || (prev==='WAIT_ZONE'&&p<zone.low+rearm)) return {state:'WAIT_ZONE',price:p,guard,zone,room};
     return {state:'ENTER',price:p,guard,zone,room,priceGrade:p<=zone.ideal?'GOOD':'NORMAL'};
   }
   if(t.side==='SHORT'){
-    if(p<zone.low) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
-    if(p>zone.high) return {state:'WAIT_ZONE',price:p,guard,zone,room};
+    if(p<zone.low || (prev==='DO_NOT_CHASE'&&p<zone.low+rearm)) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
+    if(p>zone.high || (prev==='WAIT_ZONE'&&p>zone.high-rearm)) return {state:'WAIT_ZONE',price:p,guard,zone,room};
     return {state:'ENTER',price:p,guard,zone,room,priceGrade:p>=zone.ideal?'GOOD':'NORMAL'};
   }
   return {state:'INVALID',price:p,guard,zone,room};
@@ -759,11 +767,15 @@ function updateTrade(t,candles,now=Date.now()){
           const trail=t.side==='LONG'?e20-0.15*a:e20+0.15*a;
           if(t.runnerTrail===null) t.runnerTrail=trail;
           else t.runnerTrail=t.side==='LONG'?Math.max(t.runnerTrail,trail):Math.min(t.runnerTrail,trail);
-          const trailHit=t.side==='LONG'?c.low<=t.runnerTrail:c.high>=t.runnerTrail;
-          if(trailHit){
-            const rr=t.side==='LONG'?(t.runnerTrail-t.entry)/t.riskDistance:(t.entry-t.runnerTrail)/t.riskDistance;
-            t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3+0.6+0.4*rr;changed=true;break;
-          }
+        }
+        const trail=Number(t.runnerTrail);
+        const protective=Number.isFinite(trail)
+          ?(t.side==='LONG'?Math.max(Number(t.entry),trail):Math.min(Number(t.entry),trail))
+          :Number(t.entry);
+        const exitHit=t.side==='LONG'?c.low<=protective:c.high>=protective;
+        if(exitHit){
+          const rr=t.side==='LONG'?(protective-t.entry)/t.riskDistance:(t.entry-protective)/t.riskDistance;
+          t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3+0.6+0.4*rr;changed=true;break;
         }
       }
     }
@@ -808,10 +820,14 @@ function updateTradePrice(t,price,now=Date.now()){
         }else if(!t.terminal&&!t.tp2Hit&&t2){
           t.tp2Hit=true; t.runnerActive=true; t.status='RUNNER'; t.actionState='RUNNER'; t.stop=t.entry; changed=true;
         }
-        if(!t.terminal&&t.runnerActive&&Number.isFinite(Number(t.runnerTrail))){
-          const trailHit=t.side==='LONG'?p<=Number(t.runnerTrail):p>=Number(t.runnerTrail);
-          if(trailHit){
-            const rr=t.side==='LONG'?(Number(t.runnerTrail)-t.entry)/t.riskDistance:(t.entry-Number(t.runnerTrail))/t.riskDistance;
+        if(!t.terminal&&t.runnerActive){
+          const trail=Number(t.runnerTrail);
+          const protective=Number.isFinite(trail)
+            ?(t.side==='LONG'?Math.max(Number(t.entry),trail):Math.min(Number(t.entry),trail))
+            :Number(t.entry);
+          const exitHit=t.side==='LONG'?p<=protective:p>=protective;
+          if(exitHit){
+            const rr=t.side==='LONG'?(protective-t.entry)/t.riskDistance:(t.entry-protective)/t.riskDistance;
             t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.3+0.6+0.4*rr; changed=true;
           }
         }
@@ -914,10 +930,10 @@ function signalMessage(s){
     '本金：'+ex.equityUsdt.toFixed(0)+'U',
     '滚雪球：'+String(ex.riskLabel||'标准滚雪球')+' · '+(ex.riskPct*100).toFixed(2)+'%',
     '这单最多亏：约 '+ex.estMaxLoss.toFixed(2)+'U',
-    '目标1：到价卖 30%',
-    '目标2：到价再卖 30%',
-    '剩下：40% 继续跑',
-    '若剩余跑到约3R：预计整单净赚 '+(ex.runner3Net>=0?'+':'')+ex.runner3Net.toFixed(2)+'U',
+    s.mode==='RANGE_SWEEP'?'目标1：到价卖 50%':'目标1：到价卖 30%',
+    s.mode==='RANGE_SWEEP'?'目标2：到价卖剩下 50%':'目标2：到价再卖 30%',
+    s.mode==='TREND_RETEST'?'剩下：40% 继续跑':null,
+    s.mode==='TREND_RETEST'?'若剩余跑到约3R：预计整单净赚 '+(ex.runner3Net>=0?'+':'')+ex.runner3Net.toFixed(2)+'U':null,
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
     '有效到：'+sgtTime(expires)+' SGT',
@@ -1041,8 +1057,10 @@ async function cycle(now=Date.now()){
     }
   }
   if(!killed){
+    const busySymbols=new Set(Object.values(state.trades||{}).filter(t=>t&&!t.terminal).map(t=>String(t.symbol||'')));
     for(let i=candidates.length-1;i>=0;i-=1){
-      if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
+      if(busySymbols.has(String(candidates[i].symbol||''))) candidates.splice(i,1);
+      else if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
     }
     const crypto=candidates.filter(x=>x.symbol!=='XAUUSD');
     if(crypto.length>1){
