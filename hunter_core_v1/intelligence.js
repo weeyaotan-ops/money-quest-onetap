@@ -163,8 +163,10 @@ function scoreSignal({snap,reg={},sig={},vwap=null,context=null}){
   else if(finite(riskAtr)&&riskAtr>=0.35&&riskAtr<=1.80) parts.risk=6;
 
   const riskDistance=Math.abs(n(sig.entry)-n(sig.stop));
-  const barrier=isLong?liq.bsl:liq.ssl;
-  const barrierDistance=finite(barrier)?(isLong?n(barrier)-n(sig.entry):n(sig.entry)-n(barrier)):null;
+  const barrierRaw=isLong?liq.bsl:liq.ssl;
+  const barrierPresent=barrierRaw!==null&&barrierRaw!==undefined&&barrierRaw!==''&&finite(barrierRaw);
+  const barrier=barrierPresent?n(barrierRaw):null;
+  const barrierDistance=barrierPresent?(isLong?barrier-n(sig.entry):n(sig.entry)-barrier):null;
   let roomState='CLEAR',scoreCap=100,barrierAtr=null,barrierR=null;
   if(finite(barrierDistance)&&barrierDistance>0&&a15>0&&riskDistance>0){
     barrierAtr=barrierDistance/a15;
@@ -182,7 +184,7 @@ function scoreSignal({snap,reg={},sig={},vwap=null,context=null}){
   const label=score>=82?'HIGH':score>=70?'GOOD':score>=58?'FAIR':'LOW';
   const entryRoom={
     state:roomState,
-    barrier:finite(barrier)?n(barrier):null,
+    barrier:barrierPresent?barrier:null,
     barrierDistance:finite(barrierDistance)?round(barrierDistance,8):null,
     barrierAtr:finite(barrierAtr)?round(barrierAtr,2):null,
     barrierR:finite(barrierR)?round(barrierR,2):null,
@@ -204,7 +206,7 @@ function compactIntelligence(intel){
     liquidity:intel.liquidity,
     zones:{demand:intel.zones?.demand||null,supply:intel.zones?.supply||null,invalid:Boolean(intel.zones?.invalid),invalidReason:intel.zones?.invalidReason||null,overlapRatio:Number(intel.zones?.overlapRatio)||0},
     entryRoom:intel.entryRoom||null,
-    a15:finite(intel.a15)?n(intel.a15):null,
+    a15:intel.a15!==null&&intel.a15!==undefined&&finite(intel.a15)?n(intel.a15):null,
     sweptOpposite:Boolean(intel.sweptOpposite)
   };
 }
