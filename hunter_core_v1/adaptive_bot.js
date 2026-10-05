@@ -136,12 +136,17 @@ function actionStateText(x,status){
   if(x==='CLOSED') return '已结束';
   return String(status||x||'追踪中');
 }
+function latestPendingTrade(state=load()){
+  return Object.values(state.trades||{})
+    .filter(t=>t&&!t.terminal&&!t.entryConfirmed)
+    .sort((a,b)=>Number(b.signalAtMs||0)-Number(a.signalAtMs||0))[0]||null;
+}
 function keyboard(){
-  return {inline_keyboard:[
-    [{text:'🚨 现在能不能下',callback_data:'now'}],
-    [{text:'📌 我的单',callback_data:'active'},{text:'📊 成绩',callback_data:'results'}],
-    [{text:'⚙️ 设置',callback_data:'settings'}]
-  ]};
+  const rows=[[{text:'🚨 现在能不能下',callback_data:'now'}]];
+  if(latestPendingTrade()) rows.push([{text:'✅ 我已经进场',callback_data:'confirm_latest'}]);
+  rows.push([{text:'📌 我的单',callback_data:'active'},{text:'📊 成绩',callback_data:'results'}]);
+  rows.push([{text:'⚙️ 设置',callback_data:'settings'}]);
+  return {inline_keyboard:rows};
 }
 function settingsKeyboard(){
   return {inline_keyboard:[
@@ -527,6 +532,7 @@ async function beginCapitalInput(){
 }
 async function handleTextInput(text){
   const raw=String(text||'').trim();
+  if(['/entered','entered','已进场','我已进场','已经进场','我已经进场'].includes(raw.toLowerCase())) return confirmLatestManualEntry();
   const direct=raw.match(/^\/?capital\s+([0-9]+(?:\.[0-9]+)?)$/i);
   if(direct) return setCapital(direct[1]);
   const s=load();
@@ -549,6 +555,7 @@ async function manualBalanceSync(){
 async function handle(action,id,message=null){
   await answer(id);
   try{
+    if(action==='confirm_latest') return confirmLatestManualEntry();
     if(String(action||'').startsWith('enter:')||String(action||'').startsWith('skip:')) return tradeAction(action,message);
     if(action==='cap:custom') return beginCapitalInput();
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
@@ -571,6 +578,7 @@ function normalize(t){
   if(['/market','market'].includes(x))return'market';
   if(['/intel','intel','v2','智能'].includes(x))return'intel';
   if(['/active','active'].includes(x))return'active';
+  if(['/entered','entered','已进场','我已进场','已经进场','我已经进场'].includes(x))return'confirm_latest';
   if(['/results','results','/performance','performance'].includes(x))return'results';
   if(['/learn','learn','学习'].includes(x))return'learn';
   if(['/settings','settings','设置'].includes(x))return'settings';
@@ -587,6 +595,7 @@ async function setCommands(){
     {command:'start',description:'主页'},
     {command:'now',description:'现在能不能下'},
     {command:'active',description:'我的单'},
+    {command:'entered',description:'我已经手动进场'},
     {command:'results',description:'成绩'},
     {command:'settings',description:'设置'},
     {command:'capital',description:'更新实际资金，例如 /capital 268.5'}
@@ -1021,6 +1030,51 @@ async function clearSignalButtons(message){
   if(!Number.isFinite(messageId)) return;
   await tg('editMessageReplyMarkup',{chat_id:CHAT_ID,message_id:messageId,reply_markup:{inline_keyboard:[]}}).catch(()=>{});
 }
+async function markManualEntryByTrade(t,message=null){
+  if(!t) return send('⚠️ 现在没有待确认的 signal。',keyboard());
+  let confirmed=null;
+  let quote=null;
+  try{ quote=await livePrice(t.symbol); }catch{}
+  await withStateLock(async()=>{
+    const state=load();
+    const live=findTradeBySignalId(state,t.signalId);
+    if(!live||live.terminal||live.entryConfirmed) return;
+    const now=Date.now();
+    live.entryConfirmed=true;
+    live.entryConfirmedAtMs=now;
+    live.actualEntryPrice=Number(live.entry);
+    live.confirmationPrice=quote&&Number.isFinite(Number(quote.price))?Number(quote.price):null;
+    live.entryStatus='CONFIRMED';
+    live.status='OPEN';
+    live.actionState='OPEN';
+    live.autoTradePending=false;
+    live.autoManaged=false;
+    live.lastOpenTime=Math.floor(now/M15_MS)*M15_MS;
+    confirmed={...live};
+    save(state);
+  });
+  if(!confirmed){
+    return send('⚠️ 这单已经确认、结束或失效。',keyboard());
+  }
+  if(message) await clearSignalButtons(message);
+  return send([
+    '✅ 已记录：你已经进场','',
+    confirmed.symbol+' · '+sideText(confirmed.side),
+    '按信号入场价记录：'+fmt(confirmed.entry,confirmed.symbol),
+    Number.isFinite(Number(confirmed.confirmationPrice))?'你确认时市场价：'+fmt(confirmed.confirmationPrice,confirmed.symbol):null,
+    '止损：'+fmt(confirmed.stop,confirmed.symbol),
+    '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
+    '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
+    '',
+    '从现在开始停止发“继续等/价格回来了”。',
+    'Bot 只帮你盯这单的 SL / TP。'
+  ].filter(Boolean).join('\n'),keyboard());
+}
+async function confirmLatestManualEntry(){
+  const t=latestPendingTrade();
+  return markManualEntryByTrade(t);
+}
+
 async function tradeAction(action,message){
   const raw=String(action||'');
   const parts=raw.split(':');
@@ -1053,66 +1107,12 @@ async function tradeAction(action,message){
   const preview=load();
   const pTrade=findTradeBySignalId(preview,id);
   if(!pTrade) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
-  if(pTrade.terminal) return send('这单已经结束，不能再进。',keyboard());
+  if(pTrade.terminal) return send('这单已经结束，不能再记录进场。',keyboard());
   if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经记录为已进场。',keyboard());
 
-  let quote=null;
-  try{ quote=await livePrice(pTrade.symbol); }
-  catch(e){ return send('⚠️ 暂时拿不到 '+pTrade.symbol+' 现在价格，先不要进。等几秒再按。',keyboard()); }
-
-  let result=null,confirmed=null;
-  await withStateLock(async()=>{
-    const state=load();
-    const t=findTradeBySignalId(state,id);
-    if(!t){result={state:'MISSING'};return;}
-    result=entryDecision(t,quote.price,Date.now());
-    if(result.state==='ENTER'){
-      const now=Date.now();
-      t.entryConfirmed=true;
-      t.entryConfirmedAtMs=now;
-      t.actualEntryPrice=Number(quote.price);
-      t.entryStatus='CONFIRMED';
-      t.status='OPEN';
-      t.actionState='OPEN';
-      t.autoTradePending=false;
-      t.autoManaged=false;
-      t.lastOpenTime=Math.floor(now/M15_MS)*M15_MS;
-      confirmed={...t};
-      save(state);
-    }else if(['EXPIRED','INVALID'].includes(result.state)){
-      t.entryStatus=result.state;
-      t.status=result.state;
-      t.actionState='CLOSED';
-      t.terminal=true;
-      t.realizedR=null;
-      t.autoTradePending=false;
-      t.autoManaged=false;
-      save(state);
-    }else{
-      t.entryStatus=result.state;
-      save(state);
-    }
-  });
-
-  if(result&&result.state==='ENTER'&&confirmed){
-    await clearSignalButtons(message);
-    return send([
-      '✅ 已记录手动进场','',
-      confirmed.symbol+' · '+sideText(confirmed.side),
-      '确认时价格：'+fmt(confirmed.actualEntryPrice,confirmed.symbol),
-      '止损：'+fmt(confirmed.stop,confirmed.symbol),
-      '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
-      '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
-      '',
-      'Bot 不会操作你的 Binance。',
-      '从现在开始只帮你盯止损和目标。'
-    ].join('\n'),keyboard());
-  }
-  if(result&&['DO_NOT_CHASE','BLOCKED_BARRIER','WAIT_ZONE','EXPIRED','INVALID'].includes(result.state)){
-    if(['EXPIRED','INVALID'].includes(result.state)) await clearSignalButtons(message);
-    return send(entryStateAlert(pTrade,result),keyboard());
-  }
-  return send('⚠️ 现在不适合确认进场。',keyboard());
+  // This button means the user ALREADY filled manually.
+  // Do not re-run entry-zone/chase validation after the fill.
+  return markManualEntryByTrade(pTrade,message);
 }
 
 async function fastLifecycleOnce(){
