@@ -67,7 +67,7 @@ function fmtZone(z,symbol){
   if(!z||!Number.isFinite(Number(z.low))||!Number.isFinite(Number(z.high))) return 'n/a';
   return fmt(z.low,symbol)+' - '+fmt(z.high,symbol);
 }
-function biasText(x){ return x==='BULLISH'?'Bullish':x==='BEARISH'?'Bearish':'Neutral'; }
+function biasText(x){ return x==='BULLISH'?'多头':x==='BEARISH'?'空头':'中性'; }
 function qualityText(x){
   const score=Number(x&&x.score);
   return Number.isFinite(score)?score.toFixed(0)+'/100 · '+String(x.label||''):'n/a';
@@ -80,6 +80,24 @@ function regimeText(x){
   if(x==='STALE') return '🔴 数据过旧';
   if(x==='CLOSED') return '⚪ 休市';
   return '⚪ 中性';
+}
+function simpleMarketStatus(x){
+  const symbol=String(x&&x.symbol||'市场');
+  const regime=String(x&&x.regime||'NEUTRAL');
+  const side=String(x&&x.side||'');
+  if(regime==='CLOSED') return '⚪ '+symbol+' · 休市 · 不下';
+  if(regime==='STALE') return '🔴 '+symbol+' · 数据过旧 · 不下';
+  if(regime==='CHAOS') return '🔴 '+symbol+' · 市场太乱 · 不下';
+  if(regime==='RANGE') return '🟡 '+symbol+' · 区间 · 等扫流动性再收回';
+  if(regime==='TREND'&&side){
+    const want=side==='LONG'?'BULLISH':'BEARISH';
+    const st=x&&x.intelligence&&x.intelligence.structure||{};
+    const direction=side==='LONG'?'偏多':'偏空';
+    if(st.h4===want&&st.m15===want) return '🟡 '+symbol+' · '+direction+' · 等突破 + 回踩确认';
+    if(st.h4===want||st.m15===want) return '🟡 '+symbol+' · '+direction+' · 结构还没完全确认，继续等';
+    return '🟡 '+symbol+' · '+direction+' · 结构未确认，先不下';
+  }
+  return '⚪ '+symbol+' · 暂时没方向 · 等';
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
@@ -166,13 +184,26 @@ function nowText(){
   }
   const armed=scan.armed||[];
   if(armed.length){
-    lines.push('👀 现在还不能进');
-    lines.push('Bot 正在等价格回来。');
-    for(const x of armed.slice(0,4)) lines.push('• '+x.symbol+' · '+(x.side==='LONG'?'等做多':'等做空'));
+    lines.push('🟡 现在还不能下');
+    lines.push('现在：不要下。');
+    lines.push('突破已经发生，Bot 正在等回踩确认。');
+    for(const x of armed.slice(0,4)) lines.push('• '+x.symbol+' · '+(x.side==='LONG'?'偏多':'偏空')+' · 等回踩');
     return lines.join('\n');
   }
   lines.push('⚪ 现在没有可以下的单');
-  lines.push('不用做，等 Bot 通知。');
+  lines.push('现在：不要下。');
+  const watches=Object.values(s.market||{}).filter(x=>x&&x.regime!=='CLOSED'&&x.regime!=='STALE');
+  watches.sort((a,b)=>{
+    const score=x=>(x.symbol==='XAUUSD'?3:0)+(x.regime==='TREND'?2:x.regime==='RANGE'?1:0);
+    return score(b)-score(a)||String(a.symbol).localeCompare(String(b.symbol));
+  });
+  if(watches.length){
+    lines.push('');
+    lines.push('最接近条件：');
+    for(const x of watches.slice(0,4)) lines.push(simpleMarketStatus(x));
+  }
+  lines.push('');
+  lines.push('有确认时 Bot 会直接给 Entry / SL / TP。');
   return lines.join('\n');
 }
 function marketText(){
@@ -180,20 +211,24 @@ function marketText(){
   if(!xs.length) return lines.concat('还没有最新市场数据。').join('\n');
   xs.sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));
   for(const x of xs){
-    lines.push(regimeText(x.regime)+' '+x.symbol+(x.side?' · '+sideText(x.side):''));
-    lines.push('M15收盘 '+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
+    lines.push(simpleMarketStatus(x));
+    lines.push('M15 收盘：'+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
     const intel=x.intelligence||{},st=intel.structure||{},liq=intel.liquidity||{},zones=intel.zones||{};
-    if(st.h4||st.m15) lines.push('结构 H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
-    if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('BSL '+fmt(liq.bsl,x.symbol)+' · SSL '+fmt(liq.ssl,x.symbol));
-    if(zones.demand||zones.supply) lines.push('Demand '+fmtZone(zones.demand,x.symbol)+' · Supply '+fmtZone(zones.supply,x.symbol));
+    if(st.h4||st.m15) lines.push('结构：H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
+    if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('流动性：上方 '+fmt(liq.bsl,x.symbol)+' · 下方 '+fmt(liq.ssl,x.symbol));
+    if(zones.invalid){
+      lines.push('区域：⚠️ Demand / Supply 重叠 '+Math.round((Number(zones.overlapRatio)||0)*100)+'% · 已忽略');
+    }else if(zones.demand||zones.supply){
+      lines.push('Demand '+fmtZone(zones.demand,x.symbol)+' · Supply '+fmtZone(zones.supply,x.symbol));
+    }
     const lag=Number(x.lagMinutes);
-    if(x.regime==='CLOSED') lines.push('数据 '+(x.provider||'n/a')+' · 市场休市（最后收盘）');
-    else lines.push('数据 '+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 数据源落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
+    if(x.regime==='CLOSED') lines.push('数据：'+(x.provider||'n/a')+' · 市场休市（最后收盘）');
+    else lines.push('数据：'+(x.provider||'n/a')+(Number.isFinite(lag)?(lag>0.1?' · 落后 '+lag.toFixed(1)+'分钟':' · M15 已同步'):''));
     if(x.regime==='STALE') lines.push('⚠️ 旧数据不会发信号');
     if(x.regime==='CLOSED') lines.push('周末休市，不会发信号');
     lines.push('');
   }
-  lines.push('趋势 → 等突破回踩','区间 → 等扫流动性再收回','BSL/SSL + Supply/Demand → 作为智能上下文','Quality score → 先记录验证，不直接挡信号');
+  lines.push('趋势：等突破 + 回踩确认','区间：等扫流动性再收回','Demand / Supply 重叠过多会自动作废','Quality Score 继续只做记录验证，不挡原本有效 signal');
   return lines.join('\n');
 }
 function intelligenceText(){
@@ -202,16 +237,20 @@ function intelligenceText(){
   xs.sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol)));
   for(const x of xs){
     const intel=x.intelligence||{},st=intel.structure||{},liq=intel.liquidity||{},zones=intel.zones||{};
-    lines.push('• '+x.symbol);
-    lines.push('Regime：'+String(x.regime||'n/a')+(x.side?' · '+sideText(x.side):''));
-    lines.push('Structure：H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
-    lines.push('BSL：'+fmt(liq.bsl,x.symbol)+' · SSL：'+fmt(liq.ssl,x.symbol));
-    lines.push('Demand：'+fmtZone(zones.demand,x.symbol));
-    lines.push('Supply：'+fmtZone(zones.supply,x.symbol));
+    lines.push(simpleMarketStatus(x));
+    lines.push('大方向：'+(x.regime==='TREND'?'趋势':x.regime==='RANGE'?'区间':x.regime==='CHAOS'?'混乱':x.regime==='CLOSED'?'休市':'中性')+(x.side?' · '+(x.side==='LONG'?'偏多':'偏空'):''));
+    lines.push('结构确认：H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
+    lines.push('上方流动性：'+fmt(liq.bsl,x.symbol)+' · 下方流动性：'+fmt(liq.ssl,x.symbol));
+    if(zones.invalid){
+      lines.push('区域：⚠️ Demand / Supply 重叠 '+Math.round((Number(zones.overlapRatio)||0)*100)+'% · Zone Invalid · 不采用');
+    }else{
+      lines.push('Demand：'+fmtZone(zones.demand,x.symbol));
+      lines.push('Supply：'+fmtZone(zones.supply,x.symbol));
+    }
     lines.push('');
   }
   lines.push('V2 正在运行：结构 + 流动性 + Supply/Demand + Quality Score');
-  lines.push('Quality 目前只记录验证，不会挡掉原本有效 signal。');
+  lines.push('重叠过多的 Zone 会自动作废；Quality 继续只记录验证，不会挡掉原本有效 signal。');
   return lines.join('\n');
 }
 function activeText(){
