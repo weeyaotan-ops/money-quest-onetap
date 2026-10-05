@@ -162,9 +162,33 @@ function scoreSignal({snap,reg={},sig={},vwap=null,context=null}){
   if(finite(riskAtr)&&riskAtr>=0.60&&riskAtr<=1.40) parts.risk=10;
   else if(finite(riskAtr)&&riskAtr>=0.35&&riskAtr<=1.80) parts.risk=6;
 
-  const score=clamp(Object.values(parts).reduce((a,b)=>a+b,0),0,100);
+  const riskDistance=Math.abs(n(sig.entry)-n(sig.stop));
+  const barrier=isLong?liq.bsl:liq.ssl;
+  const barrierDistance=finite(barrier)?(isLong?n(barrier)-n(sig.entry):n(sig.entry)-n(barrier)):null;
+  let roomState='CLEAR',scoreCap=100,barrierAtr=null,barrierR=null;
+  if(finite(barrierDistance)&&barrierDistance>0&&a15>0&&riskDistance>0){
+    barrierAtr=barrierDistance/a15;
+    barrierR=barrierDistance/riskDistance;
+    if(barrierAtr<0.30||barrierR<0.75){
+      roomState='BLOCK';
+      scoreCap=69;
+    }else if(barrierAtr<0.55||barrierR<1.00){
+      roomState='TIGHT';
+      scoreCap=79;
+    }
+  }
+  const rawScore=clamp(Object.values(parts).reduce((a,b)=>a+b,0),0,100);
+  const score=clamp(Math.min(rawScore,scoreCap),0,100);
   const label=score>=82?'HIGH':score>=70?'GOOD':score>=58?'FAIR':'LOW';
-  return {...ctx,score,label,parts,sweptOpposite};
+  const entryRoom={
+    state:roomState,
+    barrier:finite(barrier)?n(barrier):null,
+    barrierDistance:finite(barrierDistance)?round(barrierDistance,8):null,
+    barrierAtr:finite(barrierAtr)?round(barrierAtr,2):null,
+    barrierR:finite(barrierR)?round(barrierR,2):null,
+    scoreCap
+  };
+  return {...ctx,score,label,parts,sweptOpposite,entryRoom};
 }
 
 function decisionLabel(sig,intel,isReentry=false){
@@ -179,6 +203,8 @@ function compactIntelligence(intel){
     score:intel.score,label:intel.label,structure:intel.structure,
     liquidity:intel.liquidity,
     zones:{demand:intel.zones?.demand||null,supply:intel.zones?.supply||null,invalid:Boolean(intel.zones?.invalid),invalidReason:intel.zones?.invalidReason||null,overlapRatio:Number(intel.zones?.overlapRatio)||0},
+    entryRoom:intel.entryRoom||null,
+    a15:finite(intel.a15)?n(intel.a15):null,
     sweptOpposite:Boolean(intel.sweptOpposite)
   };
 }
