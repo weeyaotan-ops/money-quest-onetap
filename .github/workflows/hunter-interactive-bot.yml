@@ -37,7 +37,7 @@ on:
     - cron: "17 */12 * * *"
 
 concurrency:
-  group: hunter-adaptive-telegram-bot-v5
+  group: hunter-adaptive-telegram-bot-v6
   cancel-in-progress: true
 
 permissions:
