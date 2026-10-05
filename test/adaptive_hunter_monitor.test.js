@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, chaseGuard, signalMessage,
+  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
@@ -187,8 +187,28 @@ function m15Base(count=80,start=0){
   assert.ok(msg.includes('方向：做多 LONG'));
   assert.ok(msg.includes('杠杆：'));
   assert.ok(msg.includes('数量：'));
-  assert.ok(msg.includes('入场：10000.0'));
+  assert.ok(msg.includes('参考入场：10000.0'));
+  assert.ok(msg.includes('可进区间：'));
   assert.ok(msg.includes('有效到：'));
+})();
+
+(function atrEntryZoneAndBarrierGuard(){
+  const s={symbol:'LTCUSDT',side:'LONG',entry:70.39,stop:70.19,atr15:0.30,intelligence:{a15:0.30,entryRoom:{barrier:70.43}}};
+  const z=entryZone(s);
+  assert.ok(z.valid);
+  assert.ok(z.low<70.39);
+  assert.ok(z.high>70.39);
+  assert.ok(z.high<=70.40);
+  const room=barrierRoomAt(s,70.39);
+  assert.strictEqual(room.state,'BLOCK');
+  assert.strictEqual(entryDecision({...s,entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false},70.39,M15).state,'BLOCKED_BARRIER');
+
+  const clear={...s,intelligence:{a15:0.30,entryRoom:{barrier:70.90}}};
+  const d1=entryDecision({...clear,entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false},70.39,M15);
+  assert.strictEqual(d1.state,'ENTER');
+  assert.ok(['GOOD','NORMAL'].includes(d1.priceGrade));
+  const d2=entryDecision({...clear,entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false},70.41,M15);
+  assert.strictEqual(d2.state,'DO_NOT_CHASE');
 })();
 
 (function lifecycleExpiry(){
