@@ -26,6 +26,10 @@ const TAKER_FEE_RATE = Math.max(0, Number(process.env.ADAPTIVE_TAKER_FEE_RATE ||
 const SLIPPAGE_BUFFER_RATE = Math.max(0, Number(process.env.ADAPTIVE_SLIPPAGE_BUFFER_RATE || 0.0002));
 const LIVE_LIFECYCLE = String(process.env.ADAPTIVE_LIVE_LIFECYCLE || '') === '1';
 const MAX_CHASE_R = Math.min(0.25, Math.max(0, Number(process.env.ADAPTIVE_MAX_CHASE_R || 0.05)));
+const ENTRY_PULLBACK_ATR = Math.min(0.50, Math.max(0.05, Number(process.env.ADAPTIVE_ENTRY_PULLBACK_ATR || 0.25)));
+const ENTRY_CHASE_ATR = Math.min(0.10, Math.max(0, Number(process.env.ADAPTIVE_ENTRY_CHASE_ATR || 0.03)));
+const BARRIER_BLOCK_ATR = Math.min(1.00, Math.max(0.05, Number(process.env.ADAPTIVE_BARRIER_BLOCK_ATR || 0.30)));
+const BARRIER_BLOCK_R = Math.min(2.00, Math.max(0.10, Number(process.env.ADAPTIVE_BARRIER_BLOCK_R || 0.75)));
 const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
 const SYMBOLS = String(process.env.ADAPTIVE_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD')
@@ -168,6 +172,47 @@ function signalKeyboard(s){
     {text:'⏭️ Skip',callback_data:'skip:'+id}
   ]]};
 }
+function entryZone(s){
+  const entry=Number(s?.entry), stop=Number(s?.stop);
+  const side=String(s?.side||'').toUpperCase();
+  const riskDistance=Math.abs(entry-stop);
+  const atr15=Number(s?.atr15 ?? s?.intelligence?.a15);
+  const valid=Number.isFinite(entry)&&Number.isFinite(stop)&&riskDistance>0&&(side==='LONG'||side==='SHORT');
+  if(!valid) return {valid:false,low:null,high:null,ideal:null,chaseDelta:0,pullbackDelta:0};
+  const chaseByR=riskDistance*MAX_CHASE_R;
+  const chaseByAtr=Number.isFinite(atr15)&&atr15>0?atr15*ENTRY_CHASE_ATR:chaseByR;
+  const chaseDelta=Math.max(0,Math.min(chaseByR,chaseByAtr));
+  const pullbackByR=riskDistance*0.35;
+  const pullbackByAtr=Number.isFinite(atr15)&&atr15>0?atr15*ENTRY_PULLBACK_ATR:pullbackByR;
+  const pullbackDelta=Math.max(0,Math.min(pullbackByR,pullbackByAtr));
+  if(side==='LONG'){
+    const low=Math.max(stop+0.10*riskDistance,entry-pullbackDelta);
+    const high=entry+chaseDelta;
+    const ideal=entry-Math.min(pullbackDelta*0.50,Number.isFinite(atr15)&&atr15>0?atr15*0.10:pullbackDelta*0.50);
+    return {valid:true,low,high,ideal,chaseDelta,pullbackDelta,atr15:Number.isFinite(atr15)?atr15:null};
+  }
+  const low=entry-chaseDelta;
+  const high=Math.min(stop-0.10*riskDistance,entry+pullbackDelta);
+  const ideal=entry+Math.min(pullbackDelta*0.50,Number.isFinite(atr15)&&atr15>0?atr15*0.10:pullbackDelta*0.50);
+  return {valid:true,low,high,ideal,chaseDelta,pullbackDelta,atr15:Number.isFinite(atr15)?atr15:null};
+}
+function barrierRoomAt(s,price){
+  const p=Number(price);
+  const entry=Number(s?.entry), stop=Number(s?.stop);
+  const side=String(s?.side||'').toUpperCase();
+  const barrier=Number(s?.intelligence?.entryRoom?.barrier);
+  const atr15=Number(s?.atr15 ?? s?.intelligence?.a15);
+  const riskDistance=Math.abs(entry-stop);
+  if(!Number.isFinite(p)||!Number.isFinite(barrier)||!Number.isFinite(riskDistance)||!(riskDistance>0)) return {state:'CLEAR',barrier:null,distance:null,barrierAtr:null,barrierR:null};
+  const distance=side==='SHORT'?p-barrier:barrier-p;
+  if(!(distance>0)) return {state:'CLEAR',barrier,distance,barrierAtr:null,barrierR:null};
+  const barrierAtr=Number.isFinite(atr15)&&atr15>0?distance/atr15:null;
+  const barrierR=distance/riskDistance;
+  let state='CLEAR';
+  if((Number.isFinite(barrierAtr)&&barrierAtr<BARRIER_BLOCK_ATR)||barrierR<BARRIER_BLOCK_R) state='BLOCK';
+  else if((Number.isFinite(barrierAtr)&&barrierAtr<0.55)||barrierR<1.00) state='TIGHT';
+  return {state,barrier,distance,barrierAtr,barrierR};
+}
 function entryDecision(t,price,now=Date.now()){
   if(!t||typeof t!=='object') return {state:'INVALID',price:null};
   if(t.terminal) return {state:'CLOSED',price:null};
@@ -176,30 +221,34 @@ function entryDecision(t,price,now=Date.now()){
   const p=(price===null||price===undefined||price==='')?NaN:Number(price);
   if(!Number.isFinite(p)) return {state:'UNKNOWN',price:null};
   const guard=chaseGuard(t);
+  const zone=guard.entryZone;
   const stop=Number(t.stop);
+  if(t.side==='LONG'&&Number.isFinite(stop)&&p<=stop) return {state:'INVALID',price:p,guard,zone};
+  if(t.side==='SHORT'&&Number.isFinite(stop)&&p>=stop) return {state:'INVALID',price:p,guard,zone};
+  const room=barrierRoomAt(t,p);
+  if(room.state==='BLOCK') return {state:'BLOCKED_BARRIER',price:p,guard,zone,room};
   if(t.side==='LONG'){
-    if(Number.isFinite(stop)&&p<=stop) return {state:'INVALID',price:p,guard};
-    if(p>guard.chasePrice) return {state:'DO_NOT_CHASE',price:p,guard};
-    return {state:'ENTER',price:p,guard};
+    if(p>zone.high) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
+    if(p<zone.low) return {state:'WAIT_ZONE',price:p,guard,zone,room};
+    return {state:'ENTER',price:p,guard,zone,room,priceGrade:p<=zone.ideal?'GOOD':'NORMAL'};
   }
   if(t.side==='SHORT'){
-    if(Number.isFinite(stop)&&p>=stop) return {state:'INVALID',price:p,guard};
-    if(p<guard.chasePrice) return {state:'DO_NOT_CHASE',price:p,guard};
-    return {state:'ENTER',price:p,guard};
+    if(p<zone.low) return {state:'DO_NOT_CHASE',price:p,guard,zone,room};
+    if(p>zone.high) return {state:'WAIT_ZONE',price:p,guard,zone,room};
+    return {state:'ENTER',price:p,guard,zone,room,priceGrade:p>=zone.ideal?'GOOD':'NORMAL'};
   }
-  return {state:'INVALID',price:p,guard};
+  return {state:'INVALID',price:p,guard,zone,room};
 }
 function chaseGuard(s){
-  const entry=Number(s?.entry), stop=Number(s?.stop);
-  const riskDistance=Math.abs(entry-stop);
+  const entry=Number(s?.entry);
   const side=String(s?.side||'').toUpperCase();
-  const valid=Number.isFinite(entry)&&Number.isFinite(stop)&&Number.isFinite(riskDistance)&&riskDistance>0;
-  const delta=valid?riskDistance*MAX_CHASE_R:0;
-  const chasePrice=side==='SHORT'?entry-delta:entry+delta;
+  const zone=entryZone(s);
+  const chasePrice=zone.valid?(side==='SHORT'?zone.low:zone.high):entry;
   return {
     limitEntry:entry,
     chasePrice,
     maxChaseR:MAX_CHASE_R,
+    entryZone:zone,
     boundaryLabel:side==='SHORT'?'追价下限':'追价上限',
     skipLabel:side==='SHORT'?'跌破追价下限：SKIP / 等回踩':'超过追价上限：SKIP / 等回踩'
   };
@@ -545,7 +594,7 @@ function retestSignal(snap,armed,box,reg){
     const swing=Math.min(...xs.map(x=>x.low)); const stop=swing-0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
     const risk=cur.close-stop;
-    return {mode:'TREND_RETEST',side:'LONG',entry:cur.close,stop,tp1:cur.close+risk,tp2:cur.close+2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
+    return {mode:'TREND_RETEST',side:'LONG',entry:cur.close,stop,tp1:cur.close+risk,tp2:cur.close+2*risk,riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.high,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
   }else{
     const touched=cur.high>=box.low-0.25*a && cur.high<=box.low+0.60*a;
     const reclaimed=cur.close<box.low && vwapGate('SHORT',cur.close,vwap) && cur.close<=cur.open;
@@ -553,7 +602,7 @@ function retestSignal(snap,armed,box,reg){
     const swing=Math.max(...xs.map(x=>x.high)); const stop=swing+0.15*a; const gate=qualityGate(cur.close,stop,a);
     if(!gate.ok) return {reject:true,reason:gate.reason};
     const risk=stop-cur.close;
-    return {mode:'TREND_RETEST',side:'SHORT',entry:cur.close,stop,tp1:cur.close-risk,tp2:cur.close-2*risk,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
+    return {mode:'TREND_RETEST',side:'SHORT',entry:cur.close,stop,tp1:cur.close-risk,tp2:cur.close-2*risk,riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.low,candle:cur,plan:'30%@1R · 30%@2R · 40% Runner'};
   }
 }
 function rangeSignal(snap,box,reg){
@@ -563,13 +612,13 @@ function rangeSignal(snap,box,reg){
     const stop=cur.low-0.15*a; const risk=cur.close-stop; const r1=(box.mid-cur.close)/risk, r2=(box.high-cur.close)/risk;
     if(risk<=0||r1<0.8||r2<1.5) return null;
     const gate=qualityGate(cur.close,stop,a); if(!gate.ok) return null;
-    return {mode:'RANGE_SWEEP',side:'LONG',entry:cur.close,stop,tp1:box.mid,tp2:box.high,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'50%@中线 · 50%@另一边Box'};
+    return {mode:'RANGE_SWEEP',side:'LONG',entry:cur.close,stop,tp1:box.mid,tp2:box.high,riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.low,candle:cur,plan:'50%@中线 · 50%@另一边Box'};
   }
   if(cur.high>box.high+0.10*a && cur.close<box.high && prev.high<=box.high+0.10*a){
     const stop=cur.high+0.15*a; const risk=stop-cur.close; const r1=(cur.close-box.mid)/risk, r2=(cur.close-box.low)/risk;
     if(risk<=0||r1<0.8||r2<1.5) return null;
     const gate=qualityGate(cur.close,stop,a); if(!gate.ok) return null;
-    return {mode:'RANGE_SWEEP',side:'SHORT',entry:cur.close,stop,tp1:box.mid,tp2:box.low,riskDistance:risk,riskAtr:gate.riskAtr,candle:cur,plan:'50%@中线 · 50%@另一边Box'};
+    return {mode:'RANGE_SWEEP',side:'SHORT',entry:cur.close,stop,tp1:box.mid,tp2:box.low,riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.high,candle:cur,plan:'50%@中线 · 50%@另一边Box'};
   }
   return null;
 }
@@ -588,7 +637,7 @@ function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
   const signalId=sig.signalId||signalIdFor(sig);
-  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
+  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -818,6 +867,13 @@ function signalMessage(s){
   const score=Number(s.intelligence&&s.intelligence.score);
   const side=s.side==='LONG'?'做多 LONG':'做空 SHORT';
   const qtyUnit=String(s.symbol||'').replace('USDT','');
+  const zone=s.entryZone||entryZone(s);
+  const room=s.intelligence&&s.intelligence.entryRoom;
+  const barrierLabel=s.side==='LONG'?'前方阻力':'前方支撑';
+  const barrierLine=room&&Number.isFinite(Number(room.barrier))
+    ?barrierLabel+'：'+fmt(room.barrier,s.symbol)+(Number.isFinite(Number(room.barrierR))?' · '+Number(room.barrierR).toFixed(2)+'R':'')
+    :null;
+  const roomLine=room&&room.state==='TIGHT'?'价位判断：空间偏紧，尽量等好价':'价位判断：正常';
   if(!ex.costOk){
     return [
       '❌ 这单不要做',
@@ -825,7 +881,9 @@ function signalMessage(s){
       s.symbol+' · '+side,
       '原因：'+String(ex.costReason||'手续费和利润不划算'),
       '',
-      '入场：'+fmt(s.entry,s.symbol),
+      '参考入场：'+fmt(s.entry,s.symbol),
+      zone&&zone.valid?'可进区间：'+fmt(zone.low,s.symbol)+' – '+fmt(zone.high,s.symbol):null,
+      barrierLine,
       '目标1：'+fmt(s.tp1,s.symbol),
       '目标2：'+fmt(s.tp2,s.symbol),
       '预计目标2净赚：'+(ex.tp2Net>=0?'+':'')+ex.tp2Net.toFixed(2)+'U',
@@ -841,7 +899,11 @@ function signalMessage(s){
     '杠杆：'+ex.leverage+'x',
     '数量：'+ex.quantity.toFixed(ex.qtyDecimals)+' '+qtyUnit,
     '',
-    '入场：'+fmt(s.entry,s.symbol),
+    '参考入场：'+fmt(s.entry,s.symbol),
+    zone&&zone.valid?'可进区间：'+fmt(zone.low,s.symbol)+' – '+fmt(zone.high,s.symbol):null,
+    zone&&zone.valid?'更好价：约 '+fmt(zone.ideal,s.symbol):null,
+    roomLine,
+    barrierLine,
     '止损：'+fmt(s.stop,s.symbol),
     '目标1：'+fmt(s.tp1,s.symbol),
     '目标2：'+fmt(s.tp2,s.symbol),
@@ -977,7 +1039,8 @@ async function cycle(now=Date.now()){
   }
   if(!killed){
     for(let i=candidates.length-1;i>=0;i-=1){
-      if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
+      if(candidates[i].intelligence?.entryRoom?.state==='BLOCK') candidates.splice(i,1);
+      else if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
     }
     const crypto=candidates.filter(x=>x.symbol!=='XAUUSD');
     if(crypto.length>1){
@@ -1003,7 +1066,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:x.side==='LONG'?x.boxHigh:x.boxLow,expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:x.side==='LONG'?x.boxHigh:x.boxLow,expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -1011,4 +1074,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,cycle};
