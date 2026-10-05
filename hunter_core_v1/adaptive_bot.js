@@ -99,6 +99,33 @@ function simpleMarketStatus(x){
   }
   return '⚪ '+symbol+' · 暂时没方向 · 等';
 }
+function watchRank(w){
+  const status=String(w&&w.status||'');
+  const statusScore={WAIT_BREAKOUT:0,WAIT_SWEEP_RECLAIM:1,WAIT_BOX_CLOSE:2,WAIT_BOX:3,WAIT_DIRECTION:4,WAIT_CALM:5}[status]??9;
+  const d=Number(w&&w.distanceAtr);
+  return statusScore*100+(Number.isFinite(d)?Math.min(d,99):50);
+}
+function watchText(w){
+  const symbol=String(w&&w.symbol||'市场');
+  const session=String(w&&w.sessionLabel||w&&w.session||'');
+  const where=session?' · '+session:'';
+  const side=String(w&&w.side||'');
+  if(w&&w.status==='WAIT_BREAKOUT'&&Number.isFinite(Number(w.trigger))){
+    const dir=side==='LONG'?'上破':'下破';
+    const action=side==='LONG'?'LONG':'SHORT';
+    return '🟡 '+symbol+where+'\n   先等：M15 收盘'+dir+' '+fmt(w.trigger,symbol)+'\n   然后：回踩确认后才 '+action;
+  }
+  if(w&&w.status==='WAIT_SWEEP_RECLAIM'){
+    return '🟡 '+symbol+where+'\n   等扫 Box：'+fmt(w.boxLow,symbol)+' / '+fmt(w.boxHigh,symbol)+'\n   M15 收回 Box 内才考虑进';
+  }
+  if(w&&w.status==='WAIT_BOX_CLOSE'){
+    return '⚪ '+symbol+where+'\n   先等前30分钟 Box 完成：'+fmt(w.boxLow,symbol)+' - '+fmt(w.boxHigh,symbol);
+  }
+  if(w&&w.status==='WAIT_BOX') return '⚪ '+symbol+where+' · 等前30分钟开盘区间形成';
+  if(w&&w.status==='WAIT_CALM') return '🔴 '+symbol+where+' · 波动太乱，等市场稳定';
+  if(w&&w.status==='WAIT_DIRECTION') return '⚪ '+symbol+where+' · 等趋势/区间方向变清楚';
+  return null;
+}
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
   if(x==='ACTIONABLE') return '等你决定';
@@ -186,24 +213,52 @@ function nowText(){
   if(armed.length){
     lines.push('🟡 现在还不能下');
     lines.push('现在：不要下。');
-    lines.push('突破已经发生，Bot 正在等回踩确认。');
-    for(const x of armed.slice(0,4)) lines.push('• '+x.symbol+' · '+(x.side==='LONG'?'偏多':'偏空')+' · 等回踩');
+    lines.push('突破已经发生，下一步是在等回踩确认：');
+    for(const x of armed.slice(0,4)){
+      const level=Number(x.retestLevel);
+      const action=x.side==='LONG'?'LONG':'SHORT';
+      if(Number.isFinite(level)){
+        lines.push('• '+x.symbol+' · '+String(x.session||''));
+        lines.push('  等价格回到 '+fmt(level,x.symbol)+' 附近');
+        lines.push('  M15 再次站在'+(x.side==='LONG'?'上方':'下方')+'才 '+action);
+      }else{
+        lines.push('• '+x.symbol+' · 等回踩确认才 '+action);
+      }
+    }
     return lines.join('\n');
   }
   lines.push('⚪ 现在没有可以下的单');
   lines.push('现在：不要下。');
-  const watches=Object.values(s.market||{}).filter(x=>x&&x.regime!=='CLOSED'&&x.regime!=='STALE');
-  watches.sort((a,b)=>{
-    const score=x=>(x.symbol==='XAUUSD'?3:0)+(x.regime==='TREND'?2:x.regime==='RANGE'?1:0);
-    return score(b)-score(a)||String(a.symbol).localeCompare(String(b.symbol));
+  const market=Object.values(s.market||{}).filter(x=>x&&x.regime!=='CLOSED'&&x.regime!=='STALE');
+  const exact=[];
+  for(const x of market){
+    for(const w of (x.watches||[])){
+      const row={...w,symbol:w.symbol||x.symbol};
+      if(['WAIT_BREAKOUT','WAIT_SWEEP_RECLAIM','WAIT_BOX_CLOSE','WAIT_BOX','WAIT_DIRECTION','WAIT_CALM'].includes(String(row.status))) exact.push(row);
+    }
+  }
+  exact.sort((a,b)=>{
+    const ax=a.symbol==='XAUUSD'?-0.25:0, bx=b.symbol==='XAUUSD'?-0.25:0;
+    return (watchRank(a)+ax)-(watchRank(b)+bx);
   });
-  if(watches.length){
+  if(exact.length){
     lines.push('');
-    lines.push('最接近条件：');
-    for(const x of watches.slice(0,4)) lines.push(simpleMarketStatus(x));
+    lines.push('👀 现在要等什么：');
+    const seen=new Set();
+    let shown=0;
+    for(const w of exact){
+      if(seen.has(w.symbol)||shown>=4) continue;
+      const t=watchText(w); if(!t) continue;
+      lines.push(t);
+      seen.add(w.symbol); shown+=1;
+    }
+  }else if(market.length){
+    lines.push('');
+    lines.push('👀 现在要等什么：');
+    for(const x of market.slice(0,4)) lines.push(simpleMarketStatus(x));
   }
   lines.push('');
-  lines.push('有确认时 Bot 会直接给 Entry / SL / TP。');
+  lines.push('条件没到 = 不进。条件到了 Bot 才给 Entry / SL / TP。');
   return lines.join('\n');
 }
 function marketText(){
