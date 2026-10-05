@@ -59,6 +59,19 @@ function localAtr(candles,period=14){
   return tr.length?tr.reduce((a,b)=>a+b,0)/tr.length:null;
 }
 
+function validateZones(demand,supply,maxOverlapRatio=0.25){
+  const d=demand||null,s=supply||null;
+  if(!d||!s) return {demand:d,supply:s,invalid:false,invalidReason:null,overlapRatio:0};
+  const dWidth=n(d.high)-n(d.low),sWidth=n(s.high)-n(s.low);
+  if(!(dWidth>0)||!(sWidth>0)) return {demand:d,supply:s,invalid:false,invalidReason:null,overlapRatio:0};
+  const overlap=Math.max(0,Math.min(n(d.high),n(s.high))-Math.max(n(d.low),n(s.low)));
+  const overlapRatio=overlap/Math.min(dWidth,sWidth);
+  if(overlapRatio>=maxOverlapRatio){
+    return {demand:null,supply:null,invalid:true,invalidReason:'OVERLAP',overlapRatio:round(overlapRatio,2)};
+  }
+  return {demand:d,supply:s,invalid:false,invalidReason:null,overlapRatio:round(overlapRatio,2)};
+}
+
 function latestOrderBlocks(candles,a15=null){
   const xs=(candles||[]).slice(-140);
   const atr=finite(a15)&&n(a15)>0?n(a15):localAtr(xs,14);
@@ -81,7 +94,7 @@ function latestOrderBlocks(candles,a15=null){
       if(base) supply={kind:'SUPPLY',low:Math.min(n(base.open),n(base.close)),high:n(base.high),originTime:n(base.openTime),confirmedAt:n(c.openTime)};
     }
   }
-  return {demand,supply};
+  return validateZones(demand,supply);
 }
 
 function zoneDistance(price,zone){
@@ -165,9 +178,9 @@ function compactIntelligence(intel){
   return {
     score:intel.score,label:intel.label,structure:intel.structure,
     liquidity:intel.liquidity,
-    zones:{demand:intel.zones?.demand||null,supply:intel.zones?.supply||null},
+    zones:{demand:intel.zones?.demand||null,supply:intel.zones?.supply||null,invalid:Boolean(intel.zones?.invalid),invalidReason:intel.zones?.invalidReason||null,overlapRatio:Number(intel.zones?.overlapRatio)||0},
     sweptOpposite:Boolean(intel.sweptOpposite)
   };
 }
 
-module.exports={confirmedSwings,structureBias,nearestLiquidity,latestOrderBlocks,zoneDistance,recentSweep,marketContext,scoreSignal,decisionLabel,compactIntelligence,localAtr};
+module.exports={confirmedSwings,structureBias,nearestLiquidity,validateZones,latestOrderBlocks,zoneDistance,recentSweep,marketContext,scoreSignal,decisionLabel,compactIntelligence,localAtr};
