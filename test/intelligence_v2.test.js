@@ -50,4 +50,24 @@ function c(t,o,h,l,cl,v=100){return {openTime:t,open:o,high:h,low:l,close:cl,vol
   assert.strictEqual(I.compactIntelligence(intel).score,intel.score);
 })();
 
+
+(function nearbyBarrierCapsScore(){
+  const m15=[];
+  for(let i=0;i<60;i++){const p=100+i*0.02;m15.push(c(i*M15,p,p+0.20,p-0.20,p+0.05));}
+  // Create a confirmed swing high just above the intended long entry.
+  m15.push(c(60*M15,101.20,101.60,101.00,101.30));
+  m15.push(c(61*M15,101.30,101.40,101.05,101.10));
+  m15.push(c(62*M15,101.10,101.25,100.95,101.00));
+  const h4=[]; for(let i=0;i<80;i++){const p=80+i;h4.push(c(i*H4,p,p+2,p-1,p+1));}
+  const snap={m15,h4};
+  const reg={type:'TREND',side:'LONG',a15:1};
+  const sig={side:'LONG',mode:'TREND_RETEST',entry:101.45,stop:100.45,riskAtr:1};
+  const ctx=I.marketContext(snap,reg);
+  ctx.liquidity.bsl=101.60;
+  const intel=I.scoreSignal({snap,reg,sig,vwap:100,context:ctx});
+  assert.strictEqual(intel.entryRoom.state,'BLOCK');
+  assert.ok(intel.score<=69);
+  assert.strictEqual(I.compactIntelligence(intel).entryRoom.state,'BLOCK');
+})();
+
 console.log('intelligence v2 tests: PASS');
