@@ -17,6 +17,21 @@ function c(t,o,h,l,cl,v=100){return {openTime:t,open:o,high:h,low:l,close:cl,vol
   assert.ok(l.ssl===null||l.ssl<100);
 })();
 
+(function overlappingZonesAreInvalid(){
+  const demand={kind:'DEMAND',low:1332.34,high:1335.87};
+  const supply={kind:'SUPPLY',low:1330.59,high:1333.70};
+  const z=I.validateZones(demand,supply);
+  assert.strictEqual(z.invalid,true);
+  assert.strictEqual(z.invalidReason,'OVERLAP');
+  assert.strictEqual(z.demand,null);
+  assert.strictEqual(z.supply,null);
+  assert.ok(z.overlapRatio>=0.40);
+
+  const clean=I.validateZones({low:100,high:101},{low:102,high:103});
+  assert.strictEqual(clean.invalid,false);
+  assert.ok(clean.demand&&clean.supply);
+})();
+
 (function orderBlockAndScore(){
   const m15=[];
   for(let i=0;i<40;i++){const p=100+i*0.03;m15.push(c(i*M15,p,p+0.5,p-0.5,p+0.05));}
