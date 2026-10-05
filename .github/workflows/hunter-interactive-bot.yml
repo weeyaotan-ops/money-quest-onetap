@@ -1,3 +1,4 @@
+# Bugfix pack: live now-check, exact manual confirmation, runner BE, range 50/50, anti-flip 2026-10-05
 # Fix manual-entry acknowledgement and stop post-fill wait spam 2026-10-05
 # Restart v4 after clearing legacy runtime race 2026-10-05
 # Entry quality: ATR entry zones + nearby resistance/support guard 2026-10-05
@@ -108,6 +109,7 @@ jobs:
           ADAPTIVE_MAX_LEVERAGE: "10"
           ADAPTIVE_ENTRY_PULLBACK_ATR: "0.25"
           ADAPTIVE_ENTRY_CHASE_ATR: "0.03"
+          ADAPTIVE_ENTRY_REARM_ATR: "0.08"
           ADAPTIVE_BARRIER_BLOCK_ATR: "0.30"
           ADAPTIVE_BARRIER_BLOCK_R: "0.75"
           ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
