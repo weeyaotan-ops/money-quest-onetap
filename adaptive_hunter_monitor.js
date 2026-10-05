@@ -495,6 +495,30 @@ function boxFor(candles,session,candidateTime){
   if(!a||!b) return null;
   return {date:lp.date,high:Math.max(a.high,b.high),low:Math.min(a.low,b.low),mid:(Math.max(a.high,b.high)+Math.min(a.low,b.low))/2,activeFrom:b.openTime+M15,activeUntil:b.openTime+6*HOUR};
 }
+function setupWatch(symbol,reg,box,session,latest){
+  const base={symbol,session:session?.id||null,sessionLabel:session?.label||'',regime:reg?.type||'NEUTRAL',side:reg?.side||null};
+  if(!box){
+    return {...base,status:'WAIT_BOX',instruction:'等前30分钟开盘区间形成'};
+  }
+  const lastOpen=Number(latest?.openTime);
+  if(Number.isFinite(lastOpen)&&lastOpen>=Number(box.activeUntil)){
+    return {...base,status:'SESSION_DONE',boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil};
+  }
+  if(Number.isFinite(lastOpen)&&lastOpen<Number(box.activeFrom)){
+    return {...base,status:'WAIT_BOX_CLOSE',boxHigh:box.high,boxLow:box.low,activeFrom:box.activeFrom,activeUntil:box.activeUntil,instruction:'等前30分钟 Box 完成'};
+  }
+  if(reg?.type==='TREND'&&reg?.side==='LONG'){
+    return {...base,status:'WAIT_BREAKOUT',trigger:box.high,boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil,instruction:'等 M15 收盘站上 Box High，再等回踩确认'};
+  }
+  if(reg?.type==='TREND'&&reg?.side==='SHORT'){
+    return {...base,status:'WAIT_BREAKOUT',trigger:box.low,boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil,instruction:'等 M15 收盘跌破 Box Low，再等回踩确认'};
+  }
+  if(reg?.type==='RANGE'){
+    return {...base,status:'WAIT_SWEEP_RECLAIM',boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil,instruction:'等价格扫出 Box 后，M15 收回 Box 内'};
+  }
+  if(reg?.type==='CHAOS') return {...base,status:'WAIT_CALM',boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil,instruction:'波动太乱，等市场恢复正常'};
+  return {...base,status:'WAIT_DIRECTION',boxHigh:box.high,boxLow:box.low,activeUntil:box.activeUntil,instruction:'等方向变清楚'};
+}
 function freshBreakout(candles,box,trendSide){
   const cur=candles.at(-1),prev=candles.at(-2); if(!cur||!prev) return null;
   if(cur.openTime<box.activeFrom||cur.openTime>=box.activeUntil) return null;
@@ -882,14 +906,23 @@ async function cycle(now=Date.now()){
     }
     const reg=regime(snap);
     const intelContext=marketContext(snap,reg);
-    state.market[snap.symbol]={
-      symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,lastClose:latest.close,
+    const marketEntry=state.market[snap.symbol]={
+      symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,a15:reg.a15||null,lastClose:latest.close,
       lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,
       feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null,
-      intelligence:{structure:intelContext.structure,liquidity:intelContext.liquidity,zones:intelContext.zones}
+      intelligence:{structure:intelContext.structure,liquidity:intelContext.liquidity,zones:intelContext.zones},
+      watches:[]
     };
     for(const sid of ['LONDON','NEW_YORK']){
-      const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime); if(!box) continue;
+      const session=sessionFor(snap.symbol,sid); const box=boxFor(snap.m15,session,latest.openTime);
+      const watch=setupWatch(snap.symbol,reg,box,session,latest);
+      if(watch.status!=='SESSION_DONE'){
+        if(Number.isFinite(Number(watch.trigger))&&Number.isFinite(Number(reg.a15))&&Number(reg.a15)>0){
+          watch.distanceAtr=Math.abs(Number(latest.close)-Number(watch.trigger))/Number(reg.a15);
+        }
+        marketEntry.watches.push(watch);
+      }
+      if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
       if(reg.type==='TREND'&&!killed){
         const bo=freshBreakout(snap.m15,box,reg.side);
@@ -970,7 +1003,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',expiresOpenTime:x.expiresOpenTime}))};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>({symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:x.side==='LONG'?x.boxHigh:x.boxLow,expiresOpenTime:x.expiresOpenTime}))};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -978,4 +1011,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,cycle};
