@@ -192,6 +192,17 @@ function m15Base(count=80,start=0){
   assert.ok(msg.includes('有效到：'));
 })();
 
+(function rangeSignalMessageUses5050(){
+  const msg=signalMessage({
+    symbol:'ETHUSDT',side:'LONG',mode:'RANGE_SWEEP',sessionLabel:'London',
+    entry:100,stop:99,tp1:101,tp2:102,plan:'50%@中线 · 50%@另一边Box',
+    riskAtr:1,atr15:1,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
+  });
+  assert.ok(msg.includes('目标1：到价卖 50%'));
+  assert.ok(msg.includes('目标2：到价卖剩下 50%'));
+  assert.ok(!msg.includes('剩下：40% 继续跑'));
+})();
+
 (function atrEntryZoneAndBarrierGuard(){
   const s={symbol:'LTCUSDT',side:'LONG',entry:70.39,stop:70.19,atr15:0.30,intelligence:{a15:0.30,entryRoom:{barrier:70.43}}};
   const z=entryZone(s);
@@ -209,6 +220,12 @@ function m15Base(count=80,start=0){
   assert.ok(['GOOD','NORMAL'].includes(d1.priceGrade));
   const d2=entryDecision({...clear,entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false},70.41,M15);
   assert.strictEqual(d2.state,'DO_NOT_CHASE');
+})();
+
+(function chaseNeedsMeaningfulRearm(){
+  const t={side:'LONG',entry:100,stop:99,atr15:1,entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:false,entryStatus:'DO_NOT_CHASE'};
+  assert.strictEqual(entryDecision(t,100.00,M15).state,'DO_NOT_CHASE');
+  assert.strictEqual(entryDecision(t,99.94,M15).state,'ENTER');
 })();
 
 (function lifecycleExpiry(){
@@ -243,6 +260,14 @@ function m15Base(count=80,start=0){
   ev=lifecycleEvents(before,t);
   assert.ok(ev.includes('TP2'));
   assert.strictEqual(t.actionState,'RUNNER');
+})();
+
+(function runnerNeverGivesBackBelowBreakeven(){
+  const t={key:'runner',symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:100,tp1:101,tp2:102,riskDistance:1,signalAtMs:0,status:'RUNNER',actionState:'RUNNER',entryExpiresAtMs:10*M15,terminal:false,entryConfirmed:true,tp1Hit:true,tp2Hit:true,runnerActive:true,runnerTrail:null,lastOpenTime:0,realizedR:null};
+  updateTradePrice(t,100,M15);
+  assert.strictEqual(t.terminal,true);
+  assert.strictEqual(t.status,'RUNNER_EXIT');
+  assert.ok(Math.abs(t.realizedR-0.9)<1e-9);
 })();
 
 (function pendingEntryDecision(){
