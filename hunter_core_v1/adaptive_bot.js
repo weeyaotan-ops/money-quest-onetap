@@ -55,8 +55,10 @@ function sgtTime(ts){
   if(!Number.isFinite(Number(ts))) return 'n/a';
   return new Intl.DateTimeFormat('en-SG',{timeZone:'Asia/Singapore',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(Number(ts)));
 }
+function presentNum(x){ return x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x)); }
 function fmt(x,symbol){
-  const n=Number(x); if(!Number.isFinite(n)) return 'n/a';
+  if(!presentNum(x)) return 'n/a';
+  const n=Number(x);
   const d={
     BTCUSDT:1,ETHUSDT:2,SOLUSDT:2,XRPUSDT:4,BNBUSDT:2,DOGEUSDT:5,
     LINKUSDT:3,LTCUSDT:2,AVAXUSDT:3,SUIUSDT:4,NEARUSDT:3,ZECUSDT:2,XAUUSD:2
@@ -64,7 +66,7 @@ function fmt(x,symbol){
   return n.toFixed(d);
 }
 function fmtZone(z,symbol){
-  if(!z||!Number.isFinite(Number(z.low))||!Number.isFinite(Number(z.high))) return 'n/a';
+  if(!z||!presentNum(z.low)||!presentNum(z.high)) return 'n/a';
   return fmt(z.low,symbol)+' - '+fmt(z.high,symbol);
 }
 function biasText(x){ return x==='BULLISH'?'多头':x==='BEARISH'?'空头':'中性'; }
@@ -128,7 +130,7 @@ function watchText(w){
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
-  if(x==='ACTIONABLE') return '等你决定';
+  if(x==='ACTIONABLE') return '等你进场后确认';
   if(x==='OPEN') return '已进场';
   if(x==='EXPIRED') return '太迟了，不做';
   if(x==='MANAGING') return '目标1已到';
@@ -136,14 +138,21 @@ function actionStateText(x,status){
   if(x==='CLOSED') return '已结束';
   return String(status||x||'追踪中');
 }
-function latestPendingTrade(state=load()){
+function pendingTrades(state=load()){
   return Object.values(state.trades||{})
     .filter(t=>t&&!t.terminal&&!t.entryConfirmed)
-    .sort((a,b)=>Number(b.signalAtMs||0)-Number(a.signalAtMs||0))[0]||null;
+    .sort((a,b)=>Number(b.signalAtMs||0)-Number(a.signalAtMs||0));
+}
+function latestPendingTrade(state=load()){ return pendingTrades(state)[0]||null; }
+function sameSignal(t,x){
+  return Boolean(t&&x)&&String(t.symbol)===String(x.symbol)&&String(t.side)===String(x.side)&&Number(t.signalAtMs)===Number(x.signalAtMs);
 }
 function keyboard(){
   const rows=[[{text:'🚨 现在能不能下',callback_data:'now'}]];
-  if(latestPendingTrade()) rows.push([{text:'✅ 我已经进场',callback_data:'confirm_latest'}]);
+  const ps=pendingTrades().slice(0,3);
+  for(const t of ps){
+    rows.push([{text:'✅ 已进 '+String(t.symbol||''),callback_data:'enter:'+String(t.signalId||'')}]);
+  }
   rows.push([{text:'📌 我的单',callback_data:'active'},{text:'📊 成绩',callback_data:'results'}]);
   rows.push([{text:'⚙️ 设置',callback_data:'settings'}]);
   return {inline_keyboard:rows};
@@ -169,65 +178,110 @@ async function tg(method,body){
 async function send(text,markup=keyboard()){ return tg('sendMessage',{chat_id:CHAT_ID,text,disable_web_page_preview:true,reply_markup:markup}); }
 async function answer(id){ if(id) await tg('answerCallbackQuery',{callback_query_id:id}).catch(()=>{}); }
 
-function nowText(){
+async function nowText(){
   const s=load(),scan=s.lastScan||{},lines=['🚨 现在能不能下',''];
   if(scan.killed){
     return ['🛑 今天先停','已经碰到今天的亏损保护线。','不要再开新单。'].join('\n');
   }
-  const openConfirmed=Object.values(s.trades||{}).filter(t=>t&&!t.terminal&&t.entryConfirmed);
-  const cs=(scan.candidates||[]).filter(x=>!openConfirmed.some(t=>
-    String(t.symbol)===String(x.symbol)&&
-    String(t.side)===String(x.side)&&
-    Number(t.signalAtMs)===Number(x.signalAtMs)
-  ));
-  if(cs.length){
-    for(const x of cs){
-      const ex=x.execution||{};
-      const side=x.side==='LONG'?'做多 LONG':'做空 SHORT';
-      if(ex.costOk===false){
-        lines.push('❌ '+x.symbol+' 不做');
-        lines.push('原因：'+String(ex.costReason||'手续费和利润不划算'));
-        lines.push('');
-        continue;
-      }
-      lines.push('✅ '+x.symbol+' 可以进');
+  const trades=Object.values(s.trades||{});
+  const openConfirmed=trades.filter(t=>t&&!t.terminal&&t.entryConfirmed);
+  const raw=scan.candidates||[];
+  let showedCandidate=false;
+
+  for(const x of raw){
+    const tracked=trades.find(t=>sameSignal(t,x))||null;
+    if(tracked&&tracked.terminal) continue;
+    if(tracked&&tracked.entryConfirmed) continue;
+
+    const ex=x.execution||{};
+    const side=x.side==='LONG'?'做多 LONG':'做空 SHORT';
+    if(ex.costOk===false){
+      lines.push('❌ '+x.symbol+' 不做');
+      lines.push('原因：'+String(ex.costReason||'手续费和利润不划算'));
       lines.push('');
-      lines.push('方向：'+side);
-      if(ex.valid){
-        lines.push('逐仓：Isolated');
-        lines.push('杠杆：'+ex.leverage+'x');
-        lines.push('数量：'+Number(ex.quantity).toFixed(Number(ex.qtyDecimals||0))+' '+String(x.symbol||'').replace('USDT',''));
-      }
-      lines.push('入场：'+fmt(x.entry,x.symbol));
-      lines.push('止损：'+fmt(x.stop,x.symbol));
-      lines.push('目标1：'+fmt(x.tp1,x.symbol));
-      lines.push('目标2：'+fmt(x.tp2,x.symbol));
-      if(x.mode==='TREND_RETEST') lines.push('到目标1卖30% · 目标2再卖30% · 剩40%继续跑');
-      if(ex.valid){
-        lines.push('风险模式：'+String(ex.riskLabel||'标准滚雪球')+' · '+(Number(ex.riskPct||0.0075)*100).toFixed(2)+'%');
-        lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
-        if(x.mode==='TREND_RETEST'){
-          lines.push('目标1：到价卖30%');
-          lines.push('目标2：到价再卖30%');
-          lines.push('剩下40%继续跑');
-          if(Number.isFinite(Number(ex.runner3Net))) lines.push('如果剩下跑到约3R：整单约 '+(Number(ex.runner3Net)>=0?'+':'')+Number(ex.runner3Net).toFixed(2)+'U');
-        }
-      }
-      if(Number.isFinite(Number(x.qualityScore))) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
-      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
-      lines.push('');
+      showedCandidate=true;
+      continue;
     }
-    return lines.join('\n');
+    if(!tracked){
+      lines.push('⚠️ '+x.symbol+' signal 状态不同步');
+      lines.push('现在先不要进，等下一次 scanner 更新。');
+      lines.push('');
+      showedCandidate=true;
+      continue;
+    }
+
+    let q=null,d=null;
+    try{
+      q=await livePrice(tracked.symbol);
+      d=entryDecision(tracked,q.price,Date.now());
+    }catch(e){
+      lines.push('⚠️ '+x.symbol+' 暂时拿不到 live price');
+      lines.push('现在先不要进。');
+      lines.push('');
+      showedCandidate=true;
+      continue;
+    }
+
+    if(d.state!=='ENTER'){
+      if(d.state==='DO_NOT_CHASE'){
+        lines.push('⛔ '+x.symbol+' 不要追');
+        lines.push('现在价格：'+fmt(d.price,x.symbol));
+        if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
+      }else if(d.state==='BLOCKED_BARRIER'){
+        lines.push('🧱 '+x.symbol+' 先别进');
+        lines.push('前方阻力/支撑太近，空间不够。');
+      }else if(d.state==='WAIT_ZONE'){
+        lines.push('⏳ '+x.symbol+' 继续等');
+        lines.push('现在价格：'+fmt(d.price,x.symbol));
+        if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
+      }else if(d.state==='EXPIRED'){
+        lines.push('⌛ '+x.symbol+' signal 已过期');
+      }else if(d.state==='INVALID'){
+        lines.push('❌ '+x.symbol+' setup 已失效');
+      }else{
+        lines.push('⚠️ '+x.symbol+' 现在先不要进');
+      }
+      lines.push('');
+      showedCandidate=true;
+      continue;
+    }
+
+    lines.push('✅ '+x.symbol+' 现在可以进');
+    lines.push('现在价格：'+fmt(d.price,x.symbol)+' · '+(d.priceGrade==='GOOD'?'好价':'正常价'));
+    if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
+    lines.push('方向：'+side);
+    if(ex.valid){
+      lines.push('逐仓：Isolated');
+      lines.push('杠杆：'+ex.leverage+'x');
+      lines.push('数量：'+Number(ex.quantity).toFixed(Number(ex.qtyDecimals||0))+' '+String(x.symbol||'').replace('USDT',''));
+    }
+    lines.push('止损：'+fmt(x.stop,x.symbol));
+    lines.push('目标1：'+fmt(x.tp1,x.symbol));
+    lines.push('目标2：'+fmt(x.tp2,x.symbol));
+    if(x.mode==='TREND_RETEST') lines.push('管理：TP1卖30% · TP2再卖30% · 40% Runner');
+    if(x.mode==='RANGE_SWEEP') lines.push('管理：TP1卖50% · TP2卖剩下50%');
+    if(ex.valid){
+      lines.push('风险：'+String(ex.riskLabel||'标准滚雪球')+' · '+(Number(ex.riskPct||0.0075)*100).toFixed(2)+'%');
+      lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
+    }
+    if(presentNum(x.qualityScore)) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
+    if(presentNum(x.entryExpiresAtMs)) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
+    lines.push('');
+    showedCandidate=true;
   }
+
+  if(showedCandidate) return lines.join('\n');
+
   if(openConfirmed.length){
     lines.push('✅ 你已经在单里');
     for(const t of openConfirmed.slice(0,3)){
       lines.push('• '+t.symbol+' · '+(t.side==='LONG'?'做多':'做空')+' · 正在盯 SL / TP');
     }
     lines.push('');
-    lines.push('同一条 signal 不需要再进。');
+    lines.push('同一条 signal 不会再叫你重复进。');
     return lines.join('\n');
   }
+
   const armed=scan.armed||[];
   if(armed.length){
     lines.push('🟡 现在还不能下');
@@ -246,6 +300,7 @@ function nowText(){
     }
     return lines.join('\n');
   }
+
   lines.push('⚪ 现在没有可以下的单');
   lines.push('现在：不要下。');
   const market=Object.values(s.market||{}).filter(x=>x&&x.regime!=='CLOSED'&&x.regime!=='STALE');
@@ -289,7 +344,7 @@ function marketText(){
     lines.push('M15 收盘：'+fmt(x.lastClose,x.symbol)+(Number.isFinite(x.adx)?' · H4 ADX '+Number(x.adx).toFixed(1):''));
     const intel=x.intelligence||{},st=intel.structure||{},liq=intel.liquidity||{},zones=intel.zones||{};
     if(st.h4||st.m15) lines.push('结构：H4 '+biasText(st.h4)+' · M15 '+biasText(st.m15));
-    if(Number.isFinite(Number(liq.bsl))||Number.isFinite(Number(liq.ssl))) lines.push('流动性：上方 '+fmt(liq.bsl,x.symbol)+' · 下方 '+fmt(liq.ssl,x.symbol));
+    if(presentNum(liq.bsl)||presentNum(liq.ssl)) lines.push('流动性：上方 '+fmt(liq.bsl,x.symbol)+' · 下方 '+fmt(liq.ssl,x.symbol));
     if(zones.invalid){
       lines.push('区域：⚠️ Demand / Supply 重叠 '+Math.round((Number(zones.overlapRatio)||0)*100)+'% · 已忽略');
     }else if(zones.demand||zones.supply){
@@ -302,7 +357,7 @@ function marketText(){
     if(x.regime==='CLOSED') lines.push('周末休市，不会发信号');
     lines.push('');
   }
-  lines.push('趋势：等突破 + 回踩确认','区间：等扫流动性再收回','Demand / Supply 重叠过多会自动作废','Quality Score 继续只做记录验证，不挡原本有效 signal');
+  lines.push('趋势：等突破 + 回踩确认','区间：等扫流动性再收回','Demand / Supply 重叠过多会自动作废','前方空间太近会先等；Quality Score 会参与筛选和排序');
   return lines.join('\n');
 }
 function intelligenceText(){
@@ -339,10 +394,11 @@ function activeText(){
       if(st==='DO_NOT_CHASE') lines.push('⛔ 已经跑太远，不要追');
       else if(st==='BLOCKED_BARRIER') lines.push('🧱 前方阻力/支撑太近，先不要进');
       else if(st==='WAIT_ZONE') lines.push('⏳ 价格不在可进区间，继续等');
-      else lines.push('⏳ 等你按 One Tap');
-      if(Number.isFinite(Number(x.entryExpiresAtMs))) lines.push('最迟：'+sgtTime(x.entryExpiresAtMs)+' SGT');
+      else lines.push('⏳ 你成交后按【已进 '+x.symbol+'】');
+      if(presentNum(x.entryExpiresAtMs)) lines.push('最迟：'+sgtTime(x.entryExpiresAtMs)+' SGT');
     }else{
-      if(Number.isFinite(Number(x.actualEntryPrice))) lines.push('实际成交价：'+fmt(x.actualEntryPrice,x.symbol));
+      lines.push('信号入场价：'+fmt(x.entry,x.symbol));
+      if(presentNum(x.confirmationPrice)) lines.push('确认时市场价：'+fmt(x.confirmationPrice,x.symbol));
       lines.push('止损：'+fmt(x.stop,x.symbol));
       lines.push('目标1：'+fmt(x.tp1,x.symbol));
       lines.push('目标2：'+fmt(x.tp2,x.symbol));
@@ -576,7 +632,7 @@ async function handle(action,id,message=null){
     if(String(action||'').startsWith('cap:')) return setCapital(String(action).split(':')[1]);
     if(action==='start') return menu();
     if(action==='settings') return send(settingsText(),settingsKeyboard());
-    if(action==='now') return send(nowText(),back('now'));
+    if(action==='now') return send(await nowText(),back('now'));
     if(action==='market') return send(marketText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'market'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
     if(action==='intel') return send(intelligenceText(),{inline_keyboard:[[{text:'🔄 刷新',callback_data:'intel'}],[{text:'⚙️ 返回设置',callback_data:'settings'}]]});
     if(action==='active') return send(activeText(),back('active'));
@@ -805,7 +861,7 @@ async function setBinanceIsolated(symbol){
   catch(e){ if(Number(e&&e.code)===-4046) return {code:-4046,msg:'already isolated'}; throw e; }
 }
 async function setBinanceLeverage(symbol,leverage){
-  return binanceSigned('POST','/fapi/v1/leverage',{symbol:binanceSymbol(symbol),leverage:Math.max(1,Math.min(5,Math.floor(Number(leverage)||1)))});
+  return binanceSigned('POST','/fapi/v1/leverage',{symbol:binanceSymbol(symbol),leverage:Math.max(1,Math.min(10,Math.floor(Number(leverage)||1)))});
 }
 function clientId(prefix,id){
   return (String(prefix||'H')+'_'+String(id||Date.now()).replace(/[^A-Za-z0-9_-]/g,'')).slice(0,36);
@@ -1053,12 +1109,19 @@ async function markManualEntryByTrade(t,message=null){
   await withStateLock(async()=>{
     const state=load();
     const live=findTradeBySignalId(state,t.signalId);
-    if(!live||live.terminal||live.entryConfirmed) return;
+    if(!live||live.entryConfirmed) return;
+    const canReviveExpired=live.terminal&&String(live.status)==='EXPIRED';
+    if(live.terminal&&!canReviveExpired) return;
     const now=Date.now();
+    if(canReviveExpired){
+      live.terminal=false;
+      live.expiredAtMs=null;
+      live.realizedR=null;
+    }
     live.entryConfirmed=true;
     live.entryConfirmedAtMs=now;
-    live.actualEntryPrice=Number(live.entry);
-    live.confirmationPrice=quote&&Number.isFinite(Number(quote.price))?Number(quote.price):null;
+    live.actualEntryPrice=null;
+    live.confirmationPrice=quote&&presentNum(quote.price)?Number(quote.price):null;
     live.entryStatus='CONFIRMED';
     live.status='OPEN';
     live.actionState='OPEN';
@@ -1076,7 +1139,7 @@ async function markManualEntryByTrade(t,message=null){
     '✅ 已记录：你已经进场','',
     confirmed.symbol+' · '+sideText(confirmed.side),
     '按信号入场价记录：'+fmt(confirmed.entry,confirmed.symbol),
-    Number.isFinite(Number(confirmed.confirmationPrice))?'你确认时市场价：'+fmt(confirmed.confirmationPrice,confirmed.symbol):null,
+    presentNum(confirmed.confirmationPrice)?'你确认时市场价：'+fmt(confirmed.confirmationPrice,confirmed.symbol):null,
     '止损：'+fmt(confirmed.stop,confirmed.symbol),
     '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
     '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
@@ -1086,8 +1149,12 @@ async function markManualEntryByTrade(t,message=null){
   ].filter(Boolean).join('\n'),keyboard());
 }
 async function confirmLatestManualEntry(){
-  const t=latestPendingTrade();
-  return markManualEntryByTrade(t);
+  const ps=pendingTrades();
+  if(!ps.length) return send('⚠️ 现在没有待确认的 signal。',keyboard());
+  if(ps.length===1) return markManualEntryByTrade(ps[0]);
+  return send('你有不止一条待确认 signal，请选你已经进的那一单。',{
+    inline_keyboard:ps.slice(0,6).map(t=>[{text:'✅ 已进 '+t.symbol+' · '+sideText(t.side),callback_data:'enter:'+t.signalId}]).concat([[{text:'🏠 主页',callback_data:'start'}]])
+  });
 }
 
 async function tradeAction(action,message){
@@ -1122,7 +1189,7 @@ async function tradeAction(action,message){
   const preview=load();
   const pTrade=findTradeBySignalId(preview,id);
   if(!pTrade) return send('⚠️ 找不到这条 signal，可能已经过期。',keyboard());
-  if(pTrade.terminal) return send('这单已经结束，不能再记录进场。',keyboard());
+  if(pTrade.terminal&&String(pTrade.status)!=='EXPIRED') return send('这单已经结束，不能再记录进场。',keyboard());
   if(pTrade.entryConfirmed) return send('✅ '+pTrade.symbol+' 已经记录为已进场。',keyboard());
 
   // This button means the user ALREADY filled manually.
