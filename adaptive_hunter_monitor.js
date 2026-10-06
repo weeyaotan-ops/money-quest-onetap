@@ -587,6 +587,18 @@ function freshBreakout(candles,box,trendSide){
   if(trendSide==='SHORT'&&prev.close>=box.low&&cur.close<box.low) return {side:'SHORT',candle:cur};
   return null;
 }
+function recentBreakout(candles,box,trendSide,maxAgeBars=RETEST_BARS){
+  const latest=candles.at(-1); if(!latest||!box) return null;
+  const minOpen=Number(latest.openTime)-Math.max(0,Number(maxAgeBars)||0)*M15;
+  for(let i=candles.length-1;i>=1;i-=1){
+    const cur=candles[i],prev=candles[i-1];
+    if(cur.openTime<minOpen) break;
+    if(cur.openTime<box.activeFrom||cur.openTime>=box.activeUntil) continue;
+    if(trendSide==='LONG'&&prev.close<=box.high&&cur.close>box.high) return {side:'LONG',candle:cur};
+    if(trendSide==='SHORT'&&prev.close>=box.low&&cur.close<box.low) return {side:'SHORT',candle:cur};
+  }
+  return null;
+}
 function qualityGate(entry,stop,a15){
   const d=Math.abs(entry-stop); if(!(a15>0)||!(d>0)) return {ok:false,reason:'risk invalid'};
   const r=d/a15;
@@ -689,26 +701,38 @@ function queueAlert(state,key,text,now=Date.now()){
   return true;
 }
 function armedPreview(a){
-  const level=Number((a&&a.retestLevel) ?? (a&&a.side==='LONG'?a&&a.boxHigh:a&&a.boxLow));
-  const atr15=Number(a&&a.atr15);
+  const rawLevel=(a&&a.retestLevel) ?? (a&&a.side==='LONG'?a&&a.boxHigh:a&&a.boxLow);
+  const level=num(rawLevel);
+  const atr15=num(a&&a.atr15);
   const side=String(a&&a.side||'').toUpperCase();
-  if(!Number.isFinite(level)||!(atr15>0)||(side!=='LONG'&&side!=='SHORT')){
-    return {valid:false,level:Number.isFinite(level)?level:null,low:null,high:null,stop:null,tp2:null};
+  if(level===null||!(atr15>0)||(side!=='LONG'&&side!=='SHORT')){
+    return {valid:false,level,low:null,high:null,stop:null,tp2:null};
   }
   if(side==='LONG'){
     return {valid:true,level,low:level-0.60*atr15,high:level+0.25*atr15,stop:level-0.75*atr15,tp2:level+1.50*atr15};
   }
   return {valid:true,level,low:level-0.25*atr15,high:level+0.60*atr15,stop:level+0.75*atr15,tp2:level-1.50*atr15};
 }
+function activeArmedRows(rows,market,now=Date.now()){
+  return (Array.isArray(rows)?rows:[]).filter(a=>{
+    if(!a||String(a.status)!=='WAITING_RETEST') return false;
+    const exp=num(a.expiresOpenTime);
+    if(exp===null||Number(now)>=exp+M15) return false;
+    const m=market&&market[a.symbol];
+    if(!m||String(m.regime)!=='TREND'||String(m.side)!==String(a.side)) return false;
+    return true;
+  });
+}
 function armedMessage(a){
   const p=armedPreview(a);
   const side=a.side==='LONG'?'做多':'做空';
   const zoneLabel=a.side==='LONG'?'等买区':'等卖区';
+  const current=num(a.currentPrice);
   return [
     '👀 WAITING RETEST','',
     a.symbol+' · '+side,
     'Session：'+a.sessionLabel,
-    Number.isFinite(Number(a.currentPrice))?'现在价：'+fmt(a.currentPrice,a.symbol):null,
+    current!==null?'现在价：'+fmt(current,a.symbol):null,
     p.valid?zoneLabel+'：'+fmt(p.low,a.symbol)+' – '+fmt(p.high,a.symbol):null,
     p.valid?'预估止损：'+fmt(p.stop,a.symbol):null,
     p.valid?'预估目标2：'+fmt(p.tp2,a.symbol):null,
