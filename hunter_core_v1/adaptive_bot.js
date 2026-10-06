@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
-const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk } = require('../adaptive_hunter_monitor');
+const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk, activeArmedRows } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
@@ -183,31 +183,37 @@ async function answer(id){ if(id) await tg('answerCallbackQuery',{callback_query
 
 async function nowText(){
   const s=load(),scan=s.lastScan||{},lines=['🚨 现在能不能下',''];
+  const scanAt=Number(scan.at),now=Date.now();
+
+  // Never give an entry decision from stale scanner state.
+  if(!Number.isFinite(scanAt)||now-scanAt>20*60*1000){
+    return [
+      '⚠️ Scanner 资料不是最新',
+      Number.isFinite(scanAt)?'最后扫描：'+sgtTime(scanAt)+' SGT':'还没有完成首次扫描。',
+      '现在先不要进。',
+      '等下一次 M15 扫描完成后再看。'
+    ].join('\n');
+  }
   if(scan.killed){
     return ['🛑 今天先停','已经碰到今天的亏损保护线。','不要再开新单。'].join('\n');
   }
+
   const trades=Object.values(s.trades||{});
   const openConfirmed=trades.filter(t=>t&&!t.terminal&&t.entryConfirmed);
-  const raw=scan.candidates||[];
+
+  // Persisted trade state is the source of truth for ACTIONABLE setups.
+  // lastScan.candidates is only a snapshot and may already be empty on the next scan.
+  const pending=pendingTrades(s);
   let showedCandidate=false;
 
-  for(const x of raw){
-    const tracked=trades.find(t=>sameSignal(t,x))||null;
-    if(tracked&&tracked.terminal) continue;
-    if(tracked&&tracked.entryConfirmed) continue;
-
+  for(const tracked of pending){
+    const x=tracked;
     const ex=x.execution||{};
     const side=x.side==='LONG'?'做多 LONG':'做空 SHORT';
+
     if(ex.costOk===false){
       lines.push('❌ '+x.symbol+' 不做');
       lines.push('原因：'+String(ex.costReason||'手续费和利润不划算'));
-      lines.push('');
-      showedCandidate=true;
-      continue;
-    }
-    if(!tracked){
-      lines.push('⚠️ '+x.symbol+' signal 状态不同步');
-      lines.push('现在先不要进，等下一次 scanner 更新。');
       lines.push('');
       showedCandidate=true;
       continue;
@@ -267,7 +273,8 @@ async function nowText(){
       lines.push('风险：'+String(ex.riskLabel||'标准滚雪球')+' · '+(Number(ex.riskPct||0.0075)*100).toFixed(2)+'%');
       lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
     }
-    if(presentNum(x.qualityScore)) lines.push('信号强度：'+Number(x.qualityScore).toFixed(0)+'/100');
+    const score=Number(x.intelligence&&x.intelligence.score);
+    if(Number.isFinite(score)) lines.push('信号强度：'+score.toFixed(0)+'/100');
     if(presentNum(x.entryExpiresAtMs)) lines.push('有效到：'+sgtTime(x.entryExpiresAtMs)+' SGT');
     lines.push('');
     showedCandidate=true;
@@ -285,29 +292,33 @@ async function nowText(){
     return lines.join('\n');
   }
 
-  const armed=scan.armed||[];
+  // A WAITING_RETEST row must still be unexpired AND match the current TREND regime.
+  const armed=activeArmedRows(scan.armed||[],s.market||{},now);
   if(armed.length){
     lines.push('🟡 现在还不能下');
     lines.push('现在：不要追。');
     lines.push('突破已经发生，下一步是在等回踩确认：');
     for(const x of armed.slice(0,4)){
-      const level=Number(x.retestLevel);
-      const current=Number(x.currentPrice);
-      const low=Number(x.retestLow),high=Number(x.retestHigh);
-      const previewStop=Number(x.previewStop),previewTp2=Number(x.previewTp2);
+      const level=presentNum(x.retestLevel)?Number(x.retestLevel):null;
+      const current=presentNum(x.currentPrice)?Number(x.currentPrice):null;
+      const low=presentNum(x.retestLow)?Number(x.retestLow):null;
+      const high=presentNum(x.retestHigh)?Number(x.retestHigh):null;
+      const previewStop=presentNum(x.previewStop)?Number(x.previewStop):null;
+      const previewTp2=presentNum(x.previewTp2)?Number(x.previewTp2):null;
       const action=x.side==='LONG'?'LONG':'SHORT';
+
       lines.push('• '+x.symbol+' · '+String(x.session||'')+' · '+(x.side==='LONG'?'做多':'做空'));
-      if(Number.isFinite(current)) lines.push('  现在价：'+fmt(current,x.symbol));
-      if(Number.isFinite(low)&&Number.isFinite(high)) lines.push('  '+(x.side==='LONG'?'等买区：':'等卖区：')+fmt(low,x.symbol)+' – '+fmt(high,x.symbol));
-      else if(Number.isFinite(level)) lines.push('  等价格回到 '+fmt(level,x.symbol)+' 附近');
-      if(Number.isFinite(previewStop)) lines.push('  预估止损：'+fmt(previewStop,x.symbol));
-      if(Number.isFinite(previewTp2)) lines.push('  预估目标2：'+fmt(previewTp2,x.symbol));
-      if(Number.isFinite(level)) lines.push('  M15 回踩后重新收在关键位'+(x.side==='LONG'?'上方':'下方')+'才 '+action);
+      if(current!==null) lines.push('  现在价：'+fmt(current,x.symbol));
+      if(low!==null&&high!==null) lines.push('  '+(x.side==='LONG'?'等买区：':'等卖区：')+fmt(low,x.symbol)+' – '+fmt(high,x.symbol));
+      else if(level!==null) lines.push('  关键位：'+fmt(level,x.symbol));
+      if(previewStop!==null) lines.push('  预估止损：'+fmt(previewStop,x.symbol));
+      if(previewTp2!==null) lines.push('  预估目标2：'+fmt(previewTp2,x.symbol));
+      if(level!==null) lines.push('  M15 回踩后重新收在 '+fmt(level,x.symbol)+(x.side==='LONG'?' 上方才 ':' 下方才 ')+action);
       else lines.push('  等回踩确认才 '+action);
-      if(presentNum(x.expiresOpenTime)) lines.push('  等待窗口至：'+sgtTime(Number(x.expiresOpenTime)+15*60*1000)+' SGT');
+      if(presentNum(x.expiresOpenTime)) lines.push('  等待窗口至：'+sgtTime(Number(x.expiresOpenTime)+M15_MS)+' SGT');
       lines.push('');
     }
-    lines.push('预估数字只用于等价位；变 ACTIONABLE 后用最终 Entry / SL / TP。');
+    lines.push('预估数字只用于等待；变 ACTIONABLE 后才使用最终 Entry / SL / TP。');
     return lines.join('\n');
   }
 
@@ -1341,8 +1352,8 @@ async function fastLifecycleLoop(stopAt){
   }
 }
 
-async function scannerLoop(stopAt){
-  let first=true;
+async function scannerLoop(stopAt,runImmediately=true){
+  let first=Boolean(runImmediately);
   while(Date.now()<stopAt){
     if(!first){
       const wait=Math.max(0,nextM15ScanAt(Date.now())-Date.now());
@@ -1384,8 +1395,19 @@ async function run(){
     console.log(JSON.stringify({bot:VERSION,telegram:'LONG_POLL_FALLBACK'}));
   }
 
+  // Refresh restored cache before Telegram starts answering buttons.
+  // This removes stale/expired setup state from a previous runtime first.
+  let initialScanOk=false;
+  try{
+    const r=await withStateLock(()=>scanMarket(Date.now()));
+    initialScanOk=true;
+    console.log(JSON.stringify({bot:VERSION,scanner:'INITIAL_OK',at:r?.at,candidates:r?.candidates?.length||0,errors:r?.errors?.length||0}));
+  }catch(e){
+    console.error(JSON.stringify({bot:VERSION,scanner:'INITIAL_ERROR',error:e.message}));
+  }
+
   await setCommands();
-  const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
+  const scannerPromise=scannerLoop(stopAt,!initialScanOk).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
   const lifecyclePromise=fastLifecycleLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,lifecycle:'FATAL',error:e.message})));
   console.log(JSON.stringify({bot:VERSION,status:'STARTING',telegramMode:publicDomain?'WEBHOOK':'LONG_POLL',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS,executionMode:'MANUAL',liveTrading:false,autoBalance:false}));
 
