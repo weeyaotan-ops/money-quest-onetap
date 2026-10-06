@@ -646,6 +646,77 @@ function rangeSignal(snap,box,reg){
   }
   return null;
 }
+
+function recentRangeSweep(candles,box,a15,maxAgeBars=RETEST_BARS){
+  const latest=candles.at(-1);
+  if(!latest||!box||!(a15>0)) return null;
+  const minOpen=Number(latest.openTime)-Math.max(0,Number(maxAgeBars)||0)*M15;
+  for(let i=candles.length-1;i>=1;i-=1){
+    const cur=candles[i],prev=candles[i-1];
+    if(cur.openTime<minOpen) break;
+    if(cur.openTime<box.activeFrom||cur.openTime>=box.activeUntil) continue;
+
+    let side=null;
+    if(cur.low<box.low-0.10*a15 && prev.low>=box.low-0.10*a15) side='LONG';
+    else if(cur.high>box.high+0.10*a15 && prev.high<=box.high+0.10*a15) side='SHORT';
+    if(!side) continue;
+
+    // Do not resurrect an old sweep whose first reclaim already happened on an earlier bar.
+    const after=candles.slice(i);
+    const firstReclaim=after.find(x=>side==='LONG'?x.close>box.low:x.close<box.high);
+    if(firstReclaim&&firstReclaim.openTime<latest.openTime) continue;
+
+    return {
+      side,
+      candle:cur,
+      sweepOpenTime:cur.openTime,
+      sweepExtreme:side==='LONG'?cur.low:cur.high,
+      referenceLevel:side==='LONG'?box.low:box.high
+    };
+  }
+  return null;
+}
+
+function rangeReclaimSignal(snap,armed,box,reg){
+  if(!armed||String(armed.status)!=='WAITING_RECLAIM') return null;
+  const a=Number(reg&&reg.a15);
+  if(!(a>0)) return null;
+  const xs=snap.m15.filter(x=>x.openTime>=Number(armed.sweepOpenTime)&&x.openTime<=Number(armed.expiresOpenTime));
+  if(!xs.length) return null;
+  const cur=xs.at(-1);
+
+  if(armed.side==='LONG'){
+    if(!(cur.close>box.low)) return null;
+    const swing=Math.min(...xs.map(x=>x.low));
+    const stop=swing-0.15*a;
+    const risk=cur.close-stop;
+    if(!(risk>0)) return {reject:true,reason:'risk invalid'};
+    const r1=(box.mid-cur.close)/risk, r2=(box.high-cur.close)/risk;
+    if(r1<0.8||r2<1.5) return {reject:true,reason:'RR不足'};
+    const gate=qualityGate(cur.close,stop,a);
+    if(!gate.ok) return {reject:true,reason:gate.reason};
+    return {
+      mode:'RANGE_SWEEP',side:'LONG',entry:cur.close,stop,tp1:box.mid,tp2:box.high,
+      riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.low,
+      candle:cur,sweepOpenTime:armed.sweepOpenTime,plan:'50%@中线 · 50%@另一边Box'
+    };
+  }
+
+  if(!(cur.close<box.high)) return null;
+  const swing=Math.max(...xs.map(x=>x.high));
+  const stop=swing+0.15*a;
+  const risk=stop-cur.close;
+  if(!(risk>0)) return {reject:true,reason:'risk invalid'};
+  const r1=(cur.close-box.mid)/risk, r2=(cur.close-box.low)/risk;
+  if(r1<0.8||r2<1.5) return {reject:true,reason:'RR不足'};
+  const gate=qualityGate(cur.close,stop,a);
+  if(!gate.ok) return {reject:true,reason:gate.reason};
+  return {
+    mode:'RANGE_SWEEP',side:'SHORT',entry:cur.close,stop,tp1:box.mid,tp2:box.low,
+    riskDistance:risk,riskAtr:gate.riskAtr,atr15:a,referenceLevel:box.high,
+    candle:cur,sweepOpenTime:armed.sweepOpenTime,plan:'50%@中线 · 50%@另一边Box'
+  };
+}
 function normalizeState(x){
   const s=x&&typeof x==='object'?x:{};
   if(!s.sent||typeof s.sent!=='object') s.sent={};
@@ -715,19 +786,40 @@ function armedPreview(a){
 }
 function activeArmedRows(rows,market,now=Date.now()){
   return (Array.isArray(rows)?rows:[]).filter(a=>{
-    if(!a||String(a.status)!=='WAITING_RETEST') return false;
+    if(!a) return false;
     const exp=num(a.expiresOpenTime);
     if(exp===null||Number(now)>=exp+M15) return false;
     const m=market&&market[a.symbol];
-    if(!m||String(m.regime)!=='TREND'||String(m.side)!==String(a.side)) return false;
-    return true;
+    if(!m) return false;
+    const status=String(a.status||'');
+    if(status==='WAITING_RETEST') return String(m.regime)==='TREND'&&String(m.side)===String(a.side);
+    if(status==='WAITING_RECLAIM') return String(m.regime)==='RANGE';
+    return false;
   });
 }
 function armedMessage(a){
-  const p=armedPreview(a);
-  const side=a.side==='LONG'?'做多':'做空';
-  const zoneLabel=a.side==='LONG'?'等买区':'等卖区';
   const current=num(a.currentPrice);
+  const side=a.side==='LONG'?'做多':'做空';
+
+  if(String(a.status)==='WAITING_RECLAIM'){
+    const level=a.side==='LONG'?num(a.boxLow):num(a.boxHigh);
+    return [
+      '👀 WAITING RECLAIM','',
+      a.symbol+' · '+side,
+      'Session：'+a.sessionLabel,
+      current!==null?'现在价：'+fmt(current,a.symbol):null,
+      num(a.boxLow)!==null&&num(a.boxHigh)!==null?'Box：'+fmt(a.boxLow,a.symbol)+' – '+fmt(a.boxHigh,a.symbol):null,
+      level!==null?(a.side==='LONG'?'已扫破下方：':'已扫破上方：')+fmt(level,a.symbol):null,
+      '',
+      '现在：先不要进。',
+      level!==null?'等 M15 收回 '+fmt(level,a.symbol)+(a.side==='LONG'?' 上方才 LONG。':' 下方才 SHORT。'):'等 M15 收回 Box 后才确认。',
+      '确认后 Bot 才计算最终 Entry / SL / TP。',
+      '收回窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
+    ].filter(Boolean).join('\n');
+  }
+
+  const p=armedPreview(a);
+  const zoneLabel=a.side==='LONG'?'等买区':'等卖区';
   return [
     '👀 WAITING RETEST','',
     a.symbol+' · '+side,
@@ -744,10 +836,13 @@ function armedMessage(a){
   ].filter(Boolean).join('\n');
 }
 function armEndMessage(a,reason='EXPIRED'){
+  const isRange=String(a&&a.status)==='WAITING_RECLAIM';
   return [
     reason==='REJECTED'?'⚪ SETUP INVALID':'⌛ SETUP EXPIRED','',
     a.symbol+' · '+(a.side==='LONG'?'做多':'做空'),
-    reason==='REJECTED'?'回踩后的结构不再合格，这次跳过。':'回踩窗口结束，这次机会作废。',
+    reason==='REJECTED'
+      ?(isRange?'扫流动性后收回条件不合格，这次跳过。':'回踩后的结构不再合格，这次跳过。')
+      :(isRange?'等待收回 Box 的窗口结束，这次机会作废。':'回踩窗口结束，这次机会作废。'),
     '不要追价，等下一次 setup。'
   ].join('\n');
 }
@@ -1067,12 +1162,17 @@ async function cycle(now=Date.now()){
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
       let arm=state.armed[armKey]||null;
 
-      // A retest setup is only valid while its original TREND direction is still valid.
-      // This prevents stale TREND arms from leaking into RANGE/NEUTRAL UI.
-      if(arm&&(reg.type!=='TREND'||String(reg.side)!==String(arm.side))){
-        queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
-        delete state.armed[armKey];
-        arm=null;
+      // Keep only setups that still match the current market regime.
+      if(arm){
+        const status=String(arm.status||'');
+        const validTrend=status==='WAITING_RETEST'&&reg.type==='TREND'&&String(reg.side)===String(arm.side);
+        const validRange=status==='WAITING_RECLAIM'&&reg.type==='RANGE';
+        if(!validTrend&&!validRange){
+          const origin=arm.breakoutOpenTime??arm.sweepOpenTime??0;
+          queueAlert(state,'ARM_REJECT|'+armKey+'|'+origin,armEndMessage(arm,'REJECTED'),now);
+          delete state.armed[armKey];
+          arm=null;
+        }
       }
 
       if(reg.type==='TREND'&&!killed){
@@ -1117,15 +1217,38 @@ async function cycle(now=Date.now()){
           }
         }
       }else if(reg.type==='RANGE'&&!killed){
-        const sig=rangeSignal(snap,box,reg);
-        if(sig){
-          const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
-          if(!state.sent[key]){
-            const signalAtMs=sig.candle.openTime+M15;
-            const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
-            const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
-            const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-            candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+        const sweep=recentRangeSweep(snap.m15,box,reg.a15,RETEST_BARS);
+        if(sweep&&!arm){
+          arm={
+            symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,
+            side:sweep.side,status:'WAITING_RECLAIM',sweepOpenTime:sweep.sweepOpenTime,
+            expiresOpenTime:sweep.sweepOpenTime+RETEST_BARS*M15,
+            boxHigh:box.high,boxLow:box.low,reclaimLevel:sweep.referenceLevel,
+            sweepExtreme:sweep.sweepExtreme,currentPrice:latest.close,atr15:reg.a15
+          };
+          state.armed[armKey]=arm;
+        }
+
+        arm=state.armed[armKey]||null;
+        if(arm&&String(arm.status)==='WAITING_RECLAIM'){
+          arm.currentPrice=latest.close;
+          arm.atr15=reg.a15;
+          const sig=rangeReclaimSignal(snap,arm,box,reg);
+          if(sig&&sig.reject){
+            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.sweepOpenTime,armEndMessage(arm,'REJECTED'),now);
+            delete state.armed[armKey];
+          }else if(sig){
+            const key='ADAPT|'+armKey+'|RANGE|'+arm.sweepOpenTime+'|'+sig.side;
+            if(!state.sent[key]){
+              const signalAtMs=sig.candle.openTime+M15;
+              const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
+              const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
+              const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
+              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+              delete state.armed[armKey];
+            }
+          }else if(sweep&&Number(sweep.sweepOpenTime)===Number(arm.sweepOpenTime)){
+            queueAlert(state,'STATUS|WAITING_RECLAIM|'+armKey+'|'+arm.sweepOpenTime+'|'+arm.side,armedMessage(arm),now);
           }
         }
       }
@@ -1136,7 +1259,7 @@ async function cycle(now=Date.now()){
   for(const [armKey,arm] of Object.entries(state.armed||{})){
     const exp=num(arm&&arm.expiresOpenTime);
     if(exp===null||Number(now)>=exp+M15){
-      if(arm&&exp!==null) queueAlert(state,'ARM_END|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'EXPIRED'),now);
+      if(arm&&exp!==null) queueAlert(state,'ARM_END|'+armKey+'|'+(arm.breakoutOpenTime??arm.sweepOpenTime??0),armEndMessage(arm,'EXPIRED'),now);
       delete state.armed[armKey];
     }
   }
@@ -1171,7 +1294,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol];return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:p.level,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:p.low,retestHigh:p.high,previewStop:p.stop,previewTp2:p.tp2,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol],status=String(x.status||'');return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status,boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:status==='WAITING_RETEST'?p.level:null,reclaimLevel:status==='WAITING_RECLAIM'?(x.side==='LONG'?x.boxLow:x.boxHigh):null,sweepOpenTime:x.sweepOpenTime??null,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:status==='WAITING_RETEST'?p.low:null,retestHigh:status==='WAITING_RETEST'?p.high:null,previewStop:status==='WAITING_RETEST'?p.stop:null,previewTp2:status==='WAITING_RETEST'?p.tp2:null,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -1179,4 +1302,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,recentRangeSweep,rangeReclaimSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
