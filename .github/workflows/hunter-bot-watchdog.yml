@@ -1,0 +1,42 @@
+name: Hunter Bot Watchdog
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-bot-watchdog.yml"
+  schedule:
+    - cron: "7 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: hunter-bot-watchdog
+  cancel-in-progress: true
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ensure Hunter bot is running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/hunter-interactive-bot.yml/runs?per_page=30" \
+              --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued" or .status == "waiting" or .status == "requested" or .status == "pending")] | length'
+          )"
+
+          if [ "${ACTIVE}" -gt 0 ]; then
+            echo "Hunter bot has ${ACTIVE} active run(s). No action needed."
+            exit 0
+          fi
+
+          echo "Hunter bot is down. Dispatching a fresh runtime."
+          gh workflow run --repo "${GITHUB_REPOSITORY}" hunter-interactive-bot.yml --ref main
