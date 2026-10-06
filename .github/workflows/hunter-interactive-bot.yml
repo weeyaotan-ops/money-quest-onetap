@@ -1,3 +1,4 @@
+# WAITING RETEST UI + dedupe + 00:00 hotfix 2026-10-06
 # Reliability recovery restart + external watchdog 2026-10-06
 # Bugfix pack: live now-check, exact manual confirmation, runner BE, range 50/50, anti-flip 2026-10-05
 # Fix manual-entry acknowledgement and stop post-fill wait spam 2026-10-05
