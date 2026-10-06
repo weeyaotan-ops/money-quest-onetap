@@ -677,7 +677,20 @@ async function processTelegramUpdate(u){
     await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
     return;
   }
-  if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID&&(!AUTH_USER_ID||String(u.message.from&&u.message.from.id)===AUTH_USER_ID)){
+  if(u.message){
+    const incomingChatId=String(u.message.chat&&u.message.chat.id||'');
+    const incomingUserId=String(u.message.from&&u.message.from.id||'');
+    const chatType=String(u.message.chat&&u.message.chat.type||'unknown');
+    const chatOk=incomingChatId===CHAT_ID;
+    const userOk=!AUTH_USER_ID||incomingUserId===AUTH_USER_ID;
+    const textValue=String(u.message.text||'');
+    console.log(JSON.stringify({bot:VERSION,telegram:'MESSAGE',command:normalize(textValue)||textValue.slice(0,32),chatOk,userOk,chatType,chatId:incomingChatId,userId:incomingUserId}));
+    if(!chatOk||!userOk){
+      if(chatType==='private'){
+        await tg('sendMessage',{chat_id:incomingChatId,text:'Bot 收到了，但 Telegram 绑定资料未同步，正在修复。'}).catch(()=>{});
+      }
+      return;
+    }
     const handled=await handleTextInput(u.message.text);
     if(handled) return;
     const a=normalize(u.message.text); if(a) await handle(a); else await menu();
