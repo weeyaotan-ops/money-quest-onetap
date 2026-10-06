@@ -669,7 +669,7 @@ async function processTelegramUpdate(u){
     const incomingUserId=String(u.callback_query.from&&u.callback_query.from.id||'');
     const chatOk=incomingChatId===CHAT_ID;
     const userOk=!AUTH_USER_ID||incomingUserId===AUTH_USER_ID;
-    console.log(JSON.stringify({bot:VERSION,telegram:'CALLBACK',action:String(u.callback_query.data||''),chatOk,userOk,chatType:String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.type||'unknown'),chatId:incomingChatId,userId:incomingUserId}));
+    console.log(JSON.stringify({bot:VERSION,telegram:'CALLBACK',action:String(u.callback_query.data||''),chatOk,userOk}));
     if(!chatOk||!userOk){
       await tg('answerCallbackQuery',{callback_query_id:u.callback_query.id,text:'Bot 授权资料未同步，正在修复',show_alert:false}).catch(()=>{});
       return;
@@ -684,7 +684,7 @@ async function processTelegramUpdate(u){
     const chatOk=incomingChatId===CHAT_ID;
     const userOk=!AUTH_USER_ID||incomingUserId===AUTH_USER_ID;
     const textValue=String(u.message.text||'');
-    console.log(JSON.stringify({bot:VERSION,telegram:'MESSAGE',command:normalize(textValue)||textValue.slice(0,32),chatOk,userOk,chatType,chatId:incomingChatId,userId:incomingUserId}));
+    console.log(JSON.stringify({bot:VERSION,telegram:'MESSAGE',command:normalize(textValue)||textValue.slice(0,32),chatOk,userOk,chatType}));
     if(!chatOk||!userOk){
       if(chatType==='private'){
         await tg('sendMessage',{chat_id:incomingChatId,text:'Bot 收到了，但 Telegram 绑定资料未同步，正在修复。'}).catch(()=>{});
