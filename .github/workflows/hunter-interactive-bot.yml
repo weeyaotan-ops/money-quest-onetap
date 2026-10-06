@@ -1,3 +1,4 @@
+# Deployment concurrency reset for range-memory build 2026-10-07
 # Range sweep memory + delayed reclaim hotfix 2026-10-07
 # Hunter Adaptive V2 reliability hardening 2026-10-07
 # WAITING RETEST test import hotfix 2026-10-06
@@ -42,7 +43,7 @@ on:
     - cron: "17 */12 * * *"
 
 concurrency:
-  group: hunter-adaptive-telegram-bot-v6
+  group: hunter-adaptive-telegram-bot-v7
   cancel-in-progress: true
 
 permissions:
