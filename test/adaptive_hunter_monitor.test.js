@@ -3,7 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
 
