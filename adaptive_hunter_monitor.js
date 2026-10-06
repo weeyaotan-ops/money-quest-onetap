@@ -1065,39 +1065,54 @@ async function cycle(now=Date.now()){
       }
       if(!box) continue;
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
+      let arm=state.armed[armKey]||null;
+
+      // A retest setup is only valid while its original TREND direction is still valid.
+      // This prevents stale TREND arms from leaking into RANGE/NEUTRAL UI.
+      if(arm&&(reg.type!=='TREND'||String(reg.side)!==String(arm.side))){
+        queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
+        delete state.armed[armKey];
+        arm=null;
+      }
+
       if(reg.type==='TREND'&&!killed){
-        const bo=freshBreakout(snap.m15,box,reg.side);
+        // Recover a breakout that happened a few M15 bars ago if the higher-timeframe
+        // confirmation arrived slightly later. Final retest rules are unchanged.
+        const bo=recentBreakout(snap.m15,box,reg.side,RETEST_BARS);
         if(bo){
+          const withinWindow=Number(latest.openTime)<=Number(bo.candle.openTime)+RETEST_BARS*M15;
           const vwap=dailyVwap(snap.m15,bo.candle.openTime);
           const vwapOk=vwapGate(reg.side,bo.candle.close,vwap);
-          if(vwapOk&&!state.armed[armKey]){
-            const arm={symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,side:reg.side,status:'WAITING_RETEST',breakoutOpenTime:bo.candle.openTime,expiresOpenTime:bo.candle.openTime+RETEST_BARS*M15,boxHigh:box.high,boxLow:box.low,retestLevel:reg.side==='LONG'?box.high:box.low,currentPrice:bo.candle.close,atr15:reg.a15};
+          if(withinWindow&&vwapOk&&!arm){
+            arm={
+              symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,
+              side:reg.side,status:'WAITING_RETEST',breakoutOpenTime:bo.candle.openTime,
+              expiresOpenTime:bo.candle.openTime+RETEST_BARS*M15,
+              boxHigh:box.high,boxLow:box.low,retestLevel:reg.side==='LONG'?box.high:box.low,
+              currentPrice:latest.close,atr15:reg.a15
+            };
             state.armed[armKey]=arm;
-            queueAlert(state,'STATUS|WAITING_RETEST|'+armKey+'|'+arm.side,armedMessage(arm),now);
+            queueAlert(state,'STATUS|WAITING_RETEST|'+armKey+'|'+arm.breakoutOpenTime+'|'+arm.side,armedMessage(arm),now);
           }
         }
-        const arm=state.armed[armKey];
+
+        arm=state.armed[armKey]||null;
         if(arm){
-          if(latest.openTime>arm.expiresOpenTime){
-            queueAlert(state,'ARM_END|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'EXPIRED'),now);
+          arm.currentPrice=latest.close;
+          arm.atr15=reg.a15;
+          const sig=retestSignal(snap,arm,box,reg);
+          if(sig&&sig.reject){
+            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
             delete state.armed[armKey];
-          }
-          else{
-            const sig=retestSignal(snap,arm,box,reg);
-            if(sig&&sig.reject){
-              queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
+          }else if(sig){
+            const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
+            if(!state.sent[key]){
+              const signalAtMs=sig.candle.openTime+M15;
+              const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
+              const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
+              const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
+              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
               delete state.armed[armKey];
-            }
-            else if(sig){
-              const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
-              if(!state.sent[key]){
-                const signalAtMs=sig.candle.openTime+M15;
-                const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
-                const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
-                const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-                candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
-                delete state.armed[armKey];
-              }
             }
           }
         }
@@ -1116,6 +1131,16 @@ async function cycle(now=Date.now()){
       }
     }
   }
+
+  // Expire every armed setup by absolute time, even if a feed changed regime or went stale.
+  for(const [armKey,arm] of Object.entries(state.armed||{})){
+    const exp=num(arm&&arm.expiresOpenTime);
+    if(exp===null||Number(now)>=exp+M15){
+      if(arm&&exp!==null) queueAlert(state,'ARM_END|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'EXPIRED'),now);
+      delete state.armed[armKey];
+    }
+  }
+
   if(!killed){
     const busySymbols=new Set(Object.values(state.trades||{}).filter(t=>t&&!t.terminal).map(t=>String(t.symbol||'')));
     for(let i=candidates.length-1;i>=0;i-=1){
@@ -1146,7 +1171,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:Object.values(state.armed).map(x=>{const p=armedPreview(x);return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:p.level,currentPrice:x.currentPrice,atr15:x.atr15,retestLow:p.low,retestHigh:p.high,previewStop:p.stop,previewTp2:p.tp2,expiresOpenTime:x.expiresOpenTime};})};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol];return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status:'WAITING_RETEST',boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:p.level,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:p.low,retestHigh:p.high,previewStop:p.stop,previewTp2:p.tp2,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -1154,4 +1179,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
