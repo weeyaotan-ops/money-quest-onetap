@@ -1,3 +1,4 @@
+# Reliability recovery restart + external watchdog 2026-10-06
 # Bugfix pack: live now-check, exact manual confirmation, runner BE, range 50/50, anti-flip 2026-10-05
 # Fix manual-entry acknowledgement and stop post-fill wait spam 2026-10-05
 # Restart v4 after clearing legacy runtime race 2026-10-05
