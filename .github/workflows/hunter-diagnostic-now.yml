@@ -1,0 +1,79 @@
+name: Hunter Diagnostic Now
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hunter-diagnostic-now.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Hunter Adaptive V2
+        uses: actions/checkout@v4
+        with:
+          ref: hunter-adaptive-v1-bot
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install market data helper
+        run: npm install --no-save dukascopy-node
+
+      - name: Current live diagnostic
+        env:
+          ADAPTIVE_STATE_PATH: ".hunter_state/diagnostic_state.json"
+          ADAPTIVE_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD"
+          ADAPTIVE_MAX_LEVERAGE: "10"
+          ADAPTIVE_ENTRY_PULLBACK_ATR: "0.25"
+          ADAPTIVE_ENTRY_CHASE_ATR: "0.03"
+          ADAPTIVE_ENTRY_REARM_ATR: "0.08"
+          ADAPTIVE_BARRIER_BLOCK_ATR: "0.30"
+          ADAPTIVE_BARRIER_BLOCK_R: "0.75"
+          ADAPTIVE_MAX_MARGIN_FRACTION: "0.60"
+          ADAPTIVE_TAKER_FEE_RATE: "0.0005"
+          ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
+          ADAPTIVE_DAILY_STOP_R: "-2"
+          ADAPTIVE_RETEST_BARS: "4"
+        run: |
+          node <<'NODE'
+          (async()=>{
+            const mod=require('./adaptive_hunter_monitor');
+            const oldLog=console.log;
+            console.log=()=>{};
+            const r=await mod.cycle(Date.now());
+            console.log=oldLog;
+            const rows=Object.values(r.market||{}).map(m=>({
+              symbol:m.symbol,
+              regime:m.regime,
+              side:m.side||null,
+              close:m.lastClose,
+              adx:m.adx,
+              h4:m.intelligence?.structure?.h4||null,
+              m15:m.intelligence?.structure?.m15||null,
+              watches:(m.watches||[]).map(w=>({
+                session:w.sessionLabel||w.session,
+                status:w.status,
+                trigger:w.trigger??null,
+                boxLow:w.boxLow??null,
+                boxHigh:w.boxHigh??null,
+                distanceAtr:w.distanceAtr??null
+              }))
+            }));
+            oldLog('DIAG='+JSON.stringify({
+              at:r.at,
+              candidates:r.candidates||[],
+              armed:r.armed||[],
+              errors:r.errors||[],
+              rows
+            }));
+          })().catch(e=>{console.error(e);process.exit(1);});
+          NODE
