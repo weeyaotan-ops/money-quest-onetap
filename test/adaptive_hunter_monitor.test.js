@@ -3,7 +3,7 @@
 const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, armedMessage, armEndMessage, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
 
@@ -295,9 +295,31 @@ function m15Base(count=80,start=0){
 })();
 
 (function retestLifecycleMessages(){
-  const a={symbol:'BTCUSDT',side:'LONG',sessionLabel:'London',expiresOpenTime:4*M15};
-  assert.ok(armedMessage(a).includes('WAITING RETEST'));
+  const a={symbol:'BTCUSDT',side:'LONG',sessionLabel:'New York',expiresOpenTime:Date.parse('2026-10-06T15:45:00Z'),boxHigh:86000,boxLow:85000,retestLevel:86000,currentPrice:86118.2,atr15:200};
+  const preview=armedPreview(a);
+  const msg=armedMessage(a);
+  assert.strictEqual(preview.valid,true);
+  assert.strictEqual(preview.low,85880);
+  assert.strictEqual(preview.high,86050);
+  assert.ok(msg.includes('WAITING RETEST'));
+  assert.ok(msg.includes('现在价：86118.2'));
+  assert.ok(msg.includes('等买区：85880.0 – 86050.0'));
+  assert.ok(msg.includes('预估止损：85850.0'));
+  assert.ok(msg.includes('预估目标2：86300.0'));
+  assert.ok(msg.includes('07/10, 00:00 SGT'));
+  assert.ok(!msg.includes('24:00'));
   assert.ok(armEndMessage(a,'EXPIRED').includes('SETUP EXPIRED'));
+})();
+
+(function waitingRetestAlertDedupesByKey(){
+  const state={pendingAlerts:[],alerted:{}};
+  queueAlert(state,'STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG','first',1);
+  queueAlert(state,'STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG','duplicate',2);
+  assert.strictEqual(state.pendingAlerts.length,1);
+  state.pendingAlerts=[];
+  state.alerted['STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG']=3;
+  queueAlert(state,'STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG','duplicate after sent',4);
+  assert.strictEqual(state.pendingAlerts.length,0);
 })();
 
 
