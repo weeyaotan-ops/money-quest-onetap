@@ -2,8 +2,8 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
-  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
+  emaSeries, atr, regime, freshBreakout, recentBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
+  ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, activeArmedRows, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
 
@@ -108,6 +108,14 @@ function m15Base(count=80,start=0){
   assert.ok(freshBreakout(xs,box,'LONG'));
   xs.push(c(2*M15,106,109,105.5,108));
   assert.strictEqual(freshBreakout(xs,box,'LONG'),null);
+  assert.strictEqual(recentBreakout(xs,box,'LONG',4).candle.openTime,M15);
+})();
+
+(function recentBreakoutWindowExpires(){
+  const box={high:105,low:95,activeFrom:0,activeUntil:99*M15};
+  const xs=[c(0,100,104,99,104),c(M15,104,108,103,106)];
+  for(let i=2;i<=7;i+=1) xs.push(c(i*M15,106,108,105.5,106.5));
+  assert.strictEqual(recentBreakout(xs,box,'LONG',4),null);
 })();
 
 (function riskGate(){
@@ -320,6 +328,22 @@ function m15Base(count=80,start=0){
   state.alerted['STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG']=3;
   queueAlert(state,'STATUS|WAITING_RETEST|BTCUSDT|NY|2026-10-06|LONG','duplicate after sent',4);
   assert.strictEqual(state.pendingAlerts.length,0);
+})();
+
+(function invalidRetestNumbersNeverRenderAsZero(){
+  const p=armedPreview({symbol:'LTCUSDT',side:'LONG',retestLevel:null,boxHigh:null,atr15:null});
+  assert.strictEqual(p.valid,false);
+  assert.strictEqual(p.level,null);
+  const msg=armedMessage({symbol:'LTCUSDT',side:'LONG',sessionLabel:'New York',expiresOpenTime:Date.parse('2026-10-07T00:00:00Z'),currentPrice:null});
+  assert.ok(!msg.includes('0.00'));
+})();
+
+(function staleAndWrongRegimeArmsAreHidden(){
+  const now=Date.parse('2026-10-06T16:00:00Z');
+  const row={symbol:'LTCUSDT',side:'LONG',status:'WAITING_RETEST',expiresOpenTime:now,retestLevel:70.04};
+  assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'RANGE',side:null}},now-M15).length,0);
+  assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now-M15).length,1);
+  assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now+M15).length,0);
 })();
 
 
