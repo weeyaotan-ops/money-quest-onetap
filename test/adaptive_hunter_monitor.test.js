@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const {
-  emaSeries, atr, regime, freshBreakout, recentBreakout, qualityGate, retestSignal, rangeSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
+  emaSeries, atr, regime, freshBreakout, recentBreakout, qualityGate, retestSignal, rangeSignal, recentRangeSweep, rangeReclaimSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, activeArmedRows, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
   vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
 } = require('../adaptive_hunter_monitor');
@@ -152,6 +152,41 @@ function m15Base(count=80,start=0){
   const snap={symbol:'XAUUSD',m15:xs};
   const s=rangeSignal(snap,box,{a15:1});
   assert.ok(s===null || s.mode==='RANGE_SWEEP');
+})();
+
+(function delayedRangeReclaimWorks(){
+  const start=Date.parse('2026-09-30T00:00:00Z');
+  const xs=[];
+  for(let i=0;i<20;i+=1) xs.push(c(start+i*M15,100,100.4,99.2,100,100));
+  const sweepTime=start+20*M15;
+  xs.push(c(sweepTime,99.2,99.4,98.5,98.8,150));
+  xs.push(c(sweepTime+M15,98.8,99.0,98.6,98.85,120));
+  xs.push(c(sweepTime+2*M15,98.9,99.4,98.8,99.2,140));
+  const box={high:102,low:99,mid:100.5,activeFrom:0,activeUntil:Date.parse('2030-01-01T00:00:00Z')};
+  const sweep=recentRangeSweep(xs,box,1,4);
+  assert.ok(sweep);
+  assert.strictEqual(sweep.side,'LONG');
+  assert.strictEqual(sweep.sweepOpenTime,sweepTime);
+  const armed={status:'WAITING_RECLAIM',side:'LONG',sweepOpenTime:sweepTime,expiresOpenTime:sweepTime+4*M15};
+  const sig=rangeReclaimSignal({symbol:'LTCUSDT',m15:xs},armed,box,{a15:1});
+  assert.ok(sig);
+  assert.strictEqual(sig.mode,'RANGE_SWEEP');
+  assert.strictEqual(sig.side,'LONG');
+  assert.ok(sig.stop<sig.entry);
+  assert.strictEqual(sig.tp1,100.5);
+  assert.strictEqual(sig.tp2,102);
+})();
+
+(function oldRangeReclaimIsNotResurrected(){
+  const start=Date.parse('2026-09-30T00:00:00Z');
+  const xs=[];
+  for(let i=0;i<20;i+=1) xs.push(c(start+i*M15,100,100.4,99.2,100,100));
+  const sweepTime=start+20*M15;
+  xs.push(c(sweepTime,99.2,99.4,98.5,98.8,150));
+  xs.push(c(sweepTime+M15,98.8,99.4,98.7,99.2,140));
+  xs.push(c(sweepTime+2*M15,99.2,99.6,99.0,99.4,130));
+  const box={high:102,low:99,mid:100.5,activeFrom:0,activeUntil:Date.parse('2030-01-01T00:00:00Z')};
+  assert.strictEqual(recentRangeSweep(xs,box,1,4),null);
 })();
 
 (function tradeTracking(){
@@ -344,6 +379,17 @@ function m15Base(count=80,start=0){
   assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'RANGE',side:null}},now-M15).length,0);
   assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now-M15).length,1);
   assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now+M15).length,0);
+})();
+
+(function rangeSweepArmIsVisibleOnlyDuringRange(){
+  const now=Date.parse('2026-10-06T16:00:00Z');
+  const row={symbol:'LTCUSDT',side:'LONG',status:'WAITING_RECLAIM',expiresOpenTime:now,boxLow:69.76,boxHigh:70.04,currentPrice:69.70,sessionLabel:'New York'};
+  assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'RANGE',side:null}},now-M15).length,1);
+  assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now-M15).length,0);
+  const msg=armedMessage(row);
+  assert.ok(msg.includes('WAITING RECLAIM'));
+  assert.ok(msg.includes('69.76'));
+  assert.ok(msg.includes('收回'));
 })();
 
 
