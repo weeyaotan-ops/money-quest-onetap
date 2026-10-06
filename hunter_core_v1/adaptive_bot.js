@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
 const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
@@ -659,7 +660,51 @@ function normalize(t){
 async function getUpdates(offset){
   const u=new URL('https://api.telegram.org/bot'+BOT_TOKEN+'/getUpdates');
   u.searchParams.set('timeout','50');u.searchParams.set('allowed_updates',JSON.stringify(['message','callback_query']));if(offset)u.searchParams.set('offset',String(offset));
-  const r=await fetch(u,{signal:AbortSignal.timeout(60000)});const d=await r.json();if(!r.ok||!d.ok)throw new Error('getUpdates '+r.status);return d.result||[];
+  const r=await fetch(u,{signal:AbortSignal.timeout(60000)});const d=await r.json();if(!r.ok||!d.ok)throw new Error('getUpdates '+r.status+' '+String(d&&d.description||''));return d.result||[];
+}
+async function processTelegramUpdate(u){
+  if(!u||typeof u!=='object') return;
+  if(u.callback_query){
+    const chatOk=String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)===CHAT_ID;
+    const userOk=!AUTH_USER_ID||String(u.callback_query.from&&u.callback_query.from.id)===AUTH_USER_ID;
+    if(!chatOk||!userOk){await answer(u.callback_query.id);return;}
+    await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
+    return;
+  }
+  if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID&&(!AUTH_USER_ID||String(u.message.from&&u.message.from.id)===AUTH_USER_ID)){
+    const handled=await handleTextInput(u.message.text);
+    if(handled) return;
+    const a=normalize(u.message.text); if(a) await handle(a); else await menu();
+  }
+}
+function startWebhookServer(){
+  const port=Math.max(1,Number(process.env.PORT||8080));
+  const server=http.createServer(async(req,res)=>{
+    if(req.method==='GET'&&req.url==='/health'){
+      res.writeHead(200,{'content-type':'application/json'});
+      res.end(JSON.stringify({ok:true,bot:VERSION,mode:'WEBHOOK'}));
+      return;
+    }
+    if(req.method!=='POST'||req.url!=='/telegram'){
+      res.writeHead(404,{'content-type':'text/plain'});res.end('not found');return;
+    }
+    let body='';req.setEncoding('utf8');
+    req.on('data',chunk=>{body+=chunk;if(body.length>1024*1024) req.destroy();});
+    req.on('end',async()=>{
+      try{
+        const update=JSON.parse(body||'{}');
+        await processTelegramUpdate(update);
+        res.writeHead(200,{'content-type':'text/plain'});res.end('ok');
+      }catch(e){
+        console.error(JSON.stringify({bot:VERSION,webhook:'ERROR',error:e.message}));
+        res.writeHead(500,{'content-type':'text/plain'});res.end('error');
+      }
+    });
+  });
+  return new Promise((resolve,reject)=>{
+    server.once('error',reject);
+    server.listen(port,'0.0.0.0',()=>resolve(server));
+  });
 }
 async function setCommands(){
   await tg('setMyCommands',{commands:[
@@ -1296,30 +1341,42 @@ async function scannerLoop(stopAt){
 }
 
 async function run(){
-  await tg('deleteWebhook',{drop_pending_updates:false});await setCommands();let offset=0;
+  const publicDomain=String(process.env.RAILWAY_PUBLIC_DOMAIN||'').trim();
   const stopAt=Date.now()+RUNTIME_MS;
+  let webhookServer=null;
+  let offset=0;
+
+  if(publicDomain){
+    webhookServer=await startWebhookServer();
+    const webhookUrl='https://'+publicDomain+'/telegram';
+    await tg('setWebhook',{url:webhookUrl,drop_pending_updates:false,allowed_updates:['message','callback_query']});
+    console.log(JSON.stringify({bot:VERSION,telegram:'WEBHOOK_READY',domain:publicDomain,path:'/telegram'}));
+  }else{
+    await tg('deleteWebhook',{drop_pending_updates:false});
+    console.log(JSON.stringify({bot:VERSION,telegram:'LONG_POLL_FALLBACK'}));
+  }
+
+  await setCommands();
   const scannerPromise=scannerLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,scanner:'FATAL',error:e.message})));
   const lifecyclePromise=fastLifecycleLoop(stopAt).catch(e=>console.error(JSON.stringify({bot:VERSION,lifecycle:'FATAL',error:e.message})));
-  console.log(JSON.stringify({bot:VERSION,status:'STARTING',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS,executionMode:'MANUAL',liveTrading:false,autoBalance:false}));
-  while(Date.now()<stopAt){
-    try{
-      const us=await getUpdates(offset);
-      for(const u of us){
-        offset=Math.max(offset,Number(u.update_id)+1);
-        if(u.callback_query){
-          const chatOk=String(u.callback_query.message&&u.callback_query.message.chat&&u.callback_query.message.chat.id)===CHAT_ID;
-          const userOk=!AUTH_USER_ID||String(u.callback_query.from&&u.callback_query.from.id)===AUTH_USER_ID;
-          if(!chatOk||!userOk){await answer(u.callback_query.id);continue;}
-          await handle(String(u.callback_query.data||''),u.callback_query.id,u.callback_query.message||null);
-        }else if(u.message&&String(u.message.chat&&u.message.chat.id)===CHAT_ID&&(!AUTH_USER_ID||String(u.message.from&&u.message.from.id)===AUTH_USER_ID)){
-          const handled=await handleTextInput(u.message.text);
-          if(handled) continue;
-          const a=normalize(u.message.text); if(a) await handle(a); else await menu();
+  console.log(JSON.stringify({bot:VERSION,status:'STARTING',telegramMode:publicDomain?'WEBHOOK':'LONG_POLL',scanAfterCloseMs:SCAN_AFTER_CLOSE_MS,lifecyclePollMs:LIFECYCLE_POLL_MS,retryAfterMs:RETRY_AFTER_MS,maxCloseRetries:MAX_CLOSE_RETRIES,runtimeMs:RUNTIME_MS,executionMode:'MANUAL',liveTrading:false,autoBalance:false}));
+
+  if(publicDomain){
+    while(Date.now()<stopAt) await sleep(Math.min(60000,Math.max(250,stopAt-Date.now())));
+  }else{
+    while(Date.now()<stopAt){
+      try{
+        const us=await getUpdates(offset);
+        for(const u of us){
+          offset=Math.max(offset,Number(u.update_id)+1);
+          await processTelegramUpdate(u);
         }
-      }
-    }catch(e){console.error(JSON.stringify({bot:VERSION,error:e.message}));await sleep(2500);}
+      }catch(e){console.error(JSON.stringify({bot:VERSION,error:e.message}));await sleep(2500);}
+    }
   }
+
   await Promise.all([scannerPromise,lifecyclePromise]);
+  if(webhookServer) await new Promise(resolve=>webhookServer.close(resolve));
   console.log(JSON.stringify({bot:VERSION,status:'ROTATE'}));
 }
 run().catch(e=>{console.error(JSON.stringify({bot:VERSION,fatal:e.message}));process.exit(1);});
