@@ -54,7 +54,9 @@ function sgtDate(ts=Date.now()){
 }
 function sgtTime(ts){
   if(!Number.isFinite(Number(ts))) return 'n/a';
-  return new Intl.DateTimeFormat('en-SG',{timeZone:'Asia/Singapore',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(Number(ts)));
+  const ps=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Singapore',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(Number(ts)));
+  const o={}; for(const p of ps) if(p.type!=='literal') o[p.type]=p.value;
+  return o.day+'/'+o.month+', '+o.hour+':'+o.minute;
 }
 function presentNum(x){ return x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x)); }
 function fmt(x,symbol){
@@ -286,19 +288,26 @@ async function nowText(){
   const armed=scan.armed||[];
   if(armed.length){
     lines.push('🟡 现在还不能下');
-    lines.push('现在：不要下。');
+    lines.push('现在：不要追。');
     lines.push('突破已经发生，下一步是在等回踩确认：');
     for(const x of armed.slice(0,4)){
       const level=Number(x.retestLevel);
+      const current=Number(x.currentPrice);
+      const low=Number(x.retestLow),high=Number(x.retestHigh);
+      const previewStop=Number(x.previewStop),previewTp2=Number(x.previewTp2);
       const action=x.side==='LONG'?'LONG':'SHORT';
-      if(Number.isFinite(level)){
-        lines.push('• '+x.symbol+' · '+String(x.session||''));
-        lines.push('  等价格回到 '+fmt(level,x.symbol)+' 附近');
-        lines.push('  M15 再次站在'+(x.side==='LONG'?'上方':'下方')+'才 '+action);
-      }else{
-        lines.push('• '+x.symbol+' · 等回踩确认才 '+action);
-      }
+      lines.push('• '+x.symbol+' · '+String(x.session||'')+' · '+(x.side==='LONG'?'做多':'做空'));
+      if(Number.isFinite(current)) lines.push('  现在价：'+fmt(current,x.symbol));
+      if(Number.isFinite(low)&&Number.isFinite(high)) lines.push('  '+(x.side==='LONG'?'等买区：':'等卖区：')+fmt(low,x.symbol)+' – '+fmt(high,x.symbol));
+      else if(Number.isFinite(level)) lines.push('  等价格回到 '+fmt(level,x.symbol)+' 附近');
+      if(Number.isFinite(previewStop)) lines.push('  预估止损：'+fmt(previewStop,x.symbol));
+      if(Number.isFinite(previewTp2)) lines.push('  预估目标2：'+fmt(previewTp2,x.symbol));
+      if(Number.isFinite(level)) lines.push('  M15 回踩后重新收在关键位'+(x.side==='LONG'?'上方':'下方')+'才 '+action);
+      else lines.push('  等回踩确认才 '+action);
+      if(presentNum(x.expiresOpenTime)) lines.push('  等待窗口至：'+sgtTime(Number(x.expiresOpenTime)+15*60*1000)+' SGT');
+      lines.push('');
     }
+    lines.push('预估数字只用于等价位；变 ACTIONABLE 后用最终 Entry / SL / TP。');
     return lines.join('\n');
   }
 
