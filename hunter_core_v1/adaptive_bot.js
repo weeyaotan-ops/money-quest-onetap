@@ -292,33 +292,43 @@ async function nowText(){
     return lines.join('\n');
   }
 
-  // A WAITING_RETEST row must still be unexpired AND match the current TREND regime.
+  // Show only live, regime-matching setups.
   const armed=activeArmedRows(scan.armed||[],s.market||{},now);
   if(armed.length){
     lines.push('🟡 现在还不能下');
-    lines.push('现在：不要追。');
-    lines.push('突破已经发生，下一步是在等回踩确认：');
+    lines.push('现在：先等确认。');
     for(const x of armed.slice(0,4)){
-      const level=presentNum(x.retestLevel)?Number(x.retestLevel):null;
       const current=presentNum(x.currentPrice)?Number(x.currentPrice):null;
-      const low=presentNum(x.retestLow)?Number(x.retestLow):null;
-      const high=presentNum(x.retestHigh)?Number(x.retestHigh):null;
-      const previewStop=presentNum(x.previewStop)?Number(x.previewStop):null;
-      const previewTp2=presentNum(x.previewTp2)?Number(x.previewTp2):null;
       const action=x.side==='LONG'?'LONG':'SHORT';
-
       lines.push('• '+x.symbol+' · '+String(x.session||'')+' · '+(x.side==='LONG'?'做多':'做空'));
       if(current!==null) lines.push('  现在价：'+fmt(current,x.symbol));
-      if(low!==null&&high!==null) lines.push('  '+(x.side==='LONG'?'等买区：':'等卖区：')+fmt(low,x.symbol)+' – '+fmt(high,x.symbol));
-      else if(level!==null) lines.push('  关键位：'+fmt(level,x.symbol));
-      if(previewStop!==null) lines.push('  预估止损：'+fmt(previewStop,x.symbol));
-      if(previewTp2!==null) lines.push('  预估目标2：'+fmt(previewTp2,x.symbol));
-      if(level!==null) lines.push('  M15 回踩后重新收在 '+fmt(level,x.symbol)+(x.side==='LONG'?' 上方才 ':' 下方才 ')+action);
-      else lines.push('  等回踩确认才 '+action);
-      if(presentNum(x.expiresOpenTime)) lines.push('  等待窗口至：'+sgtTime(Number(x.expiresOpenTime)+M15_MS)+' SGT');
+
+      if(String(x.status)==='WAITING_RECLAIM'){
+        const boxLow=presentNum(x.boxLow)?Number(x.boxLow):null;
+        const boxHigh=presentNum(x.boxHigh)?Number(x.boxHigh):null;
+        const level=presentNum(x.reclaimLevel)?Number(x.reclaimLevel):(x.side==='LONG'?boxLow:boxHigh);
+        if(boxLow!==null&&boxHigh!==null) lines.push('  Box：'+fmt(boxLow,x.symbol)+' – '+fmt(boxHigh,x.symbol));
+        if(level!==null) lines.push('  已扫破'+(x.side==='LONG'?'下方 ':'上方 ')+fmt(level,x.symbol));
+        if(level!==null) lines.push('  等 M15 收回 '+fmt(level,x.symbol)+(x.side==='LONG'?' 上方才 ':' 下方才 ')+action);
+        else lines.push('  等 M15 收回 Box 后才 '+action);
+        if(presentNum(x.expiresOpenTime)) lines.push('  收回窗口至：'+sgtTime(Number(x.expiresOpenTime)+M15_MS)+' SGT');
+      }else{
+        const level=presentNum(x.retestLevel)?Number(x.retestLevel):null;
+        const low=presentNum(x.retestLow)?Number(x.retestLow):null;
+        const high=presentNum(x.retestHigh)?Number(x.retestHigh):null;
+        const previewStop=presentNum(x.previewStop)?Number(x.previewStop):null;
+        const previewTp2=presentNum(x.previewTp2)?Number(x.previewTp2):null;
+        if(low!==null&&high!==null) lines.push('  '+(x.side==='LONG'?'等买区：':'等卖区：')+fmt(low,x.symbol)+' – '+fmt(high,x.symbol));
+        else if(level!==null) lines.push('  关键位：'+fmt(level,x.symbol));
+        if(previewStop!==null) lines.push('  预估止损：'+fmt(previewStop,x.symbol));
+        if(previewTp2!==null) lines.push('  预估目标2：'+fmt(previewTp2,x.symbol));
+        if(level!==null) lines.push('  M15 回踩后重新收在 '+fmt(level,x.symbol)+(x.side==='LONG'?' 上方才 ':' 下方才 ')+action);
+        else lines.push('  等回踩确认才 '+action);
+        if(presentNum(x.expiresOpenTime)) lines.push('  回踩窗口至：'+sgtTime(Number(x.expiresOpenTime)+M15_MS)+' SGT');
+      }
       lines.push('');
     }
-    lines.push('预估数字只用于等待；变 ACTIONABLE 后才使用最终 Entry / SL / TP。');
+    lines.push('确认成功后，Bot 才给最终 Entry / SL / TP。');
     return lines.join('\n');
   }
 
