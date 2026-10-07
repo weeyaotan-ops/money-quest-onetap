@@ -4,7 +4,7 @@ const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, recentBreakout, qualityGate, retestSignal, rangeSignal, recentRangeSweep, rangeReclaimSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, activeArmedRows, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
-  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, rangeSideAllowed, setupWatch, MIN_QUALITY_SCORE
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, rangeSideAllowed, setupWatch, MIN_QUALITY_SCORE, managementPlan, runnerProtectivePrice
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -478,6 +478,54 @@ function m15Base(count=80,start=0){
   const tight=executionPlan({symbol:'ETHUSDT',side:'LONG',entry:100,stop:99.99,tp1:100.5,tp2:101},250);
   assert.ok(tight.leverage>=6&&tight.leverage<=10);
   assert.strictEqual(tight.maxLeverage,10);
+})();
+
+
+(function trendBeastClassificationAndSizing(){
+  const beast={
+    symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',entry:100,stop:99,tp1:101,tp2:102,
+    riskDistance:1,riskAtr:1,atr15:1,regimePhase:'CONFIRMED',adx:28,
+    intelligence:{score:92,structure:{h4:'BULLISH',m15:'BULLISH'},entryRoom:{state:'CLEAR'}}
+  };
+  const mg=managementPlan(beast);
+  assert.strictEqual(mg.id,'BEAST');
+  assert.strictEqual(mg.tp1Pct,0.20);
+  assert.strictEqual(mg.tp2Pct,0.20);
+  assert.strictEqual(mg.runnerPct,0.60);
+  const normal=managementPlan({...beast,adx:19});
+  assert.strictEqual(normal.id,'RUNNER');
+  assert.strictEqual(normal.runnerPct,0.40);
+})();
+
+(function beastRunnerLocksFromPeakWithoutRaisingInitialRisk(){
+  const t={
+    key:'beast-runner',symbol:'ETHUSDT',mode:'TREND_RETEST',side:'LONG',
+    entry:100,stop:100,initialStop:99,tp1:101,tp2:102,riskDistance:1,riskAtr:1,atr15:1,
+    signalAtMs:0,status:'RUNNER',actionState:'RUNNER',entryExpiresAtMs:10*M15,terminal:false,
+    entryConfirmed:true,tp1Hit:true,tp2Hit:true,runnerActive:true,runnerTrail:null,lastOpenTime:0,
+    regimePhase:'CONFIRMED',adx:30,bestR:5,
+    intelligence:{score:94,structure:{h4:'BULLISH',m15:'BULLISH'},entryRoom:{state:'CLEAR'}},
+    management:{id:'BEAST',label:'🔥 Trend Beast',tp1Pct:0.20,tp2Pct:0.20,runnerPct:0.60,trailAtr:0.45,peakTrailR:2}
+  };
+  assert.strictEqual(runnerProtectivePrice(t),103);
+  updateTradePrice(t,102.99,M15);
+  assert.strictEqual(t.terminal,true);
+  assert.strictEqual(t.status,'RUNNER_EXIT');
+  assert.ok(Math.abs(t.realizedR-2.4)<1e-9);
+})();
+
+(function beastSignalMessageShowsAdaptiveRunner(){
+  const s={
+    symbol:'ETHUSDT',side:'LONG',mode:'TREND_RETEST',sessionLabel:'New York',
+    entry:100,stop:99,tp1:101,tp2:102,riskDistance:1,riskAtr:1,atr15:1,
+    signalAtMs:Date.parse('2026-10-07T08:15:00Z'),regimePhase:'CONFIRMED',adx:29,
+    intelligence:{score:92,structure:{h4:'BULLISH',m15:'BULLISH'},entryRoom:{state:'CLEAR'}}
+  };
+  const msg=signalMessage(s);
+  assert.ok(msg.includes('Trend Beast'));
+  assert.ok(msg.includes('目标1：到价卖 20%'));
+  assert.ok(msg.includes('目标2：到价再卖 20%'));
+  assert.ok(msg.includes('剩下：60% 继续跑'));
 })();
 
 console.log('adaptive_hunter_monitor tests: PASS');
