@@ -290,7 +290,7 @@ function m15Base(count=80,start=0){
     entry:10000,stop:9900,tp1:10100,tp2:10200,plan:'30%@1R · 30%@2R · 40% Runner',
     riskAtr:1.15,signalAtMs:Date.parse('2026-10-02T08:15:00Z')
   });
-  assert.ok(msg.includes('✅ 可以进 · BTCUSDT'));
+  assert.ok(msg.includes('🟢 LONG · BTCUSDT'));
   assert.ok(msg.includes('方向：做多 LONG'));
   assert.ok(msg.includes('杠杆：'));
   assert.ok(msg.includes('数量：'));
@@ -408,14 +408,14 @@ function m15Base(count=80,start=0){
   assert.strictEqual(preview.valid,true);
   assert.strictEqual(preview.low,85880);
   assert.strictEqual(preview.high,86050);
-  assert.ok(msg.includes('WAITING RETEST'));
+  assert.ok(msg.includes('🟡 WATCH · BTCUSDT'));
   assert.ok(msg.includes('现在价：86118.2'));
   assert.ok(msg.includes('等买区：85880.0 – 86050.0'));
   assert.ok(msg.includes('预估止损：85850.0'));
   assert.ok(msg.includes('预估目标2：86300.0'));
   assert.ok(msg.includes('07/10, 00:00 SGT'));
   assert.ok(!msg.includes('24:00'));
-  assert.ok(armEndMessage(a,'EXPIRED').includes('SETUP EXPIRED'));
+  assert.ok(armEndMessage(a,'EXPIRED').includes('⌛ EXPIRED · BTCUSDT'));
 })();
 
 (function waitingRetestAlertDedupesByKey(){
@@ -451,9 +451,12 @@ function m15Base(count=80,start=0){
   assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'RANGE',side:null}},now-M15).length,1);
   assert.strictEqual(activeArmedRows([row],{LTCUSDT:{regime:'TREND',side:'LONG'}},now-M15).length,0);
   const msg=armedMessage(row);
-  assert.ok(msg.includes('WAITING RECLAIM'));
+  assert.ok(msg.includes('🟡 WATCH · LTCUSDT'));
   assert.ok(msg.includes('69.76'));
   assert.ok(msg.includes('收回'));
+  const invalid=armEndMessage(row,'REJECTED','RR不足');
+  assert.ok(invalid.includes('RR 不够'));
+  assert.ok(invalid.includes('不追价'));
 })();
 
 
