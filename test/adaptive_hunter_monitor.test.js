@@ -468,9 +468,10 @@ function m15Base(count=80,start=0){
   assert.strictEqual(qtyStep('XRPUSDT'),0.1);
   assert.strictEqual(qtyStep('LINKUSDT'),0.01);
   assert.strictEqual(qtyStep('ZECUSDT'),0.001);
-  assert.strictEqual(universeQualityOk({symbol:'ZECUSDT',intelligence:{score:81}}),false);
-  assert.strictEqual(universeQualityOk({symbol:'ZECUSDT',intelligence:{score:82}}),true);
-  assert.strictEqual(universeQualityOk({symbol:'DOGEUSDT',intelligence:{score:65}}),true);
+  assert.strictEqual(universeQualityOk({symbol:'ZECUSDT',intelligence:{score:69}}),false);
+  assert.strictEqual(universeQualityOk({symbol:'ZECUSDT',intelligence:{score:70}}),true);
+  assert.strictEqual(universeQualityOk({symbol:'DOGEUSDT',intelligence:{score:65}}),false);
+  assert.strictEqual(universeQualityOk({symbol:'DOGEUSDT',intelligence:{score:70}}),true);
   const tight=executionPlan({symbol:'ETHUSDT',side:'LONG',entry:100,stop:99.99,tp1:100.5,tp2:101},250);
   assert.ok(tight.leverage>=6&&tight.leverage<=10);
   assert.strictEqual(tight.maxLeverage,10);
