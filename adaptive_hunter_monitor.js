@@ -810,7 +810,13 @@ function activeArmedRows(rows,market,now=Date.now()){
     if(!m) return false;
     const status=String(a.status||'');
     if(status==='WAITING_RETEST') return String(m.regime)==='TREND'&&String(m.side)===String(a.side);
-    if(status==='WAITING_RECLAIM') return String(m.regime)==='RANGE';
+    if(status==='WAITING_RECLAIM'){
+      const h4=String(m.intelligence&&m.intelligence.structure&&m.intelligence.structure.h4||'NEUTRAL');
+      if(String(m.regime)!=='RANGE') return false;
+      if(String(a.side)==='LONG'&&h4==='BEARISH') return false;
+      if(String(a.side)==='SHORT'&&h4==='BULLISH') return false;
+      return true;
+    }
     return false;
   });
 }
@@ -1183,7 +1189,7 @@ async function cycle(now=Date.now()){
       if(arm){
         const status=String(arm.status||'');
         const validTrend=status==='WAITING_RETEST'&&reg.type==='TREND'&&String(reg.side)===String(arm.side);
-        const validRange=status==='WAITING_RECLAIM'&&reg.type==='RANGE';
+        const validRange=status==='WAITING_RECLAIM'&&reg.type==='RANGE'&&rangeSideAllowed(arm.side,intelContext);
         if(!validTrend&&!validRange){
           const origin=arm.breakoutOpenTime??arm.sweepOpenTime??0;
           queueAlert(state,'ARM_REJECT|'+armKey+'|'+origin,armEndMessage(arm,'REJECTED'),now);
