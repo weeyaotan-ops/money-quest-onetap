@@ -35,7 +35,8 @@ const RETEST_BARS = Number(process.env.ADAPTIVE_RETEST_BARS || 4);
 const ENTRY_VALID_MS = Math.max(M15, Number(process.env.ADAPTIVE_ENTRY_VALID_MS || M15));
 const SYMBOLS = String(process.env.ADAPTIVE_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,LINKUSDT,LTCUSDT,AVAXUSDT,SUIUSDT,NEARUSDT,ZECUSDT,XAUUSD')
   .split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);
-const SATELLITE_SYMBOLS = new Set(['NEARUSDT','ZECUSDT']);
+const SATELLITE_SYMBOLS = new Set(['NEARUSDT','ZECUSDT']); // kept only for metadata/backward compatibility
+const MIN_QUALITY_SCORE = Math.min(100,Math.max(0,Number(process.env.ADAPTIVE_MIN_QUALITY_SCORE || 70)));
 
 const SESSION_DEFS = {
   LONDON: { id:'LONDON', label:'London', tz:'Europe/London', hour:8, minute:0 },
@@ -143,8 +144,14 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
 
 function universeQualityOk(signal){
   const score=Number(signal&&signal.intelligence&&signal.intelligence.score);
-  if(SATELLITE_SYMBOLS.has(String(signal&&signal.symbol||''))) return Number.isFinite(score)&&score>=82;
-  return true;
+  return Number.isFinite(score)&&score>=MIN_QUALITY_SCORE;
+}
+function rangeSideAllowed(side,context){
+  const s=String(side||'').toUpperCase();
+  const h4=String(context&&context.structure&&context.structure.h4||'NEUTRAL');
+  if(s==='LONG'&&h4==='BEARISH') return false;
+  if(s==='SHORT'&&h4==='BULLISH') return false;
+  return s==='LONG'||s==='SHORT';
 }
 function universeRank(a,b){
   const as=Number(a&&a.intelligence&&a.intelligence.score)||0;
@@ -533,8 +540,18 @@ function regime(snap){
   const c=closes.at(-1),v20=e20.at(-1),v20prev=e20.at(-3),v50=e50.at(-1);
   const recentTr=trueRanges(m15.slice(-30)); const med=median(recentTr.slice(0,-1)); const lastTr=recentTr.at(-1);
   if(med&&lastTr>2.4*med) return {type:'CHAOS',reason:'短线波动突然放大',adx,a15,a4};
-  if(c>v20&&v20>v50&&v20>v20prev&&adx>=18) return {type:'TREND',side:'LONG',adx,a15,a4,ema20:v20,ema50:v50};
-  if(c<v20&&v20<v50&&v20<v20prev&&adx>=18) return {type:'TREND',side:'SHORT',adx,a15,a4,ema20:v20,ema50:v50};
+
+  // Confirmed trend: classic EMA stack.
+  if(c>v20&&v20>v50&&v20>v20prev&&adx>=18) return {type:'TREND',side:'LONG',phase:'CONFIRMED',adx,a15,a4,ema20:v20,ema50:v50};
+  if(c<v20&&v20<v50&&v20<v20prev&&adx>=18) return {type:'TREND',side:'SHORT',phase:'CONFIRMED',adx,a15,a4,ema20:v20,ema50:v50};
+
+  // Transition trend: allow a new move before EMA20/EMA50 fully cross.
+  // LONG and SHORT use exact mirror conditions to avoid directional bias.
+  const longTransition=c>v20&&c>v50&&v20>v20prev&&adx>=18;
+  const shortTransition=c<v20&&c<v50&&v20<v20prev&&adx>=18;
+  if(longTransition) return {type:'TREND',side:'LONG',phase:'TRANSITION',adx,a15,a4,ema20:v20,ema50:v50};
+  if(shortTransition) return {type:'TREND',side:'SHORT',phase:'TRANSITION',adx,a15,a4,ema20:v20,ema50:v50};
+
   const spread=Math.abs(v20-v50)/a4;
   if(adx<18||spread<0.35) return {type:'RANGE',adx,a15,a4,ema20:v20,ema50:v50};
   return {type:'NEUTRAL',adx,a15,a4,ema20:v20,ema50:v50};
@@ -733,7 +750,7 @@ function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
   const signalId=sig.signalId||signalIdFor(sig);
-  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:sig.intelligence?.entryRoom?.state==='BLOCK'?'BLOCKED_BARRIER':'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
+  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,signalEntry:sig.entry,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:sig.intelligence?.entryRoom?.state==='BLOCK'?'BLOCKED_BARRIER':'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -1143,7 +1160,7 @@ async function cycle(now=Date.now()){
     const reg=regime(snap);
     const intelContext=marketContext(snap,reg);
     const marketEntry=state.market[snap.symbol]={
-      symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,adx:reg.adx||null,a15:reg.a15||null,lastClose:latest.close,
+      symbol:snap.symbol,provider:snap.provider,regime:reg.type,side:reg.side||null,phase:reg.phase||null,adx:reg.adx||null,a15:reg.a15||null,lastClose:latest.close,
       lastCandleClose:lastClose,lagMinutes:feedLag/60000,candleAgeMinutes:candleAge/60000,updatedAt:now,
       feedCandidates:snap.feedCandidates||null,feedErrors:snap.feedErrors||null,
       intelligence:{structure:intelContext.structure,liquidity:intelContext.liquidity,zones:intelContext.zones},
@@ -1218,7 +1235,8 @@ async function cycle(now=Date.now()){
         }
       }else if(reg.type==='RANGE'&&!killed){
         const sweep=recentRangeSweep(snap.m15,box,reg.a15,RETEST_BARS);
-        if(sweep&&!arm){
+        const sweepAllowed=sweep?rangeSideAllowed(sweep.side,intelContext):false;
+        if(sweep&&sweepAllowed&&!arm){
           arm={
             symbol:snap.symbol,session:session.id,sessionLabel:session.label,date:box.date,
             side:sweep.side,status:'WAITING_RECLAIM',sweepOpenTime:sweep.sweepOpenTime,
@@ -1227,6 +1245,9 @@ async function cycle(now=Date.now()){
             sweepExtreme:sweep.sweepExtreme,currentPrice:latest.close,atr15:reg.a15
           };
           state.armed[armKey]=arm;
+        }
+        if(sweep&&!sweepAllowed){
+          marketEntry.rangeBiasBlock={side:sweep.side,h4:intelContext.structure?.h4||'NEUTRAL',reason:'H4_OPPOSITE'};
         }
 
         arm=state.armed[armKey]||null;
@@ -1268,14 +1289,10 @@ async function cycle(now=Date.now()){
     const busySymbols=new Set(Object.values(state.trades||{}).filter(t=>t&&!t.terminal).map(t=>String(t.symbol||'')));
     for(let i=candidates.length-1;i>=0;i-=1){
       if(busySymbols.has(String(candidates[i].symbol||''))) candidates.splice(i,1);
-      else if(candidates[i].symbol!=='XAUUSD'&&!universeQualityOk(candidates[i])) candidates.splice(i,1);
+      else if(!universeQualityOk(candidates[i])) candidates.splice(i,1);
     }
-    const crypto=candidates.filter(x=>x.symbol!=='XAUUSD');
-    if(crypto.length>1){
-      crypto.sort(universeRank);
-      const keep=crypto[0].key;
-      for(let i=candidates.length-1;i>=0;i-=1) if(candidates[i].symbol!=='XAUUSD'&&candidates[i].key!==keep) candidates.splice(i,1);
-    }
+    // Do not silently keep only one crypto. Every independently valid setup may be sent.
+    candidates.sort(universeRank);
   }
   await flushAlerts(state);
   for(const s of candidates){
@@ -1302,4 +1319,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,recentRangeSweep,rangeReclaimSignal,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,MIN_QUALITY_SCORE,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,recentRangeSweep,rangeReclaimSignal,rangeSideAllowed,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
