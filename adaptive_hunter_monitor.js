@@ -8,7 +8,7 @@ const { marketContext, scoreSignal, decisionLabel, compactIntelligence } = requi
 const M15 = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const VERSION = 'HUNTER_ADAPTIVE_V2_2026-10-03_INTELLIGENCE';
+const VERSION = 'HUNTER_ADAPTIVE_V2_2026-10-07_TREND_BEAST';
 const STATE_PATH = process.env.ADAPTIVE_STATE_PATH || '.hunter_state/adaptive_state.json';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
@@ -73,6 +73,59 @@ function minNotional(symbol){
   };
   return m[String(symbol||'').toUpperCase()] ?? 0;
 }
+function managementPlan(s){
+  if(String(s&&s.mode||'')==='RANGE_SWEEP'){
+    return {id:'RANGE',label:'Range 50/50',tp1Pct:0.50,tp2Pct:0.50,runnerPct:0,trailAtr:0,peakTrailR:null};
+  }
+  const saved=s&&s.management;
+  if(saved&&['RUNNER','BEAST'].includes(String(saved.id))&&
+     Number.isFinite(Number(saved.tp1Pct))&&Number.isFinite(Number(saved.tp2Pct))&&Number.isFinite(Number(saved.runnerPct))){
+    return saved;
+  }
+  const side=String(s&&s.side||'').toUpperCase();
+  const want=side==='LONG'?'BULLISH':side==='SHORT'?'BEARISH':null;
+  const intel=s&&s.intelligence||{};
+  const st=intel.structure||{};
+  const score=Number(intel.score);
+  const adx=Number(s&&s.adx);
+  const phase=String(s&&s.regimePhase||'');
+  const room=String(intel.entryRoom&&intel.entryRoom.state||'CLEAR');
+  const beast=String(s&&s.mode||'')==='TREND_RETEST'&&want&&
+    Number.isFinite(score)&&score>=88&&Number.isFinite(adx)&&adx>=23&&phase==='CONFIRMED'&&
+    st.h4===want&&st.m15===want&&room==='CLEAR';
+  if(beast){
+    return {id:'BEAST',label:'🔥 Trend Beast',tp1Pct:0.20,tp2Pct:0.20,runnerPct:0.60,trailAtr:0.45,peakTrailR:2};
+  }
+  return {id:'RUNNER',label:'🏃 Trend Runner',tp1Pct:0.30,tp2Pct:0.30,runnerPct:0.40,trailAtr:0.15,peakTrailR:null};
+}
+function pctLabel(x){ return Math.round(Math.max(0,Number(x)||0)*100)+'%'; }
+function tradeRAt(t,price){
+  const p=Number(price),entry=Number(t&&t.entry),risk=Math.abs(Number(t&&t.riskDistance));
+  if(!Number.isFinite(p)||!Number.isFinite(entry)||!(risk>0)) return null;
+  return t.side==='SHORT'?(entry-p)/risk:(p-entry)/risk;
+}
+function updateBestR(t,price){
+  const r=tradeRAt(t,price);
+  if(!Number.isFinite(r)) return null;
+  if(!Number.isFinite(Number(t.bestR))||r>Number(t.bestR)) t.bestR=r;
+  return Number(t.bestR);
+}
+function runnerProtectivePrice(t){
+  const entry=Number(t&&t.entry),risk=Math.abs(Number(t&&t.riskDistance));
+  if(!Number.isFinite(entry)||!(risk>0)) return entry;
+  const mg=managementPlan(t);
+  let protective=entry;
+  const structural=Number(t&&t.runnerTrail);
+  if(Number.isFinite(structural)){
+    protective=t.side==='SHORT'?Math.min(protective,structural):Math.max(protective,structural);
+  }
+  if(mg.id==='BEAST'&&Number.isFinite(Number(t.bestR))&&Number(t.bestR)>=3){
+    const lockR=Math.max(0,Number(t.bestR)-Number(mg.peakTrailR||2));
+    const peakFloor=t.side==='SHORT'?entry-lockR*risk:entry+lockR*risk;
+    protective=t.side==='SHORT'?Math.min(protective,peakFloor):Math.max(protective,peakFloor);
+  }
+  return protective;
+}
 function floorStep(value,step){
   if(!(step>0)||!Number.isFinite(Number(value))) return Number(value);
   return Math.floor((Number(value)+1e-12)/step)*step;
@@ -109,18 +162,20 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
   const tp1Net=tp1Gross-tp1Fees-estSlippage;
   const tp2Net=tp2Gross-tp2Fees-estSlippage;
   const riskDistance=Math.abs(entry-stop);
+  const management=managementPlan(s);
+  const p1=management.tp1Pct,p2=management.tp2Pct,pr=management.runnerPct;
   const runner3Price=s.side==='SHORT'?entry-3*riskDistance:entry+3*riskDistance;
-  const stagedGrossBe=0.3*quantity*Math.abs(tp1-entry)+0.3*quantity*Math.abs(tp2-entry);
+  const stagedGrossBe=p1*quantity*Math.abs(tp1-entry)+p2*quantity*Math.abs(tp2-entry);
   const stagedFeesBe=quantity*entry*TAKER_FEE_RATE+
-    0.3*quantity*tp1*TAKER_FEE_RATE+
-    0.3*quantity*tp2*TAKER_FEE_RATE+
-    0.4*quantity*entry*TAKER_FEE_RATE;
+    p1*quantity*tp1*TAKER_FEE_RATE+
+    p2*quantity*tp2*TAKER_FEE_RATE+
+    pr*quantity*entry*TAKER_FEE_RATE;
   const stagedTp2Net=stagedGrossBe-stagedFeesBe-estSlippage;
-  const stagedGross3R=stagedGrossBe+0.4*quantity*Math.abs(runner3Price-entry);
+  const stagedGross3R=stagedGrossBe+pr*quantity*Math.abs(runner3Price-entry);
   const stagedFees3R=quantity*entry*TAKER_FEE_RATE+
-    0.3*quantity*tp1*TAKER_FEE_RATE+
-    0.3*quantity*tp2*TAKER_FEE_RATE+
-    0.4*quantity*runner3Price*TAKER_FEE_RATE;
+    p1*quantity*tp1*TAKER_FEE_RATE+
+    p2*quantity*tp2*TAKER_FEE_RATE+
+    pr*quantity*runner3Price*TAKER_FEE_RATE;
   const runner3Net=stagedGross3R-stagedFees3R-estSlippage;
   const tp1MoveRate=Math.abs(tp1-entry)/entry;
   const tp2Cost=Math.max(0,tp2Gross-tp2Net);
@@ -138,7 +193,7 @@ function executionPlan(s,equityUsdt=EQUITY_USDT,riskPct=RISK_PCT){
     marginMode:'ISOLATED',leverage,maxLeverage:MAX_LEVERAGE,
     maxMarginFraction:MAX_MARGIN_FRACTION,quantity,qtyDecimals,notional,initialMargin,
     takerFeeRate:TAKER_FEE_RATE,slippageBufferRate:SLIPPAGE_BUFFER_RATE,
-    stopRate,frictionRate,estMaxLoss,tp1Net,tp2Net,stagedTp2Net,runner3Net,runner3Price,tp2Gross,tp2CostShare,minTp2Net,costReason
+    stopRate,frictionRate,estMaxLoss,tp1Net,tp2Net,stagedTp2Net,runner3Net,runner3Price,tp2Gross,tp2CostShare,minTp2Net,costReason,management
   };
 }
 
@@ -750,7 +805,7 @@ function loadState(){ try{return normalizeState(JSON.parse(fs.readFileSync(STATE
 function saveState(s){ fs.mkdirSync(path.dirname(STATE_PATH),{recursive:true}); const tmp=STATE_PATH+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(s,null,2)); fs.renameSync(tmp,STATE_PATH); }
 function tradeFromSignal(sig){
   const signalId=sig.signalId||signalIdFor(sig);
-  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,signalEntry:sig.entry,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:sig.intelligence?.entryRoom?.state==='BLOCK'?'BLOCKED_BARRIER':'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
+  return {key:sig.key,signalId,symbol:sig.symbol,provider:sig.provider||null,session:sig.session,mode:sig.mode,side:sig.side,regimePhase:sig.regimePhase||null,adx:Number.isFinite(Number(sig.adx))?Number(sig.adx):null,signalEntry:sig.entry,entry:sig.entry,stop:sig.stop,initialStop:sig.stop,tp1:sig.tp1,tp2:sig.tp2,riskDistance:sig.riskDistance,riskAtr:sig.riskAtr,atr15:sig.atr15,referenceLevel:sig.referenceLevel,entryZone:entryZone(sig),signalAtMs:sig.signalAtMs,status:'ACTIONABLE',actionState:'ACTIONABLE',entryExpiresAtMs:Number(sig.signalAtMs)+ENTRY_VALID_MS,expiredAtMs:null,terminal:false,entryConfirmed:false,entryConfirmedAtMs:null,actualEntryPrice:null,entryStatus:sig.intelligence?.entryRoom?.state==='BLOCK'?'BLOCKED_BARRIER':'ENTER',tp1Hit:false,tp2Hit:false,runnerActive:false,runnerTrail:null,bestR:0,management:managementPlan(sig),beActive:false,lastOpenTime:sig.candle.openTime,realizedR:null,decision:sig.decision||null,isReentry:Boolean(sig.isReentry),intelligence:sig.intelligence||null,execution:sig.execution||executionPlan(sig)};
 }
 function ensureTradeLifecycle(t){
   if(!t||typeof t!=='object') return t;
@@ -758,6 +813,8 @@ function ensureTradeLifecycle(t){
   if(!Number.isFinite(Number(t.entryExpiresAtMs))&&Number.isFinite(Number(t.signalAtMs))) t.entryExpiresAtMs=Number(t.signalAtMs)+ENTRY_VALID_MS;
   if(typeof t.entryConfirmed!=='boolean') t.entryConfirmed=true;
   if(!t.signalId&&Number.isFinite(Number(t.signalAtMs))) t.signalId=signalIdFor(t);
+  if(!t.management||!['RANGE','RUNNER','BEAST'].includes(String(t.management.id))) t.management=managementPlan(t);
+  if(!Number.isFinite(Number(t.bestR))) t.bestR=0;
   if(!t.actionState){
     if(t.terminal) t.actionState='CLOSED';
     else if(t.runnerActive) t.actionState='RUNNER';
@@ -891,25 +948,27 @@ function armEndMessage(a,reason='EXPIRED',detail=''){
 function lifecycleMessage(t,event){
   const head=t.symbol+' · '+(t.side==='LONG'?'做多':'做空');
   const auto=Boolean(t.autoManaged);
+  const mg=managementPlan(t);
+  const p1=pctLabel(mg.tp1Pct),p2=pctLabel(mg.tp2Pct),pr=pctLabel(mg.runnerPct);
+  const beast=mg.id==='BEAST';
   if(event==='EXPIRED') return ['⌛ 太迟了，这单不要','',head,'进场时间已经过了。','不要追，等下一单。'].join('\n');
   if(event==='TP1'){
-    const pct=t.mode==='TREND_RETEST'?'30%':'50%';
-    if(auto) return ['✅ 到目标1','',head,'Bot 已自动处理 '+pct,'止损会自动拉到入场价。'].join('\n');
-    return ['✅ 到目标1','',head,'现在卖 '+pct,'止损拉到入场价，剩下继续跑。'].join('\n');
+    if(auto) return ['✅ 到目标1','',head,'Bot 已自动处理 '+p1,'止损会自动拉到入场价。'].join('\n');
+    return ['✅ 到目标1','',head,'现在卖 '+p1,'止损拉到入场价，剩下继续跑。'].join('\n');
   }
   if(event==='TP2'){
     if(t.mode==='TREND_RETEST'){
-      if(auto) return ['✅ 到目标2','',head,'Bot 已自动处理 30%','剩下 40% 自动继续跑。'].join('\n');
-      return ['✅ 到目标2','',head,'再卖 30%','剩下 40% 继续跑，Bot 会帮你盯。'].join('\n');
+      if(auto) return ['✅ 到目标2','',head,'Bot 已自动处理 '+p2,'剩下 '+pr+' 自动继续跑。',beast?'🔥 Trend Beast：不设死 TP，跟趋势。':null].filter(Boolean).join('\n');
+      return ['✅ 到目标2','',head,'再卖 '+p2,'剩下 '+pr+' 继续跑，Bot 会帮你盯。',beast?'🔥 Trend Beast：不设死 TP，跟趋势。':null].filter(Boolean).join('\n');
     }
     if(auto) return ['✅ 到目标2','',head,'Bot 已自动处理剩余仓位。','这单完成。'].join('\n');
-    return ['✅ 到目标2','',head,'剩下 50% 全部卖掉。','这单完成。'].join('\n');
+    return ['✅ 到目标2','',head,'剩下 '+p2+' 全部卖掉。','这单完成。'].join('\n');
   }
   if(event==='SL') return ['❌ 止损了','',head,auto?'Binance 保护单会自动处理。':'这单结束。','不要马上追回去。'].join('\n');
   if(event==='TP1_BE') return ['🛡️ 保本离场','',head,'目标1已经拿到，剩下仓位在入场价保护。','这单结束。'].join('\n');
-  if(event==='RUNNER_EXIT') return ['🏁 剩下仓位已离场','',head,'这单完成。'].join('\n');
+  if(event==='RUNNER_EXIT') return ['🏁 Runner 已离场','',head,beast?'🔥 Trend Beast runner 已完成。':'Runner 已完成。',Number.isFinite(Number(t.realizedR))?'策略结果：'+(Number(t.realizedR)>=0?'+':'')+Number(t.realizedR).toFixed(2)+'R':null].filter(Boolean).join('\n');
   if(event==='AMBIGUOUS') return ['⚠️ 这根K线看不清先后','',head,'同一根K线同时碰到止损和目标。','Bot 不乱算结果。'].join('\n');
-  if(event==='RUNNER') return ['🏃 剩下40%继续跑','',head,auto?'Bot 会自动跟着保护。':'Bot 继续帮你盯剩余仓位。'].join('\n');
+  if(event==='RUNNER') return [beast?'🔥 Trend Beast 启动':'🏃 Runner 启动','',head,'剩下 '+pr+' 继续跑',beast?'达到更高 R 后会自动锁住一部分浮盈，不用固定 3R/4R 就走。':(auto?'Bot 会自动跟着保护。':'Bot 继续帮你盯剩余仓位。')].join('\n');
   return null;
 }
 async function flushAlerts(state){
@@ -938,8 +997,10 @@ function updateTrade(t,candles,now=Date.now()){
   ensureTradeLifecycle(t);
   if(!t.entryConfirmed) return false;
   let changed=false;
+  const mg=managementPlan(t);
   const xs=candles.filter(x=>x.openTime>t.lastOpenTime).sort((a,b)=>a.openTime-b.openTime);
   for(const c of xs){
+    updateBestR(t,t.side==='LONG'?c.high:c.low);
     const stopHit=t.side==='LONG'?c.low<=t.stop:c.high>=t.stop;
     const t1=t.side==='LONG'?c.high>=t.tp1:c.low<=t.tp1;
     const t2=t.side==='LONG'?c.high>=t.tp2:c.low<=t.tp2;
@@ -949,26 +1010,38 @@ function updateTrade(t,candles,now=Date.now()){
       t.tp1Hit=true; changed=true; t.status='TP1'; t.actionState='MANAGING'; t.stop=t.entry; t.beActive=true; t.beActivatedAtMs=c.openTime+M15;
     }
     if(t.mode==='RANGE_SWEEP'){
-      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance; t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1; changed=true; break; }
-      if(t2){ const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance; t.tp2Hit=true;t.status='TP2';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.5*r1+0.5*r2;changed=true;break; }
+      if(t.tp1Hit&&!t.tp2Hit&&stopHit){
+        const r1=Math.abs(t.tp1-t.entry)/t.riskDistance;
+        t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=mg.tp1Pct*r1; changed=true; break;
+      }
+      if(t2){
+        const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance;
+        t.tp2Hit=true;t.status='TP2';t.actionState='CLOSED';t.terminal=true;t.realizedR=mg.tp1Pct*r1+mg.tp2Pct*r2;changed=true;break;
+      }
     }else{
-      if(t.tp1Hit&&!t.tp2Hit&&stopHit){ t.status='TP1_BE';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3;changed=true;break; }
-      if(!t.tp2Hit&&t2){ t.tp2Hit=true;t.runnerActive=true;t.status='RUNNER';t.actionState='RUNNER';t.stop=t.entry;changed=true; }
+      if(t.tp1Hit&&!t.tp2Hit&&stopHit){
+        const r1=Math.abs(t.tp1-t.entry)/t.riskDistance;
+        t.status='TP1_BE';t.actionState='CLOSED';t.terminal=true;t.realizedR=mg.tp1Pct*r1;changed=true;break;
+      }
+      let runnerStartedThisBar=false;
+      if(!t.tp2Hit&&t2){
+        t.tp2Hit=true;t.runnerActive=true;t.status='RUNNER';t.actionState='RUNNER';t.stop=t.entry;changed=true;runnerStartedThisBar=true;
+      }
       if(t.runnerActive){
         const history=candles.filter(x=>x.openTime<=c.openTime).slice(-30); const e20=ema20At(history); const a=atr(history,14);
         if(Number.isFinite(e20)&&Number.isFinite(a)){
-          const trail=t.side==='LONG'?e20-0.15*a:e20+0.15*a;
+          const trail=t.side==='LONG'?e20-mg.trailAtr*a:e20+mg.trailAtr*a;
           if(t.runnerTrail===null) t.runnerTrail=trail;
           else t.runnerTrail=t.side==='LONG'?Math.max(t.runnerTrail,trail):Math.min(t.runnerTrail,trail);
         }
-        const trail=Number(t.runnerTrail);
-        const protective=Number.isFinite(trail)
-          ?(t.side==='LONG'?Math.max(Number(t.entry),trail):Math.min(Number(t.entry),trail))
-          :Number(t.entry);
-        const exitHit=t.side==='LONG'?c.low<=protective:c.high>=protective;
-        if(exitHit){
-          const rr=t.side==='LONG'?(protective-t.entry)/t.riskDistance:(t.entry-protective)/t.riskDistance;
-          t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=0.3+0.6+0.4*rr;changed=true;break;
+        if(!runnerStartedThisBar){
+          const protective=runnerProtectivePrice(t);
+          const exitHit=t.side==='LONG'?c.low<=protective:c.high>=protective;
+          if(exitHit){
+            const rr=t.side==='LONG'?(protective-t.entry)/t.riskDistance:(t.entry-protective)/t.riskDistance;
+            const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance;
+            t.status='RUNNER_EXIT';t.actionState='CLOSED';t.terminal=true;t.realizedR=mg.tp1Pct*r1+mg.tp2Pct*r2+mg.runnerPct*rr;changed=true;break;
+          }
         }
       }
     }
@@ -984,8 +1057,10 @@ function updateTradePrice(t,price,now=Date.now()){
   ensureTradeLifecycle(t);
   if(!t.entryConfirmed) return false;
   let changed=false;
+  const mg=managementPlan(t);
   const p=(price===null||price===undefined||price==='')?NaN:Number(price);
   if(Number.isFinite(p)){
+    updateBestR(t,p);
     const stopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
     const t1=t.side==='LONG'?p>=Number(t.tp1):p<=Number(t.tp1);
     const t2=t.side==='LONG'?p>=Number(t.tp2):p<=Number(t.tp2);
@@ -1001,27 +1076,27 @@ function updateTradePrice(t,price,now=Date.now()){
         const liveStopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
         if(t.tp1Hit&&!t.tp2Hit&&liveStopHit){
           const r1=Math.abs(t.tp1-t.entry)/t.riskDistance;
-          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1; changed=true;
+          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=mg.tp1Pct*r1; changed=true;
         }else if(!t.terminal&&t2){
           const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance;
-          t.tp2Hit=true; t.status='TP2'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.5*r1+0.5*r2; changed=true;
+          t.tp2Hit=true; t.status='TP2'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=mg.tp1Pct*r1+mg.tp2Pct*r2; changed=true;
         }
       }else{
         const liveStopHit=t.side==='LONG'?p<=Number(t.stop):p>=Number(t.stop);
         if(t.tp1Hit&&!t.tp2Hit&&liveStopHit){
-          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.3; changed=true;
+          const r1=Math.abs(t.tp1-t.entry)/t.riskDistance;
+          t.status='TP1_BE'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=mg.tp1Pct*r1; changed=true;
         }else if(!t.terminal&&!t.tp2Hit&&t2){
           t.tp2Hit=true; t.runnerActive=true; t.status='RUNNER'; t.actionState='RUNNER'; t.stop=t.entry; changed=true;
         }
         if(!t.terminal&&t.runnerActive){
-          const trail=Number(t.runnerTrail);
-          const protective=Number.isFinite(trail)
-            ?(t.side==='LONG'?Math.max(Number(t.entry),trail):Math.min(Number(t.entry),trail))
-            :Number(t.entry);
+          const protective=runnerProtectivePrice(t);
           const exitHit=t.side==='LONG'?p<=protective:p>=protective;
           if(exitHit){
             const rr=t.side==='LONG'?(protective-t.entry)/t.riskDistance:(t.entry-protective)/t.riskDistance;
-            t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true; t.realizedR=0.3+0.6+0.4*rr; changed=true;
+            const r1=Math.abs(t.tp1-t.entry)/t.riskDistance,r2=Math.abs(t.tp2-t.entry)/t.riskDistance;
+            t.status='RUNNER_EXIT'; t.actionState='CLOSED'; t.terminal=true;
+            t.realizedR=mg.tp1Pct*r1+mg.tp2Pct*r2+mg.runnerPct*rr; changed=true;
           }
         }
       }
@@ -1073,6 +1148,7 @@ function qualityText(intel){
 }
 function signalMessage(s){
   const ex=s.execution||executionPlan(s);
+  const mg=managementPlan(s);
   const expires=Number(s.signalAtMs)+ENTRY_VALID_MS;
   const score=Number(s.intelligence&&s.intelligence.score);
   const side=s.side==='LONG'?'做多 LONG':'做空 SHORT';
@@ -1125,9 +1201,11 @@ function signalMessage(s){
     '本金：'+ex.equityUsdt.toFixed(0)+'U',
     '滚雪球：'+String(ex.riskLabel||'标准滚雪球')+' · '+(ex.riskPct*100).toFixed(2)+'%',
     '这单最多亏：约 '+ex.estMaxLoss.toFixed(2)+'U',
-    s.mode==='RANGE_SWEEP'?'目标1：到价卖 50%':'目标1：到价卖 30%',
-    s.mode==='RANGE_SWEEP'?'目标2：到价卖剩下 50%':'目标2：到价再卖 30%',
-    s.mode==='TREND_RETEST'?'剩下：40% 继续跑':null,
+    s.mode==='TREND_RETEST'?'管理模式：'+mg.label:null,
+    '目标1：到价卖 '+pctLabel(mg.tp1Pct),
+    '目标2：到价'+(mg.runnerPct>0?'再卖 ':'卖剩下 ')+pctLabel(mg.tp2Pct),
+    mg.runnerPct>0?'剩下：'+pctLabel(mg.runnerPct)+' 继续跑 · 不设死 TP':null,
+    mg.id==='BEAST'?'🔥 Beast 条件：强趋势确认，runner 会放宽并按最高 R 动态锁利':null,
     s.mode==='TREND_RETEST'?'若剩余跑到约3R：预计整单净赚 '+(ex.runner3Net>=0?'+':'')+ex.runner3Net.toFixed(2)+'U':null,
     Number.isFinite(score)?'信号强度：'+score.toFixed(0)+'/100':null,
     '',
@@ -1256,7 +1334,7 @@ async function cycle(now=Date.now()){
               const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
               const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
               const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,regimePhase:reg.phase||null,adx:Number.isFinite(Number(reg.adx))?Number(reg.adx):null,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
               delete state.armed[armKey];
             }
           }
@@ -1293,7 +1371,7 @@ async function cycle(now=Date.now()){
               const signalVwap=dailyVwap(snap.m15,sig.candle.openTime);
               const intelligence=scoreSignal({snap,reg,sig,vwap:signalVwap,context:intelContext});
               const isReentry=Object.keys(state.sent).some(k=>k.startsWith('ADAPT|'+armKey+'|'));
-              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
+              candidates.push({...sig,key,symbol:snap.symbol,provider:snap.provider,session:session.id,sessionLabel:session.label,signalAtMs,regimePhase:reg.phase||null,adx:Number.isFinite(Number(reg.adx))?Number(reg.adx):null,intelligence:compactIntelligence(intelligence),isReentry,decision:decisionLabel(sig,intelligence,isReentry)});
               delete state.armed[armKey];
             }
           }else if(sweep&&Number(sweep.sweepOpenTime)===Number(arm.sweepOpenTime)){
@@ -1339,7 +1417,7 @@ async function cycle(now=Date.now()){
       }
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
-  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol],status=String(x.status||'');return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status,boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:status==='WAITING_RETEST'?p.level:null,reclaimLevel:status==='WAITING_RECLAIM'?(x.side==='LONG'?x.boxLow:x.boxHigh):null,sweepOpenTime:x.sweepOpenTime??null,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:status==='WAITING_RETEST'?p.low:null,retestHigh:status==='WAITING_RETEST'?p.high:null,previewStop:status==='WAITING_RETEST'?p.stop:null,previewTp2:status==='WAITING_RETEST'?p.tp2:null,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
+  state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),regimePhase:x.regimePhase||null,adx:Number.isFinite(Number(x.adx))?Number(x.adx):null,management:managementPlan(x),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol],status=String(x.status||'');return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status,boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:status==='WAITING_RETEST'?p.level:null,reclaimLevel:status==='WAITING_RECLAIM'?(x.side==='LONG'?x.boxLow:x.boxHigh):null,sweepOpenTime:x.sweepOpenTime??null,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:status==='WAITING_RETEST'?p.low:null,retestHigh:status==='WAITING_RETEST'?p.high:null,previewStop:status==='WAITING_RETEST'?p.stop:null,previewTp2:status==='WAITING_RETEST'?p.tp2:null,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
   const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
@@ -1347,4 +1425,4 @@ async function cycle(now=Date.now()){
   return result;
 }
 if(require.main===module){ cycle().catch(e=>{console.error(JSON.stringify({fatal:e.message}));process.exitCode=1;}); }
-module.exports={VERSION,ENTRY_VALID_MS,MIN_QUALITY_SCORE,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,recentRangeSweep,rangeReclaimSignal,rangeSideAllowed,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
+module.exports={VERSION,ENTRY_VALID_MS,MIN_QUALITY_SCORE,emaSeries,trueRanges,atr,adx14,regime,boxFor,setupWatch,freshBreakout,recentBreakout,qualityGate,retestSignal,rangeSignal,recentRangeSweep,rangeReclaimSignal,rangeSideAllowed,managementPlan,runnerProtectivePrice,ensureTradeLifecycle,lifecycleSnapshot,lifecycleEvents,lifecycleMessage,armedPreview,activeArmedRows,armedMessage,armEndMessage,updateTrade,updateTradePrice,queueAlert,flushAlerts,drawdownStats,yahooCandles,xausChartCandles,snapshotFreshness,chooseFreshestSnapshot,dailyVwap,vwapGate,goldSnapshot,xauMarketClosed,entryZone,barrierRoomAt,chaseGuard,entryDecision,signalIdFor,signalKeyboard,snowballRisk,qtyStep,minNotional,universeQualityOk,universeRank,executionPlan,signalMessage,sgtTime,cycle};
