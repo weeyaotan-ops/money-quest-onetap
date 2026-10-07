@@ -4,13 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
-const { cycle: scanMarket, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk, activeArmedRows } = require('../adaptive_hunter_monitor');
+const { cycle: scanMarket, managementPlan, ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, updateTradePrice, entryDecision, queueAlert, flushAlerts, executionPlan, snowballRisk, activeArmedRows } = require('../adaptive_hunter_monitor');
 
 const BOT_TOKEN=process.env.TELEGRAM_BOT_TOKEN||'';
 const CHAT_ID=String(process.env.TELEGRAM_CHAT_ID||'');
 const AUTH_USER_ID=String(process.env.TELEGRAM_AUTH_USER_ID||'');
 const STATE_PATH=process.env.ADAPTIVE_STATE_PATH||'.hunter_state/adaptive_state.json';
-const VERSION='HUNTER_ADAPTIVE_V2_2026-10-03_INTELLIGENCE';
+const VERSION='HUNTER_ADAPTIVE_V2_2026-10-07_TREND_BEAST';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const M15_MS=15*60*1000;
 const SCAN_AFTER_CLOSE_MS=Number(process.env.ADAPTIVE_SCAN_AFTER_CLOSE_MS||1500);
@@ -78,6 +78,7 @@ function qualityText(x){
   return Number.isFinite(score)?score.toFixed(0)+'/100 · '+String(x.label||''):'n/a';
 }
 function sideText(x){ return x==='LONG'?'做多':x==='SHORT'?'做空':''; }
+function pctLabel(x){ return Math.round(Math.max(0,Number(x)||0)*100)+'%'; }
 function regimeText(x){
   if(x==='TREND') return '🟢 趋势';
   if(x==='RANGE') return '🟡 区间';
@@ -274,8 +275,9 @@ async function nowText(){
     lines.push('止损：'+fmt(x.stop,x.symbol));
     lines.push('目标1：'+fmt(x.tp1,x.symbol));
     lines.push('目标2：'+fmt(x.tp2,x.symbol));
-    if(x.mode==='TREND_RETEST') lines.push('管理：TP1卖30% · TP2再卖30% · 40% Runner');
-    if(x.mode==='RANGE_SWEEP') lines.push('管理：TP1卖50% · TP2卖剩下50%');
+    const mg=managementPlan(x);
+    if(x.mode==='TREND_RETEST') lines.push('管理：'+mg.label+' · TP1卖'+pctLabel(mg.tp1Pct)+' · TP2再卖'+pctLabel(mg.tp2Pct)+' · '+pctLabel(mg.runnerPct)+' Runner');
+    if(x.mode==='RANGE_SWEEP') lines.push('管理：TP1卖'+pctLabel(mg.tp1Pct)+' · TP2卖剩下'+pctLabel(mg.tp2Pct));
     if(ex.valid){
       lines.push('风险：'+String(ex.riskLabel||'标准滚雪球')+' · '+(Number(ex.riskPct||0.0075)*100).toFixed(2)+'%');
       lines.push('最多亏：约 '+Number(ex.estMaxLoss).toFixed(2)+'U');
@@ -440,8 +442,14 @@ function activeText(){
       lines.push('止损：'+fmt(x.stop,x.symbol));
       lines.push('目标1：'+fmt(x.tp1,x.symbol));
       lines.push('目标2：'+fmt(x.tp2,x.symbol));
+      const mg=managementPlan(x);
+      if(x.mode==='TREND_RETEST') lines.push('管理：'+mg.label+' · Runner '+pctLabel(mg.runnerPct));
       if(x.tp1Hit&&!x.runnerActive) lines.push('✅ 目标1已到，止损已拉到保本');
-      if(x.runnerActive) lines.push('🏃 剩下仓位继续跑');
+      if(x.runnerActive){
+        lines.push((mg.id==='BEAST'?'🔥 Trend Beast':'🏃 Runner')+' · 剩下 '+pctLabel(mg.runnerPct)+' 继续跑');
+        if(presentNum(x.bestR)) lines.push('最高：'+Number(x.bestR).toFixed(1)+'R');
+        if(presentNum(x.runnerTrail)) lines.push('动态保护：'+fmt(x.runnerTrail,x.symbol));
+      }
     }
     lines.push('');
   }
@@ -540,6 +548,10 @@ function settingsText(){
     '普通好单：0.75%',
     'A+ 好单：1.00%',
     '跌超 5%：自动降到 0.50%',
+    '',
+    '🔥 Trend Beast：只在强趋势自动启用',
+    '管理：20% @1R · 20% @2R · 60% Runner',
+    '不会因为 Beast 自动提高杠杆或初始风险',
     '杠杆：Bot 自动算最低够用 · 最高 10x',
     '',
     'Binance 余额有变化时，按【✏️ 输入实际资金】更新。',
@@ -1308,6 +1320,7 @@ async function markManualEntryByTrade(t,message=null){
     '止损：'+fmt(confirmed.stop,confirmed.symbol),
     '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
     '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
+    confirmed.mode==='TREND_RETEST'?'管理：'+managementPlan(confirmed).label+' · '+pctLabel(managementPlan(confirmed).tp1Pct)+' / '+pctLabel(managementPlan(confirmed).tp2Pct)+' / '+pctLabel(managementPlan(confirmed).runnerPct)+' Runner':null,
     '',
     '从现在开始停止发“继续等/价格回来了”。',
     'Bot 只帮你盯这单的 SL / TP。',
