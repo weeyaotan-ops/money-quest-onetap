@@ -4,7 +4,7 @@ const assert = require('assert');
 const {
   emaSeries, atr, regime, freshBreakout, recentBreakout, qualityGate, retestSignal, rangeSignal, recentRangeSweep, rangeReclaimSignal, updateTrade, drawdownStats, entryZone, barrierRoomAt, chaseGuard, signalMessage,
   ensureTradeLifecycle, lifecycleSnapshot, lifecycleEvents, lifecycleMessage, armedPreview, activeArmedRows, armedMessage, armEndMessage, queueAlert, ENTRY_VALID_MS, updateTradePrice, entryDecision, snowballRisk, executionPlan,
-  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, setupWatch
+  vwapGate, chooseFreshestSnapshot, snapshotFreshness, xauMarketClosed, qtyStep, universeQualityOk, rangeSideAllowed, setupWatch, MIN_QUALITY_SCORE
 } = require('../adaptive_hunter_monitor');
 
 const M15=15*60*1000;
@@ -23,6 +23,23 @@ function flatH4(){
   for(let i=0;i<80;i+=1){
     const p=100+(i%4===0?0.4:i%4===2?-0.4:0);
     out.push({openTime:i*H4,open:100,high:101,low:99,close:p,volume:1000});
+  }
+  return out;
+}
+
+function h4Transition(side='SHORT'){
+  const prices=[100];
+  if(side==='SHORT'){
+    for(let i=0;i<50;i+=1) prices.push(prices.at(-1)+1);
+    for(let i=0;i<4;i+=1) prices.push(prices.at(-1)-5);
+  }else{
+    for(let i=0;i<50;i+=1) prices.push(prices.at(-1)-1);
+    for(let i=0;i<4;i+=1) prices.push(prices.at(-1)+5);
+  }
+  const out=[];
+  for(let i=1;i<prices.length;i+=1){
+    const o=prices[i-1],cl=prices[i];
+    out.push({openTime:(i-1)*H4,open:o,high:Math.max(o,cl)+0.5,low:Math.min(o,cl)-0.5,close:cl,volume:1000});
   }
   return out;
 }
@@ -102,6 +119,35 @@ function m15Base(count=80,start=0){
   assert.strictEqual(noBox.status,'WAIT_BOX');
 })();
 
+(function transitionTrendIsSymmetric(){
+  const m15=m15Base(80,0);
+  const shortReg=regime({h4:h4Transition('SHORT'),m15});
+  const longReg=regime({h4:h4Transition('LONG'),m15});
+  assert.strictEqual(shortReg.type,'TREND');
+  assert.strictEqual(shortReg.side,'SHORT');
+  assert.strictEqual(shortReg.phase,'TRANSITION');
+  assert.strictEqual(longReg.type,'TREND');
+  assert.strictEqual(longReg.side,'LONG');
+  assert.strictEqual(longReg.phase,'TRANSITION');
+})();
+
+(function rangeCounterTrendIsBlocked(){
+  assert.strictEqual(rangeSideAllowed('LONG',{structure:{h4:'BEARISH'}}),false);
+  assert.strictEqual(rangeSideAllowed('SHORT',{structure:{h4:'BULLISH'}}),false);
+  assert.strictEqual(rangeSideAllowed('LONG',{structure:{h4:'BULLISH'}}),true);
+  assert.strictEqual(rangeSideAllowed('SHORT',{structure:{h4:'BEARISH'}}),true);
+  assert.strictEqual(rangeSideAllowed('LONG',{structure:{h4:'NEUTRAL'}}),true);
+  assert.strictEqual(rangeSideAllowed('SHORT',{structure:{h4:'NEUTRAL'}}),true);
+})();
+
+(function qualityGateIsUnified(){
+  assert.strictEqual(MIN_QUALITY_SCORE,70);
+  assert.strictEqual(universeQualityOk({symbol:'BTCUSDT',intelligence:{score:69}}),false);
+  assert.strictEqual(universeQualityOk({symbol:'BTCUSDT',intelligence:{score:70}}),true);
+  assert.strictEqual(universeQualityOk({symbol:'NEARUSDT',intelligence:{score:70}}),true);
+  assert.strictEqual(universeQualityOk({symbol:'XAUUSD',intelligence:{score:69}}),false);
+})();
+
 (function freshBreakoutOnly(){
   const box={high:105,low:95,activeFrom:0,activeUntil:999999999};
   const xs=[c(0,100,104,99,104),c(M15,104,108,103,106)];
@@ -141,6 +187,24 @@ function m15Base(count=80,start=0){
   assert.strictEqual(s.side,'LONG');
   assert.ok(s.stop<s.entry);
   assert.ok(s.tp2>s.tp1);
+})();
+
+(function trendRetestShortFullPath(){
+  const start=Date.parse('2026-09-30T00:00:00Z');
+  const xs=[];
+  for(let i=0;i<20;i+=1) xs.push(c(start+i*M15,100,101,99,100,100));
+  const breakoutTime=start+20*M15;
+  xs.push(c(breakoutTime,99.5,99.8,97.8,98.2,120));
+  xs.push(c(breakoutTime+M15,98.4,99.15,97.9,98.1,130));
+  const box={high:102,low:99,mid:100.5,activeFrom:0,activeUntil:Date.parse('2030-01-01T00:00:00Z')};
+  const armed={side:'SHORT',breakoutOpenTime:breakoutTime,expiresOpenTime:breakoutTime+4*M15};
+  const snap={symbol:'BTCUSDT',m15:xs};
+  const s=retestSignal(snap,armed,box,{a15:1});
+  assert.ok(s);
+  assert.strictEqual(s.mode,'TREND_RETEST');
+  assert.strictEqual(s.side,'SHORT');
+  assert.ok(s.stop>s.entry);
+  assert.ok(s.tp2<s.tp1);
 })();
 
 (function rangeSweepLong(){
