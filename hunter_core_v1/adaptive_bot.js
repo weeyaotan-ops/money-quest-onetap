@@ -635,6 +635,8 @@ async function beginCapitalInput(){
 async function handleTextInput(text){
   const raw=String(text||'').trim();
   if(['/entered','entered','已进场','我已进场','已经进场','我已经进场'].includes(raw.toLowerCase())) return confirmLatestManualEntry();
+  const fill=raw.match(/^\/?fill(?:\s+([a-z0-9]+))?\s+([0-9]+(?:\.[0-9]+)?)$/i);
+  if(fill) return setActualFill(fill[1]||null,fill[2]);
   const direct=raw.match(/^\/?capital\s+([0-9]+(?:\.[0-9]+)?)$/i);
   if(direct) return setCapital(direct[1]);
   const s=load();
@@ -645,6 +647,53 @@ async function handleTextInput(text){
   }
   return null;
 }
+function normalizeFillSymbol(token){
+  const s=String(token||'').trim().toUpperCase();
+  if(!s) return null;
+  if(s==='XAU'||s==='GOLD'||s==='XAUUSD'||s==='XAUUSDT') return 'XAUUSD';
+  return s.endsWith('USDT')?s:s+'USDT';
+}
+async function setActualFill(symbolToken,priceValue){
+  const price=Number(priceValue);
+  if(!(price>0)) return send('⚠️ 成交价不对。例：/fill LTC 69.72',keyboard());
+  let changed=null,reason=null;
+  await withStateLock(async()=>{
+    const state=load();
+    const eligible=Object.values(state.trades||{}).filter(t=>t&&!t.terminal&&t.entryConfirmed&&!t.tp1Hit);
+    const wanted=normalizeFillSymbol(symbolToken);
+    let t=null;
+    if(wanted) t=eligible.find(x=>String(x.symbol)===wanted)||null;
+    else if(eligible.length===1) t=eligible[0];
+    else if(eligible.length>1){ reason='MULTIPLE'; return; }
+    if(!t){ reason='NOT_FOUND'; return; }
+    const stop=Number(t.initialStop??t.stop);
+    if(!Number.isFinite(stop)){ reason='NO_STOP'; return; }
+    if((t.side==='LONG'&&price<=stop)||(t.side==='SHORT'&&price>=stop)){ reason='PAST_STOP'; return; }
+    if(!Number.isFinite(Number(t.signalEntry))) t.signalEntry=Number(t.entry);
+    t.actualEntryPrice=price;
+    t.entry=price;
+    t.riskDistance=Math.abs(price-stop);
+    t.fillSource='USER_EXACT';
+    t.fillUpdatedAtMs=Date.now();
+    changed={...t};
+    save(state);
+  });
+  if(reason==='MULTIPLE') return send('你有不止一单，写币名。例：/fill LTC 69.72',keyboard());
+  if(reason==='PAST_STOP') return send('⚠️ 这个成交价已经越过原本止损，先不要这样记录。',keyboard());
+  if(!changed) return send('⚠️ 找不到可更新的持仓，或这单已经过 TP1。',keyboard());
+  return send([
+    '✅ 实际成交价已更新',
+    changed.symbol+' · '+sideText(changed.side),
+    '实际成交：'+fmt(changed.actualEntryPrice,changed.symbol),
+    '原 signal：'+fmt(changed.signalEntry,changed.symbol),
+    '止损：'+fmt(changed.initialStop,changed.symbol),
+    '目标1：'+fmt(changed.tp1,changed.symbol),
+    '目标2：'+fmt(changed.tp2,changed.symbol),
+    '',
+    '之后保本价和 R 会按这个实际成交价计算。'
+  ].join('\n'),keyboard());
+}
+
 async function manualBalanceSync(){
   if(!binanceReady()) return send('⚠️ Binance API 还没连接。',settingsKeyboard());
   try{
@@ -761,6 +810,7 @@ async function setCommands(){
     {command:'now',description:'现在能不能下'},
     {command:'active',description:'我的单'},
     {command:'entered',description:'我已经手动进场'},
+    {command:'fill',description:'修正实际成交价，例如 /fill LTC 69.72'},
     {command:'results',description:'成绩'},
     {command:'settings',description:'设置'},
     {command:'capital',description:'更新实际资金，例如 /capital 268.5'}
@@ -1214,8 +1264,22 @@ async function markManualEntryByTrade(t,message=null){
     }
     live.entryConfirmed=true;
     live.entryConfirmedAtMs=now;
-    live.actualEntryPrice=null;
-    live.confirmationPrice=quote&&presentNum(quote.price)?Number(quote.price):null;
+    const quoted=quote&&presentNum(quote.price)?Number(quote.price):null;
+    live.confirmationPrice=quoted;
+    if(!Number.isFinite(Number(live.signalEntry))) live.signalEntry=Number(live.entry);
+    const initialStop=Number(live.initialStop??live.stop);
+    const quoteUsable=quoted!==null&&Number.isFinite(initialStop)&&(
+      (live.side==='LONG'&&quoted>initialStop)||(live.side==='SHORT'&&quoted<initialStop)
+    );
+    if(quoteUsable){
+      live.actualEntryPrice=quoted;
+      live.entry=quoted;
+      live.riskDistance=Math.abs(quoted-initialStop);
+      live.fillSource='CONFIRMATION_QUOTE';
+    }else{
+      live.actualEntryPrice=null;
+      live.fillSource='SIGNAL_FALLBACK';
+    }
     live.entryStatus='CONFIRMED';
     live.status='OPEN';
     live.actionState='OPEN';
@@ -1232,14 +1296,15 @@ async function markManualEntryByTrade(t,message=null){
   return send([
     '✅ 已记录：你已经进场','',
     confirmed.symbol+' · '+sideText(confirmed.side),
-    '按信号入场价记录：'+fmt(confirmed.entry,confirmed.symbol),
-    presentNum(confirmed.confirmationPrice)?'你确认时市场价：'+fmt(confirmed.confirmationPrice,confirmed.symbol):null,
+    presentNum(confirmed.actualEntryPrice)?'进场记录：'+fmt(confirmed.actualEntryPrice,confirmed.symbol)+'（确认时市价）':'进场记录：'+fmt(confirmed.entry,confirmed.symbol)+'（signal价）',
+    presentNum(confirmed.signalEntry)&&presentNum(confirmed.actualEntryPrice)?'原 signal：'+fmt(confirmed.signalEntry,confirmed.symbol):null,
     '止损：'+fmt(confirmed.stop,confirmed.symbol),
     '目标1：'+fmt(confirmed.tp1,confirmed.symbol),
     '目标2：'+fmt(confirmed.tp2,confirmed.symbol),
     '',
     '从现在开始停止发“继续等/价格回来了”。',
-    'Bot 只帮你盯这单的 SL / TP。'
+    'Bot 只帮你盯这单的 SL / TP。',
+    presentNum(confirmed.actualEntryPrice)?'如果你的 Binance 真正成交价不同，可发：/fill '+String(confirmed.symbol||'').replace(/USDT$/,'')+' 真实价格':null
   ].filter(Boolean).join('\n'),keyboard());
 }
 async function confirmLatestManualEntry(){
