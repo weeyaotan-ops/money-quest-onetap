@@ -133,7 +133,7 @@ function watchText(w){
 }
 function modeText(x){ return x==='TREND_RETEST'?'趋势突破回踩':x==='RANGE_SWEEP'?'区间扫流动性':x||''; }
 function actionStateText(x,status){
-  if(x==='ACTIONABLE') return '等你进场后确认';
+  if(x==='ACTIONABLE') return '🟠 READY · 等进场确认';
   if(x==='OPEN') return '已进场';
   if(x==='EXPIRED') return '太迟了，不做';
   if(x==='MANAGING') return '目标1已到';
@@ -232,30 +232,37 @@ async function nowText(){
     }
 
     if(d.state!=='ENTER'){
+      const readyTitle='🟠 READY · '+x.symbol+' · '+(x.side==='LONG'?'LONG':'SHORT');
       if(d.state==='DO_NOT_CHASE'){
-        lines.push('⛔ '+x.symbol+' 不要追');
+        lines.push(readyTitle);
+        lines.push('原因：价格已经离安全入场区太远，不追。');
         lines.push('现在价格：'+fmt(d.price,x.symbol));
-        if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
+        if(d.zone&&d.zone.valid) lines.push('等回可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
       }else if(d.state==='BLOCKED_BARRIER'){
-        lines.push('🧱 '+x.symbol+' 先别进');
-        lines.push('前方阻力/支撑太近，空间不够。');
+        lines.push(readyTitle);
+        lines.push('原因：前方阻力/支撑太近，空间不够。');
+        lines.push('下一步：等价格进入安全区。');
       }else if(d.state==='WAIT_ZONE'){
-        lines.push('⏳ '+x.symbol+' 继续等');
+        lines.push(readyTitle);
+        lines.push('原因：setup 已确认，但价格还没到安全入场区。');
         lines.push('现在价格：'+fmt(d.price,x.symbol));
-        if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
+        if(d.zone&&d.zone.valid) lines.push('等可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
       }else if(d.state==='EXPIRED'){
-        lines.push('⌛ '+x.symbol+' signal 已过期');
+        lines.push('⌛ EXPIRED · '+x.symbol);
+        lines.push('原因：进场有效时间已经过了。');
       }else if(d.state==='INVALID'){
-        lines.push('❌ '+x.symbol+' setup 已失效');
+        lines.push('❌ INVALID · '+x.symbol);
+        lines.push('原因：价格已经穿过止损结构，原 setup 不成立。');
       }else{
-        lines.push('⚠️ '+x.symbol+' 现在先不要进');
+        lines.push(readyTitle);
+        lines.push('下一步：继续等 live entry 确认。');
       }
       lines.push('');
       showedCandidate=true;
       continue;
     }
 
-    lines.push('✅ '+x.symbol+' 现在可以进');
+    lines.push((x.side==='LONG'?'🟢 LONG · ':'🔴 SHORT · ')+x.symbol+' · 现在可以进');
     lines.push('现在价格：'+fmt(d.price,x.symbol)+' · '+(d.priceGrade==='GOOD'?'好价':'正常价'));
     if(d.zone&&d.zone.valid) lines.push('可进区间：'+fmt(d.zone.low,x.symbol)+' – '+fmt(d.zone.high,x.symbol));
     lines.push('方向：'+side);
@@ -295,8 +302,8 @@ async function nowText(){
   // Show only live, regime-matching setups.
   const armed=activeArmedRows(scan.armed||[],s.market||{},now);
   if(armed.length){
-    lines.push('🟡 现在还不能下');
-    lines.push('现在：先等确认。');
+    lines.push('🟡 WATCH · 等确认');
+    lines.push('现在：先不要下。');
     for(const x of armed.slice(0,4)){
       const current=presentNum(x.currentPrice)?Number(x.currentPrice):null;
       const action=x.side==='LONG'?'LONG':'SHORT';
@@ -328,7 +335,7 @@ async function nowText(){
       }
       lines.push('');
     }
-    lines.push('确认成功后，Bot 才给最终 Entry / SL / TP。');
+    lines.push('流程：🟡 WATCH → 🟠 READY → 🟢 LONG / 🔴 SHORT → Entry / SL / TP。');
     return lines.join('\n');
   }
 
@@ -574,7 +581,7 @@ function systemText(){
     closed.length?'⚪ 休市：'+closed.map(x=>x.symbol).join(' / '):null,
     errs.length?'⚠️ 数据问题：'+errs.map(x=>x.symbol).join(' / '):'🟢 数据源：正常',
     scan.killed?'🛑 今日新信号已暂停':'🟢 今日风险开关：正常',
-    '生命周期：WAITING RETEST → ACTIONABLE → TP1/BE → TP2/Runner → Closed',
+    '生命周期：🟡 WATCH → 🟠 READY → 🟢 LONG / 🔴 SHORT → TP1/BE → TP2/Runner → Closed',
     '⚡ TP/SL 实时监控：约 '+(LIFECYCLE_POLL_MS/1000).toFixed(0)+'秒一次',
     '✅ 手动进场确认 / Skip：开启',
     '🔄 Live Entry Check：开启',
