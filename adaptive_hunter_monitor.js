@@ -823,29 +823,30 @@ function activeArmedRows(rows,market,now=Date.now()){
 function armedMessage(a){
   const current=num(a.currentPrice);
   const side=a.side==='LONG'?'做多':'做空';
+  const direction=a.side==='LONG'?'🟢 LONG':'🔴 SHORT';
 
   if(String(a.status)==='WAITING_RECLAIM'){
     const level=a.side==='LONG'?num(a.boxLow):num(a.boxHigh);
     return [
-      '👀 WAITING RECLAIM','',
-      a.symbol+' · '+side,
+      '🟡 WATCH · '+a.symbol,
+      direction+' · '+side,
       'Session：'+a.sessionLabel,
       current!==null?'现在价：'+fmt(current,a.symbol):null,
       num(a.boxLow)!==null&&num(a.boxHigh)!==null?'Box：'+fmt(a.boxLow,a.symbol)+' – '+fmt(a.boxHigh,a.symbol):null,
       level!==null?(a.side==='LONG'?'已扫破下方：':'已扫破上方：')+fmt(level,a.symbol):null,
       '',
       '现在：先不要进。',
-      level!==null?'等 M15 收回 '+fmt(level,a.symbol)+(a.side==='LONG'?' 上方才 LONG。':' 下方才 SHORT。'):'等 M15 收回 Box 后才确认。',
-      '确认后 Bot 才计算最终 Entry / SL / TP。',
-      '收回窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
+      level!==null?'下一步：等 M15 收回 '+fmt(level,a.symbol)+(a.side==='LONG'?' 上方。':' 下方。'):'下一步：等 M15 收回 Box。',
+      '确认成功 → 🟠 READY → Bot 重算最终 Entry / SL / TP。',
+      '确认窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
     ].filter(Boolean).join('\n');
   }
 
   const p=armedPreview(a);
   const zoneLabel=a.side==='LONG'?'等买区':'等卖区';
   return [
-    '👀 WAITING RETEST','',
-    a.symbol+' · '+side,
+    '🟡 WATCH · '+a.symbol,
+    direction+' · '+side,
     'Session：'+a.sessionLabel,
     current!==null?'现在价：'+fmt(current,a.symbol):null,
     p.valid?zoneLabel+'：'+fmt(p.low,a.symbol)+' – '+fmt(p.high,a.symbol):null,
@@ -853,20 +854,38 @@ function armedMessage(a){
     p.valid?'预估目标2：'+fmt(p.tp2,a.symbol):null,
     '',
     '现在：不要追。',
-    p.valid?'等 M15 回踩后重新收在关键位 '+fmt(p.level,a.symbol)+(a.side==='LONG'?' 上方。':' 下方。'):'等 M15 回踩确认。',
-    '变成 ACTIONABLE 后，Bot 会重算最终 Entry / SL / TP。',
-    '回踩窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
+    p.valid?'下一步：等 M15 回踩后重新收在关键位 '+fmt(p.level,a.symbol)+(a.side==='LONG'?' 上方。':' 下方。'):'下一步：等 M15 回踩确认。',
+    '确认成功 → 🟠 READY → Bot 重算最终 Entry / SL / TP。',
+    '确认窗口至：'+sgtTime(a.expiresOpenTime+M15)+' SGT'
   ].filter(Boolean).join('\n');
 }
-function armEndMessage(a,reason='EXPIRED'){
+function invalidReasonText(detail,isRange=false){
+  const x=String(detail||'').trim();
+  if(x==='RR不足') return 'RR 不够，利润空间不值得进';
+  if(x==='SL太近') return 'SL 太近，容易被正常波动扫掉';
+  if(x==='SL太远') return 'SL 太远，这单风险不划算';
+  if(x==='risk invalid') return 'Entry / SL 风险结构不成立';
+  if(x==='REGIME_CHANGED') return isRange?'市场已经离开原本区间':'趋势或方向已经改变';
+  if(x==='H4_OPPOSITE') return 'H4 大方向不支持这边';
+  if(x) return x;
+  return isRange?'M15 收回条件没有成立':'M15 回踩确认条件没有成立';
+}
+function armEndMessage(a,reason='EXPIRED',detail=''){
   const isRange=String(a&&a.status)==='WAITING_RECLAIM';
+  const direction=a&&a.side==='LONG'?'🟢 LONG':'🔴 SHORT';
+  if(reason==='REJECTED'){
+    return [
+      '❌ INVALID · '+a.symbol,
+      direction,
+      '原因：'+invalidReasonText(detail,isRange),
+      '处理：这次跳过，不追价。'
+    ].join('\n');
+  }
   return [
-    reason==='REJECTED'?'⚪ SETUP INVALID':'⌛ SETUP EXPIRED','',
-    a.symbol+' · '+(a.side==='LONG'?'做多':'做空'),
-    reason==='REJECTED'
-      ?(isRange?'扫流动性后收回条件不合格，这次跳过。':'回踩后的结构不再合格，这次跳过。')
-      :(isRange?'等待收回 Box 的窗口结束，这次机会作废。':'回踩窗口结束，这次机会作废。'),
-    '不要追价，等下一次 setup。'
+    '⌛ EXPIRED · '+a.symbol,
+    direction,
+    isRange?'原因：M15 收回确认窗口已结束。':'原因：M15 回踩确认窗口已结束。',
+    '处理：这次机会作废，等下一次 setup。'
   ].join('\n');
 }
 function lifecycleMessage(t,event){
@@ -1066,7 +1085,9 @@ function signalMessage(s){
     ?barrierLabel+'：'+fmt(room.barrier,s.symbol)+(room.barrierR!==null&&room.barrierR!==undefined&&Number.isFinite(Number(room.barrierR))?' · '+Number(room.barrierR).toFixed(2)+'R':'')
     :null;
   const roomLine=room&&room.state==='BLOCK'?'价位判断：先别进，前方空间太近':room&&room.state==='TIGHT'?'价位判断：空间偏紧，尽量等好价':'价位判断：正常';
-  const signalHeader=room&&room.state==='BLOCK'?'🧱 先别进 · '+s.symbol:'✅ 可以进 · '+s.symbol;
+  const signalHeader=room&&room.state==='BLOCK'
+    ?'🟠 READY · '+s.symbol+' · 等安全价'
+    :(s.side==='LONG'?'🟢 LONG · ':'🔴 SHORT · ')+s.symbol;
   if(!ex.costOk){
     return [
       '❌ 这单不要做',
@@ -1192,7 +1213,8 @@ async function cycle(now=Date.now()){
         const validRange=status==='WAITING_RECLAIM'&&reg.type==='RANGE'&&rangeSideAllowed(arm.side,intelContext);
         if(!validTrend&&!validRange){
           const origin=arm.breakoutOpenTime??arm.sweepOpenTime??0;
-          queueAlert(state,'ARM_REJECT|'+armKey+'|'+origin,armEndMessage(arm,'REJECTED'),now);
+          const rejectDetail=status==='WAITING_RETEST'?'REGIME_CHANGED':(reg.type!=='RANGE'?'REGIME_CHANGED':'H4_OPPOSITE');
+          queueAlert(state,'ARM_REJECT|'+armKey+'|'+origin,armEndMessage(arm,'REJECTED',rejectDetail),now);
           delete state.armed[armKey];
           arm=null;
         }
@@ -1225,7 +1247,7 @@ async function cycle(now=Date.now()){
           arm.atr15=reg.a15;
           const sig=retestSignal(snap,arm,box,reg);
           if(sig&&sig.reject){
-            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED'),now);
+            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.breakoutOpenTime,armEndMessage(arm,'REJECTED',sig.reason),now);
             delete state.armed[armKey];
           }else if(sig){
             const key='ADAPT|'+armKey+'|'+sig.candle.openTime+'|'+sig.side;
@@ -1262,7 +1284,7 @@ async function cycle(now=Date.now()){
           arm.atr15=reg.a15;
           const sig=rangeReclaimSignal(snap,arm,box,reg);
           if(sig&&sig.reject){
-            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.sweepOpenTime,armEndMessage(arm,'REJECTED'),now);
+            queueAlert(state,'ARM_REJECT|'+armKey+'|'+arm.sweepOpenTime,armEndMessage(arm,'REJECTED',sig.reason),now);
             delete state.armed[armKey];
           }else if(sig){
             const key='ADAPT|'+armKey+'|RANGE|'+arm.sweepOpenTime+'|'+sig.side;
