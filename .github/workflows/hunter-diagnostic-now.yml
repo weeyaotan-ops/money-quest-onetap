@@ -1,3 +1,4 @@
+# Validation refresh 2026-10-07
 # Range-memory verification 2026-10-07
 name: Hunter Diagnostic Now
 
@@ -28,6 +29,14 @@ jobs:
 
       - name: Install market data helper
         run: npm install --no-save dukascopy-node
+
+      - name: Validate current Hunter V2 branch
+        run: |
+          node --check hunter_core_v1/intelligence.js
+          node --check adaptive_hunter_monitor.js
+          node --check hunter_core_v1/adaptive_bot.js
+          node test/intelligence_v2.test.js
+          node test/adaptive_hunter_monitor.test.js
 
       - name: Current live diagnostic
         env:
