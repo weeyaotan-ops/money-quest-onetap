@@ -1,3 +1,4 @@
+# Long/short symmetry + unified quality + multi-signal + actual-fill release 2026-10-07
 # Deployment concurrency reset for range-memory build 2026-10-07
 # Range sweep memory + delayed reclaim hotfix 2026-10-07
 # Hunter Adaptive V2 reliability hardening 2026-10-07
@@ -43,7 +44,7 @@ on:
     - cron: "17 */12 * * *"
 
 concurrency:
-  group: hunter-adaptive-telegram-bot-v7
+  group: hunter-adaptive-telegram-bot-v8
   cancel-in-progress: true
 
 permissions:
@@ -122,6 +123,7 @@ jobs:
           ADAPTIVE_TAKER_FEE_RATE: "0.0005"
           ADAPTIVE_SLIPPAGE_BUFFER_RATE: "0.0002"
           ADAPTIVE_DAILY_STOP_R: "-2"
+          ADAPTIVE_MIN_QUALITY_SCORE: "70"
           BINANCE_LIVE_TRADING: "0"
           BINANCE_AUTO_BALANCE: "0"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
