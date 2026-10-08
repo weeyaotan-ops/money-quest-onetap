@@ -49,7 +49,7 @@ assert.equal(ambBoth.status,'AMBIGUOUS');
 assert(ambBoth.slHit&&ambBoth.tp1Hit&&ambBoth.tp2Hit);
 // Symmetry for LONG.
 const longWin=createTrade(long,T);
-applyBars(longWin,[bar(T,102.1,99.9,101.3)],T+2*M);
+applyBars(longWin,[bar(T,102.1,98.9,101.3)],T+2*M);
 assert.equal(longWin.status,'AMBIGUOUS');assert(longWin.slHit&&longWin.tp2Hit);
 const longTP2=createTrade({...long,key:'long2'},T);
 applyBars(longTP2,[bar(T,102.1,100.1,101.5)],T+2*M);
