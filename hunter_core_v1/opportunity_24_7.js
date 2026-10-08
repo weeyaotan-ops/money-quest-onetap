@@ -131,6 +131,22 @@ async function botApi(method,body){
 async function respond(chat,text){
  return botApi('sendMessage',{chat_id:chat,text,reply_markup:{remove_keyboard:true}});
 }
+// Gross price-distance R (reward/risk), not realized PnL or net R.
+function rrAtLevel(t,level){
+ const entry=Number(t.entry),stop=Number(t.stop),target=Number(level);
+ const d=t.side==='LONG'?1:t.side==='SHORT'?-1:0;
+ const risk=d*(entry-stop);
+ if(!Number.isFinite(entry)||!Number.isFinite(stop)||!Number.isFinite(target)||
+    !(risk>0)||!d)return null;
+ const r=d*(target-entry)/risk;
+ return Number.isFinite(r)?r:null;
+}
+function formatReachedR(t){
+ const level=t.tp2Hit?t.tp2:t.tp1Hit?t.tp1:null;
+ if(level===null)return t.slHit?'SL reached (−1.00R)':'—';
+ const r=rrAtLevel(t,level);
+ return r===null?'unknown':(r>=0?'+':'')+r.toFixed(2)+'R';
+}
 function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
  if(command==='/scan')return ['📡 26 major coins · latest confirmed scan',
@@ -155,9 +171,9 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    'Scan errors: '+(state.errors??'unknown'),
    '',
    'Total signals: '+scored.tracked,
-   '🛑 SL hit: '+scored.slHits,
-   '🎯 TP1 hit: '+scored.tp1Hits,
-   '🎯 TP2 hit: '+scored.tp2Hits,
+   '🛑 SL hit: '+scored.slHits+' (−1R level)',
+   '🎯 TP1 hit: '+scored.tp1Hits+' (1R target)',
+   '🎯 TP2 hit: '+scored.tp2Hits+' (2R target)',
    'Still tracking: '+scored.open,
    scored.ambiguous?'Both sides touched in same minute (order unknown): '+scored.ambiguous:null,
    scored.dataGaps?'Incomplete price history: '+scored.dataGaps:null,
@@ -165,12 +181,13 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    'History ('+selectedPage+'/'+maxPage+'):',
    ...results.map(t=>t.symbol+' '+t.side+
        ' | SL '+hit(t.slHit)+' | TP1 '+hit(t.tp1Hit)+' | TP2 '+hit(t.tp2Hit)+
+       ' | RR '+formatReachedR(t)+
        (t.status==='OPEN'?' | Tracking':'')+
        (t.status==='AMBIGUOUS'?' | Sequence unknown':'')),
    maxPage>selectedPage?'Older: /status '+(selectedPage+1):null,
    '',
-   'Independent price-level hits (TP2 also counts TP1).',
-   'No simulated fills, partial exits, breakeven moves or PnL.'
+   'RR = furthest target touched ÷ original SL risk (gross, not profit).',
+   'TP2 also counts TP1. Hits are independent; no simulated exits or PnL.'
   ].filter(x=>x!==null).join('\n');
  }
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
@@ -223,4 +240,4 @@ if(require.main===module){
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
-module.exports={signal,rows,message,commandAnswer,trackScorecard};
+module.exports={signal,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR};
