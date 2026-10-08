@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {signal,message,rows}=require('../hunter_core_v1/opportunity_24_7');
+const now=Date.now();
+assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
+assert.equal(signal('BTCUSDT',[],[],now),null);
+const h1=Array.from({length:110},(_,i)=>({t:now-(111-i)*3600000,o:70+i*0.3,h:71+i*0.3,l:69+i*0.3,c:70+i*0.3,v:100}));
+const m15=Array.from({length:110},(_,i)=>({t:now-(110-i)*900000-1000,o:90+i*0.1,h:90.3+i*0.1,l:89.8+i*0.1,c:90+i*0.1,v:100}));
+const output=signal('BTCUSDT',m15,h1,now);
+assert(output===null||['LONG','SHORT'].includes(output.side));
+assert.match(message({symbol:'BTCUSDT',side:'LONG',entry:83000,stop:82500,tp1:83500,tp2:84000,netR:1.8}),/83000/);
+console.log('OPPORTUNITY_SCANNER_TEST_PASS');
