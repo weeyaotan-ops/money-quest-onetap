@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {signal,message,rows}=require('../hunter_core_v1/opportunity_24_7');
+const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR}=require('../hunter_core_v1/opportunity_24_7');
 const now=Date.now();
 assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
 assert.equal(signal('BTCUSDT',[],[],now),null);
@@ -9,4 +9,31 @@ const m15=Array.from({length:110},(_,i)=>({t:now-(110-i)*900000-1000,o:90+i*0.1,
 const output=signal('BTCUSDT',m15,h1,now);
 assert(output===null||['LONG','SHORT'].includes(output.side));
 assert.match(message({symbol:'BTCUSDT',side:'LONG',entry:83000,stop:82500,tp1:83500,tp2:84000,netR:1.8}),/83000/);
+// RR reporting must be gross reward/risk and must never claim executed PnL.
+const levels={entry:114.51,stop:115.2185,tp1:113.8015,tp2:113.093,side:'SHORT',symbol:'SOLUSDT',notifiedAt:1};
+assert.equal(rrAtLevel(levels,levels.tp1).toFixed(2),'1.00');
+assert.equal(rrAtLevel(levels,levels.tp2).toFixed(2),'2.00');
+assert.equal(rrAtLevel({...levels,side:'LONG',entry:100,stop:98},104),2);
+assert.equal(rrAtLevel({...levels,stop:levels.entry},levels.tp2),null);
+assert.equal(formatReachedR({...levels,tp1Hit:true,tp2Hit:false,slHit:false}),'+1.00R');
+assert.equal(formatReachedR({...levels,tp1Hit:true,tp2Hit:true,slHit:false}),'+2.00R');
+assert.equal(formatReachedR({...levels,tp1Hit:false,tp2Hit:false,slHit:true}),'SL reached (−1.00R)');
+assert.equal(formatReachedR({...levels,tp1Hit:false,tp2Hit:false,slHit:false}),'—');
+const scoreState={
+ lastScan:Date.now(),errors:0,
+ scorecard:{trades:[
+  {...levels,key:'a',status:'TP2',tp1Hit:true,tp2Hit:true,slHit:false},
+  {...levels,key:'b',side:'SHORT',symbol:'LINKUSDT',status:'OPEN',
+   tp1Hit:false,tp2Hit:false,slHit:false,notifiedAt:2}
+ ]}
+};
+const out=commandAnswer('/status',scoreState);
+assert.match(out,/TP1 hit: 1 \\(1R target\\)/);
+assert.match(out,/TP2 hit: 1 \\(2R target\\)/);
+assert.match(out,/SOLUSDT SHORT.*RR \\+2\\.00R/);
+assert.match(out,/LINKUSDT SHORT.*RR —.*Tracking/);
+assert.match(out,/no simulated exits or PnL/);
+assert.match(commandAnswer('/scan',scoreState),/26 major coins/);
+assert.match(commandAnswer('/signals',scoreState),/No active confirmed signals/);
+
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
