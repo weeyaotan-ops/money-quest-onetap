@@ -1,6 +1,7 @@
 'use strict';
 // 24/7 major-crypto signal-only scanner. NO account access or order execution.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
+const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -40,6 +41,30 @@ function signal(symbol,m15,h1,now=Date.now()){
 function rows(x){return x.map(y=>({t:Number(y[0]),o:+y[1],h:+y[2],l:+y[3],c:+y[4],v:+y[5]}));}
 async function request(url){const r=await fetch(url,{signal:AbortSignal.timeout(9000)});if(!r.ok)throw Error('API '+r.status);return r.json();}
 async function candles(symbol,tf){return rows(await request(API+'/fapi/v1/klines?symbol='+encodeURIComponent(symbol)+'&interval='+tf+'&limit=140'));}
+async function trackScorecard(state,now=Date.now()){
+ const card=initScorecard(state);
+ const grouped=new Map();
+ for(const t of card.trades){
+  if(t.status!=='OPEN')continue;
+  const from=t.lastBar===null?t.eligibleFrom:t.lastBar+60000;
+  if(from>=Math.floor(now/60000)*60000)continue;
+  if(!grouped.has(t.symbol))grouped.set(t.symbol,[]);
+  grouped.get(t.symbol).push(t);
+ }
+ for(const [symbol,trades] of grouped){
+  const start=Math.min(...trades.map(t=>t.lastBar===null?t.eligibleFrom:t.lastBar+60000));
+  try{
+   const raw=await request(API+'/fapi/v1/klines?symbol='+encodeURIComponent(symbol)+'&interval=1m&startTime='+start+'&limit=1000');
+   const bars=rows(raw).filter(x=>x.t+60000<=now);
+   if(!bars.length)continue;
+   for(const t of trades)applyBars(t,bars,now);
+  }catch(e){
+   console.error('scorecard feed',symbol,String(e.message||e));
+   card.lastFeedError={symbol,at:now,message:String(e.message||e)};
+  }
+ }
+ card.lastCheckedAt=now;
+}
 async function telegram(msg){if(!TOKEN||!CHAT)throw Error('Telegram credentials missing');const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT,text:msg,disable_web_page_preview:true}),signal:AbortSignal.timeout(10000)});const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram rejected message');}
 function fmt(v){return Number(v).toLocaleString('en-US',{useGrouping:false,maximumSignificantDigits:8});}
 function message(s){return ['🚨 '+s.symbol+' · '+s.side,'','Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),'Expected net R at TP2: '+s.netR.toFixed(2),'','15m candle confirmed · H1 trend aligned','Manual trade only · signal may be invalid if price moves'].join('\n');}
@@ -48,13 +73,20 @@ function save(s){fs.mkdirSync(path.dirname(STORE),{recursive:true});const tmp=ST
 let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
- const state=load();state.sent||={};let errors=0,matches=0;const current=[];
+ const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
+ await trackScorecard(state);
  for(let i=0;i<COINS.length;i+=5){
    await Promise.all(COINS.slice(i,i+5).map(async symbol=>{
      try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);const s=signal(symbol,a,b);if(!s)return;
        matches++;current.push(s);if(state.sent[s.key])return;
        // An old signal is never emitted on startup; send only recently closed bars.
-       await telegram(message(s));state.sent[s.key]=Date.now();
+       await telegram(message(s));
+       const sentAt=Date.now();
+       state.sent[s.key]=sentAt;
+       if(!state.scorecard.trades.some(t=>t.key===s.key)){
+         state.scorecard.trades.push(createTrade(s,sentAt));
+       }
+       save(state);
      }catch(e){errors++;console.error('scan',symbol,String(e.message||e));}
    }));
  }
@@ -71,7 +103,7 @@ async function botApi(method,body){
 async function respond(chat,text){
  return botApi('sendMessage',{chat_id:chat,text,reply_markup:{remove_keyboard:true}});
 }
-function commandAnswer(command,state,now=Date.now()){
+function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
  if(command==='/scan')return ['📡 26 major coins · latest confirmed scan',
    'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'not yet'),
@@ -80,11 +112,35 @@ function commandAnswer(command,state,now=Date.now()){
  if(command==='/signals')return candidates.length?
    candidates.slice(0,3).map(message).join('\n\n────────\n\n'):
    'No active confirmed signals. Bot will automatically alert when a setup qualifies.';
- if(command==='/status')return ['📊 Scanner status',
-  'Mode: 24/7 signals only','Symbols: '+COINS.length,
-  'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'pending'),
-  'Last scan errors: '+(state.errors??'unknown'),
-  'Signals found: '+(state.matches??0),'Manual trade only'].join('\n');
+ if(command==='/status'){
+  const all=state.scorecard?.trades||[];
+  const scored=scoreStats(state.scorecard||{trades:[]});
+  const size=6,maxPage=Math.max(1,Math.ceil(all.length/size));
+  const selectedPage=Math.max(1,Math.min(maxPage,Number(page)||1));
+  const results=[...all].sort((a,b)=>b.notifiedAt-a.notifiedAt)
+    .slice((selectedPage-1)*size,selectedPage*size);
+  return ['📊 HTR Pulse V1.0 · Results',
+   'Scanner: 24/7 · '+COINS.length+' coins',
+   'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'pending'),
+   'Scan errors: '+(state.errors??'unknown'),
+   '',
+   'Recorded signals: '+scored.tracked+' · Open: '+scored.open,
+   'Completed: '+scored.completed+' · Wins: '+scored.wins+' · Losses: '+scored.losses,
+   'Win rate: '+(scored.winRate===null?'not enough data':(scored.winRate*100).toFixed(1)+'%'),
+   'Total net: '+scored.totalNetR.toFixed(2)+'R',
+   'Average: '+(scored.averageNetR===null?'n/a':scored.averageNetR.toFixed(2)+'R'),
+   'Max drawdown: '+scored.maxDrawdownR.toFixed(2)+'R',
+   scored.uncertain?'Ambiguous (excluded): '+scored.uncertain:null,
+   '','Trade history ('+selectedPage+'/'+maxPage+'):',
+   ...results.map(t=>t.symbol+' '+t.side+' · '+t.status+
+      (t.netR===null?'':(' · '+(t.netR>0?'+':'')+t.netR.toFixed(2)+'R'))+
+      (t.status==='OPEN'&&t.tp1Hit?' · TP1 touched':'')),
+   maxPage>selectedPage?'Older: /status '+(selectedPage+1):null,
+   '',
+   'Paper signal outcomes only; TP1 is a milestone, not a partial sell.',
+   'Full position tracked to TP2 or SL, net of estimated fees/slippage.'
+  ].filter(x=>x!==null).join('\n');
+ }
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
 }
 // Use Telegram webhook instead of competing getUpdates polling clients.
@@ -110,7 +166,8 @@ function handleWebhook(req,res){
   if(chat!==String(CHAT))return;
   const cmd=String(u.message?.text||'').trim().split(/\s+/)[0].split('@')[0].toLowerCase();
   if(!['/scan','/signals','/status','/start'].includes(cmd))return;
-  commandQueue=commandQueue.catch(()=>{}).then(()=>respond(chat,commandAnswer(cmd,load())))
+  const page=cmd==='/status'?Number(String(u.message?.text||'').trim().split(/\s+/)[1])||1:1;
+  commandQueue=commandQueue.catch(()=>{}).then(()=>respond(chat,commandAnswer(cmd,load(),Date.now(),page)))
     .catch(e=>console.error('command response',e.message));
  });
  return true;
@@ -134,4 +191,4 @@ if(require.main===module){
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
-module.exports={signal,rows,message,commandAnswer};
+module.exports={signal,rows,message,commandAnswer,trackScorecard};
