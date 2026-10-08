@@ -1,0 +1,19 @@
+name: Hunter V2.1 shadow tests
+on:
+  push:
+    branches: [hunter-adaptive-v2-1-shadow]
+  workflow_dispatch:
+jobs:
+  shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --check adaptive_hunter_monitor.js
+      - run: node --check hunter_core_v1/v21_shadow_opportunity.js
+      - run: node test/v21_shadow_opportunity.test.js
+      - run: ADAPTIVE_MAX_LEVERAGE=10 node test/adaptive_hunter_monitor.test.js
