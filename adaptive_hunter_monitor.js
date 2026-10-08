@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { getHistoricalRates } = require('dukascopy-node');
 const { marketContext, scoreSignal, decisionLabel, compactIntelligence } = require('./hunter_core_v1/intelligence');
+const { detect: detectV21Shadow } = require('./hunter_core_v1/v21_shadow_opportunity');
 
 const M15 = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -1239,6 +1240,7 @@ async function cycle(now=Date.now()){
   }
   const dailyR=dailyResolvedR(state,date); const killed=dailyR<=DAILY_STOP_R;
   const candidates=[];
+  const v21Candidates=[]; // Shadow only: never sent to Telegram or made actionable.
   for(const snap of snaps){
     const latest=snap.m15.at(-1); if(!latest) continue;
     const lastClose=latest.openTime+M15;
@@ -1281,6 +1283,20 @@ async function cycle(now=Date.now()){
         marketEntry.watches.push(watch);
       }
       if(!box) continue;
+      // V2.1 evaluates alternative entries in shadow independently of V2 armed lifecycle.
+      // It is deliberately excluded from candidates, sent, trades and Telegram.
+      if(reg.type==='TREND'&&!killed){
+        const shadow=detectV21Shadow({symbol:snap.symbol,candles:snap.m15,box,regime:reg,
+          atr15:reg.a15,vwap:dailyVwap(snap.m15,latest.openTime),now});
+        for(const candidate of shadow){
+          const shadowKey=[candidate.symbol,session.id,candidate.mode,latest.openTime,candidate.side].join('|');
+          if(!state.shadowSeen||typeof state.shadowSeen!=='object')state.shadowSeen={};
+          if(!state.shadowSeen[shadowKey]){
+            state.shadowSeen[shadowKey]=now;
+            v21Candidates.push({...candidate,session:session.id,at:now});
+          }
+        }
+      }
       const armKey=snap.symbol+'|'+session.id+'|'+box.date;
       let arm=state.armed[armKey]||null;
 
@@ -1386,7 +1402,13 @@ async function cycle(now=Date.now()){
   for(const [armKey,arm] of Object.entries(state.armed||{})){
     const exp=num(arm&&arm.expiresOpenTime);
     if(exp===null||Number(now)>=exp+M15){
-      if(arm&&exp!==null) queueAlert(state,'ARM_END|'+armKey+'|'+(arm.breakoutOpenTime??arm.sweepOpenTime??0),armEndMessage(arm,'EXPIRED'),now);
+      // Collapse same symbol/direction expiry alerts within one M15 close.
+      // Setup dedup remains in alerted/pendingAlerts even after re-scanning.
+      if(arm&&exp!==null){
+        const timeBucket=Math.floor((exp+M15)/M15);
+        const dedupKey=['ARM_EXPIRY',arm.symbol,arm.side,timeBucket].join('|');
+        queueAlert(state,dedupKey,armEndMessage(arm,'EXPIRED'),now);
+      }
       delete state.armed[armKey];
     }
   }
@@ -1418,9 +1440,14 @@ async function cycle(now=Date.now()){
     }catch(e){ console.error(JSON.stringify({telegram:'ERROR',error:e.message,key:s.key})); }
   }
   state.lastScan={at:now,date,errors,dailyR,killed,candidates:candidates.map(x=>({symbol:x.symbol,provider:x.provider||null,mode:x.mode,side:x.side,decision:x.decision,isReentry:Boolean(x.isReentry),regimePhase:x.regimePhase||null,adx:Number.isFinite(Number(x.adx))?Number(x.adx):null,management:managementPlan(x),qualityScore:x.intelligence?.score??null,qualityLabel:x.intelligence?.label??null,intelligence:x.intelligence,entry:x.entry,entryZone:entryZone(x),atr15:x.atr15,stop:x.stop,tp1:x.tp1,tp2:x.tp2,execution:x.execution||({...executionPlan(x,equityUsdt,snowballRisk(x,equityUsdt,highWaterEquity).riskPct),riskLabel:snowballRisk(x,equityUsdt,highWaterEquity).label}),signalAtMs:x.signalAtMs,entryExpiresAtMs:Number(x.signalAtMs)+ENTRY_VALID_MS,actionState:'ACTIONABLE'})),armed:activeArmedRows(Object.values(state.armed).map(x=>{const p=armedPreview(x),me=state.market&&state.market[x.symbol],status=String(x.status||'');return {symbol:x.symbol,session:x.sessionLabel,side:x.side,status,boxHigh:x.boxHigh,boxLow:x.boxLow,retestLevel:status==='WAITING_RETEST'?p.level:null,reclaimLevel:status==='WAITING_RECLAIM'?(x.side==='LONG'?x.boxLow:x.boxHigh):null,sweepOpenTime:x.sweepOpenTime??null,currentPrice:me&&num(me.lastClose)!==null?Number(me.lastClose):x.currentPrice,atr15:x.atr15,retestLow:status==='WAITING_RETEST'?p.low:null,retestHigh:status==='WAITING_RETEST'?p.high:null,previewStop:status==='WAITING_RETEST'?p.stop:null,previewTp2:status==='WAITING_RETEST'?p.tp2:null,expiresOpenTime:x.expiresOpenTime};}),state.market,now)};
+  state.lastScan.v21Candidates=v21Candidates;
+  // Prevent indefinite growth of the shadow dedup ledger.
+  for(const [k,at] of Object.entries(state.shadowSeen||{})){
+    if(now-Number(at)>7*DAY)delete state.shadowSeen[k];
+  }
   state.stats=drawdownStats(Object.values(state.trades));
   saveState(state);
-  const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,armed:state.lastScan.armed,stats:state.stats,errors};
+  const result={engine:VERSION,at:new Date(now).toISOString(),dailyR,killed,market:state.market,candidates:state.lastScan.candidates,v21Candidates,armed:state.lastScan.armed,stats:state.stats,errors};
   console.log(JSON.stringify(result));
   return result;
 }
