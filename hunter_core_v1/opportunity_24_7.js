@@ -68,8 +68,30 @@ async function trackScorecard(state,now=Date.now()){
 async function telegram(msg){if(!TOKEN||!CHAT)throw Error('Telegram credentials missing');const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT,text:msg,disable_web_page_preview:true}),signal:AbortSignal.timeout(10000)});const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram rejected message');}
 function fmt(v){return Number(v).toLocaleString('en-US',{useGrouping:false,maximumSignificantDigits:8});}
 function message(s){return ['🚨 '+s.symbol+' · '+s.side,'','Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),'Expected net R at TP2: '+s.netR.toFixed(2),'','15m candle confirmed · H1 trend aligned','Manual trade only · signal may be invalid if price moves'].join('\n');}
-function load(){try{return JSON.parse(fs.readFileSync(STORE,'utf8'))}catch{return {sent:{}}}}
-function save(s){fs.mkdirSync(path.dirname(STORE),{recursive:true});const tmp=STORE+'.tmp';fs.writeFileSync(tmp,JSON.stringify(s));fs.renameSync(tmp,STORE);}
+function load(){
+ if(!fs.existsSync(STORE)){
+  if(fs.existsSync(STORE+'.bak'))return JSON.parse(fs.readFileSync(STORE+'.bak','utf8'));
+  return {sent:{}};
+ }
+ try{return JSON.parse(fs.readFileSync(STORE,'utf8'));}
+ catch(e){
+  if(fs.existsSync(STORE+'.bak')){
+   console.error('Primary state unreadable: loading last backup; no silent score reset');
+   return JSON.parse(fs.readFileSync(STORE+'.bak','utf8'));
+  }
+  throw new Error('State corrupted; refusing to reset historical scores: '+e.message);
+ }
+}
+function save(s){
+ fs.mkdirSync(path.dirname(STORE),{recursive:true});
+ const tmp=STORE+'.tmp';
+ fs.writeFileSync(tmp,JSON.stringify(s));
+ if(fs.existsSync(STORE)){
+  try{JSON.parse(fs.readFileSync(STORE,'utf8'));fs.copyFileSync(STORE,STORE+'.bak');}
+  catch(e){console.error('Backup skipped, unreadable prior state: '+e.message);}
+ }
+ fs.renameSync(tmp,STORE);
+}
 let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
