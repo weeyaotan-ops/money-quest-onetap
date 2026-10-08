@@ -98,9 +98,11 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
  await trackScorecard(state);
  const score=scoreStats(state.scorecard);
- console.log(JSON.stringify({scorecard:'PULSE_SPLIT_BE_V2',tracked:score.tracked,completed:score.completed,
-  open:score.open,uncertain:score.uncertain,totalNetR:score.totalNetR,
-  recent:state.scorecard.trades.slice(-3).map(t=>({symbol:t.symbol,side:t.side,status:t.status,tp1:t.tp1Hit,partialNetR:t.partialNetR,netR:t.netR}))}));
+ console.log(JSON.stringify({scorecard:'PULSE_LEVEL_TOUCH_V3',tracked:score.tracked,
+  slHits:score.slHits,tp1Hits:score.tp1Hits,tp2Hits:score.tp2Hits,open:score.open,
+  ambiguous:score.ambiguous,
+  recent:state.scorecard.trades.slice(-3).map(t=>({symbol:t.symbol,side:t.side,
+   status:t.status,sl:t.slHit,tp1:t.tp1Hit,tp2:t.tp2Hit}))}));
  for(let i=0;i<COINS.length;i+=5){
    await Promise.all(COINS.slice(i,i+5).map(async symbol=>{
      try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);const s=signal(symbol,a,b);if(!s)return;
@@ -145,28 +147,30 @@ function commandAnswer(command,state,now=Date.now(),page=1){
   const selectedPage=Math.max(1,Math.min(maxPage,Number(page)||1));
   const results=[...all].sort((a,b)=>b.notifiedAt-a.notifiedAt)
     .slice((selectedPage-1)*size,selectedPage*size);
-  return ['📊 HTR Pulse V1.0 · Results',
+  const hit=x=>x?'✓':'—';
+  return [
+   '📊 HTR Pulse V1.0 · Hit Count',
    'Scanner: 24/7 · '+COINS.length+' coins',
    'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'pending'),
    'Scan errors: '+(state.errors??'unknown'),
    '',
-   'Recorded signals: '+scored.tracked+' · Open: '+scored.open,
-   'Completed: '+scored.completed+' · Wins: '+scored.wins+' · Losses: '+scored.losses,
-   'Win rate: '+(scored.winRate===null?'not enough data':(scored.winRate*100).toFixed(1)+'%'),
-   'Total net (closed): '+scored.totalNetR.toFixed(2)+'R',
-   'Open TP1 booked (not included): '+scored.tp1Secured.toFixed(2)+'R',
-   'Average: '+(scored.averageNetR===null?'n/a':scored.averageNetR.toFixed(2)+'R'),
-   'Max drawdown: '+scored.maxDrawdownR.toFixed(2)+'R',
-   scored.uncertain?'Ambiguous (excluded): '+scored.uncertain:null,
-   '','Trade history ('+selectedPage+'/'+maxPage+'):',
-   ...results.map(t=>t.symbol+' '+t.side+' · '+t.status+
-      (t.netR===null?'':(' · '+(t.netR>0?'+':'')+t.netR.toFixed(2)+'R'))+
-      (t.status==='OPEN'&&t.tp1Hit?' · TP1 50% banked '+t.partialNetR.toFixed(2)+'R · runner BE':'')+
-      (t.status==='AMBIGUOUS'?' · intrabar order unknown':'')),
+   'Total signals: '+scored.tracked,
+   '🛑 SL hit: '+scored.slHits,
+   '🎯 TP1 hit: '+scored.tp1Hits,
+   '🎯 TP2 hit: '+scored.tp2Hits,
+   'Still tracking: '+scored.open,
+   scored.ambiguous?'Both sides touched in same minute (order unknown): '+scored.ambiguous:null,
+   scored.dataGaps?'Incomplete price history: '+scored.dataGaps:null,
+   '',
+   'History ('+selectedPage+'/'+maxPage+'):',
+   ...results.map(t=>t.symbol+' '+t.side+
+       ' | SL '+hit(t.slHit)+' | TP1 '+hit(t.tp1Hit)+' | TP2 '+hit(t.tp2Hit)+
+       (t.status==='OPEN'?' | Tracking':'')+
+       (t.status==='AMBIGUOUS'?' | Sequence unknown':'')),
    maxPage>selectedPage?'Older: /status '+(selectedPage+1):null,
    '',
-   'Paper only: TP1 closes 50%, remaining 50% exits at entry BE or TP2.',
-   'Fees/slippage estimated. Same-minute uncertain outcomes excluded.'
+   'Independent price-level hits (TP2 also counts TP1).',
+   'No simulated fills, partial exits, breakeven moves or PnL.'
   ].filter(x=>x!==null).join('\n');
  }
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
