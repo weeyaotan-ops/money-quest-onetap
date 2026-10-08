@@ -46,24 +46,78 @@ function message(s){return ['🚨 '+s.symbol+' · '+s.side,'','Entry: '+fmt(s.en
 function load(){try{return JSON.parse(fs.readFileSync(STORE,'utf8'))}catch{return {sent:{}}}}
 function save(s){fs.mkdirSync(path.dirname(STORE),{recursive:true});const tmp=STORE+'.tmp';fs.writeFileSync(tmp,JSON.stringify(s));fs.renameSync(tmp,STORE);}
 let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
+let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
- const state=load();state.sent||={};let errors=0,matches=0;
+ const state=load();state.sent||={};let errors=0,matches=0;const current=[];
  for(let i=0;i<COINS.length;i+=5){
    await Promise.all(COINS.slice(i,i+5).map(async symbol=>{
      try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);const s=signal(symbol,a,b);if(!s)return;
-       matches++;if(state.sent[s.key])return;
+       matches++;current.push(s);if(state.sent[s.key])return;
        // An old signal is never emitted on startup; send only recently closed bars.
        await telegram(message(s));state.sent[s.key]=Date.now();
      }catch(e){errors++;console.error('scan',symbol,String(e.message||e));}
    }));
  }
  const cutoff=Date.now()-8*86400000;for(const [k,t] of Object.entries(state.sent))if(t<cutoff)delete state.sent[k];
- save(state);lastScan=Date.now();lastErrors=errors;lastMatches=matches;
+ latestCandidates=current.sort((a,b)=>b.netR-a.netR);state.latestCandidates=latestCandidates;state.lastScan=Date.now();state.errors=errors;state.matches=matches;
+ save(state);lastScan=state.lastScan;lastErrors=errors;lastMatches=matches;
  console.log(JSON.stringify({scanner:'OPPORTUNITY_24_7',symbols:COINS.length,at:new Date(lastScan).toISOString(),matches,errors}));
  }finally{inProgress=false;}}
+// Only three public commands. Telegram's old message keyboards cannot be deleted retroactively.
+async function botApi(method,body){
+ const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
+ const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram '+method+' failed: '+r.status);return j.result;
+}
+async function respond(chat,text){
+ return botApi('sendMessage',{chat_id:chat,text,reply_markup:{remove_keyboard:true}});
+}
+function commandAnswer(command,state,now=Date.now()){
+ const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
+ if(command==='/scan')return ['📡 26 major coins · latest confirmed scan',
+   'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'not yet'),
+   ...(candidates.length?candidates.slice(0,3).map((x,i)=>(i+1)+'. '+x.symbol+' '+x.side+' · '+x.netR.toFixed(2)+' net R'):['No qualified setups now.']),
+   'Only closed M15 candles qualify.'].join('\n');
+ if(command==='/signals')return candidates.length?
+   candidates.slice(0,3).map(message).join('\n\n────────\n\n'):
+   'No active confirmed signals. Bot will automatically alert when a setup qualifies.';
+ if(command==='/status')return ['📊 Scanner status',
+  'Mode: 24/7 signals only','Symbols: '+COINS.length,
+  'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'pending'),
+  'Last scan errors: '+(state.errors??'unknown'),
+  'Signals found: '+(state.matches??0),'Manual trade only'].join('\n');
+ return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
+}
+async function commandsLoop(){
+ if(!TOKEN||!CHAT){console.error('Telegram commands disabled: missing credentials');return;}
+ try{
+  await botApi('setMyCommands',{commands:[
+    {command:'scan',description:'Scan 26 major coins'},
+    {command:'signals',description:'Confirmed LONG / SHORT signals'},
+    {command:'status',description:'Scanner status'}]});
+  await respond(CHAT,'HTR menu updated: /scan · /signals · /status\nOld WATCH / EXPIRED / management commands retired.');
+ }catch(e){console.error('command setup',e.message);}
+ for(;;){
+  try{
+   const state=load(),offset=Number(state.telegramOffset||0);
+   const updates=await botApi('getUpdates',{offset,timeout:15,allowed_updates:['message']});
+   for(const u of updates){
+    const chat=String(u.message?.chat?.id||'');
+    const cmd=String(u.message?.text||'').trim().split(/\s+/)[0].split('@')[0].toLowerCase();
+    // Always advance the offset; only answer the authorized chat.
+    state.telegramOffset=Math.max(Number(state.telegramOffset||0),u.update_id+1);
+    if(chat!==String(CHAT)||!['/scan','/signals','/status','/start'].includes(cmd))continue;
+    await respond(chat,commandAnswer(cmd,load()));
+   }
+   // Preserve updates to signal history written by the parallel scan.
+   const fresh=load();fresh.telegramOffset=Math.max(Number(fresh.telegramOffset||0),Number(state.telegramOffset||0));save(fresh);
+  }catch(e){console.error('commandsLoop',e.message);await wait(4000);}
+ }
+}
+
 if(require.main===module){
  http.createServer((req,res)=>{const ok=lastScan&&Date.now()-lastScan<3600000;res.writeHead(ok?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:!!ok,scanner:'OPPORTUNITY_24_7',lastScan,errors:lastErrors,matches:lastMatches}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
  const loop=async()=>{for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
  loop();
+ commandsLoop();
 }
-module.exports={signal,rows,message};
+module.exports={signal,rows,message,commandAnswer};
