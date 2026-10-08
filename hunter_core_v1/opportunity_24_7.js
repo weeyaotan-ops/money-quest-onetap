@@ -2,6 +2,7 @@
 // 24/7 major-crypto signal-only scanner. NO account access or order execution.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
+const {initialize:initializeHitAlerts,collect:collectHitAlerts,deliver:deliverHitAlerts}=require('./pulse_hit_alerts');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -96,7 +97,13 @@ let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
+ // Baseline pre-existing milestones before scanning to avoid retroactive spam.
+ if(initializeHitAlerts(state)){save(state);console.log('HIT_ALERTS_BASELINE_READY');}
  await trackScorecard(state);
+ const queued=collectHitAlerts(state);
+ if(queued.length)save(state); // durable outbox before Telegram network request
+ const delivered=await deliverHitAlerts(state,telegram,save);
+ if(queued.length||delivered)console.log(JSON.stringify({hitAlerts:'TRACKED_LEVELS',queued:queued.length,delivered,pending:Object.keys(state.hitAlerts.pending).length}));
  const score=scoreStats(state.scorecard);
  console.log(JSON.stringify({scorecard:'PULSE_LEVEL_TOUCH_V3',tracked:score.tracked,
   slHits:score.slHits,tp1Hits:score.tp1Hits,tp2Hits:score.tp2Hits,open:score.open,
