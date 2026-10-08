@@ -108,7 +108,7 @@ function handleWebhook(req,res){
   res.writeHead(200);res.end('OK');
   const chat=String(u.message?.chat?.id||'');
   if(chat!==String(CHAT))return;
-  const cmd=String(u.message?.text||'').trim().split(/\\s+/)[0].split('@')[0].toLowerCase();
+  const cmd=String(u.message?.text||'').trim().split(/\s+/)[0].split('@')[0].toLowerCase();
   if(!['/scan','/signals','/status','/start'].includes(cmd))return;
   commandQueue=commandQueue.catch(()=>{}).then(()=>respond(chat,commandAnswer(cmd,load())))
     .catch(e=>console.error('command response',e.message));
