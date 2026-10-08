@@ -87,37 +87,51 @@ function commandAnswer(command,state,now=Date.now()){
   'Signals found: '+(state.matches??0),'Manual trade only'].join('\n');
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
 }
-async function commandsLoop(){
- if(!TOKEN||!CHAT){console.error('Telegram commands disabled: missing credentials');return;}
- try{
-  await botApi('setMyCommands',{commands:[
-    {command:'scan',description:'Scan 26 major coins'},
-    {command:'signals',description:'Confirmed LONG / SHORT signals'},
-    {command:'status',description:'Scanner status'}]});
-  await respond(CHAT,'HTR menu updated: /scan · /signals · /status\nOld WATCH / EXPIRED / management commands retired.');
- }catch(e){console.error('command setup',e.message);}
- for(;;){
-  try{
-   const state=load(),offset=Number(state.telegramOffset||0);
-   const updates=await botApi('getUpdates',{offset,timeout:15,allowed_updates:['message']});
-   for(const u of updates){
-    const chat=String(u.message?.chat?.id||'');
-    const cmd=String(u.message?.text||'').trim().split(/\s+/)[0].split('@')[0].toLowerCase();
-    // Always advance the offset; only answer the authorized chat.
-    state.telegramOffset=Math.max(Number(state.telegramOffset||0),u.update_id+1);
-    if(chat!==String(CHAT)||!['/scan','/signals','/status','/start'].includes(cmd))continue;
-    await respond(chat,commandAnswer(cmd,load()));
-   }
-   // Preserve updates to signal history written by the parallel scan.
-   const fresh=load();fresh.telegramOffset=Math.max(Number(fresh.telegramOffset||0),Number(state.telegramOffset||0));save(fresh);
-  }catch(e){console.error('commandsLoop',e.message);await wait(4000);}
+// Use Telegram webhook instead of competing getUpdates polling clients.
+// Telegram routes command updates to this HTTPS endpoint even if an older bot
+// instance is still attempting getUpdates (old poller will receive 409).
+const crypto=require('node:crypto');
+const HOOK_DOMAIN=process.env.OPPORTUNITY_WEBHOOK_DOMAIN||'crypto-signal-publisher-production.up.railway.app';
+const HOOK_SECRET=TOKEN?crypto.createHash('sha256').update(TOKEN+'|HTR-V3-WEBHOOK').digest('hex'):'';
+const HOOK_PATH='/telegram/'+HOOK_SECRET;
+let commandQueue=Promise.resolve();
+function handleWebhook(req,res){
+ if(req.method!=='POST'||req.url!==HOOK_PATH){return false;}
+ if(req.headers['content-type']?.split(';')[0]!=='application/json'){
+  res.writeHead(415);res.end();return true;
  }
+ let body='',large=false;
+ req.on('data',chunk=>{body+=chunk;if(body.length>65536){large=true;req.destroy();}});
+ req.on('end',()=>{
+  if(large){res.writeHead(413);res.end();return;}
+  let u;try{u=JSON.parse(body)}catch{res.writeHead(400);res.end();return;}
+  res.writeHead(200);res.end('OK');
+  const chat=String(u.message?.chat?.id||'');
+  if(chat!==String(CHAT))return;
+  const cmd=String(u.message?.text||'').trim().split(/\\s+/)[0].split('@')[0].toLowerCase();
+  if(!['/scan','/signals','/status','/start'].includes(cmd))return;
+  commandQueue=commandQueue.catch(()=>{}).then(()=>respond(chat,commandAnswer(cmd,load())))
+    .catch(e=>console.error('command response',e.message));
+ });
+ return true;
+}
+async function setupWebhook(){
+ if(!TOKEN||!CHAT){console.error('Telegram command registration disabled: missing credentials');return;}
+ await botApi('setMyCommands',{commands:[
+  {command:'scan',description:'Scan 26 major coins'},
+  {command:'signals',description:'Confirmed LONG / SHORT signals'},
+  {command:'status',description:'Scanner status'}]});
+ await botApi('setWebhook',{url:'https://'+HOOK_DOMAIN+HOOK_PATH,
+   allowed_updates:['message'],drop_pending_updates:false,max_connections:5});
+ const info=await botApi('getWebhookInfo',{});
+ console.log(JSON.stringify({telegramWebhook:info.url?'SET':'NOT_SET',
+   pending:info.pending_update_count,lastError:info.last_error_message||null}));
 }
 
 if(require.main===module){
- http.createServer((req,res)=>{const ok=lastScan&&Date.now()-lastScan<3600000;res.writeHead(ok?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:!!ok,scanner:'OPPORTUNITY_24_7',lastScan,errors:lastErrors,matches:lastMatches}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
+ http.createServer((req,res)=>{if(handleWebhook(req,res))return;const ok=lastScan&&Date.now()-lastScan<3600000;res.writeHead(ok?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:!!ok,scanner:'OPPORTUNITY_24_7',lastScan,errors:lastErrors,matches:lastMatches}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
  const loop=async()=>{for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
  loop();
- commandsLoop();
+ setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
 module.exports={signal,rows,message,commandAnswer};
