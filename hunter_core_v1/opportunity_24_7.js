@@ -97,6 +97,10 @@ let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
  await trackScorecard(state);
+ const score=scoreStats(state.scorecard);
+ console.log(JSON.stringify({scorecard:'PULSE_SPLIT_BE_V2',tracked:score.tracked,completed:score.completed,
+  open:score.open,uncertain:score.uncertain,totalNetR:score.totalNetR,
+  recent:state.scorecard.trades.slice(-3).map(t=>({symbol:t.symbol,side:t.side,status:t.status,tp1:t.tp1Hit,partialNetR:t.partialNetR,netR:t.netR}))}));
  for(let i=0;i<COINS.length;i+=5){
    await Promise.all(COINS.slice(i,i+5).map(async symbol=>{
      try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);const s=signal(symbol,a,b);if(!s)return;
@@ -149,18 +153,20 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    'Recorded signals: '+scored.tracked+' · Open: '+scored.open,
    'Completed: '+scored.completed+' · Wins: '+scored.wins+' · Losses: '+scored.losses,
    'Win rate: '+(scored.winRate===null?'not enough data':(scored.winRate*100).toFixed(1)+'%'),
-   'Total net: '+scored.totalNetR.toFixed(2)+'R',
+   'Total net (closed): '+scored.totalNetR.toFixed(2)+'R',
+   'Open TP1 booked (not included): '+scored.tp1Secured.toFixed(2)+'R',
    'Average: '+(scored.averageNetR===null?'n/a':scored.averageNetR.toFixed(2)+'R'),
    'Max drawdown: '+scored.maxDrawdownR.toFixed(2)+'R',
    scored.uncertain?'Ambiguous (excluded): '+scored.uncertain:null,
    '','Trade history ('+selectedPage+'/'+maxPage+'):',
    ...results.map(t=>t.symbol+' '+t.side+' · '+t.status+
       (t.netR===null?'':(' · '+(t.netR>0?'+':'')+t.netR.toFixed(2)+'R'))+
-      (t.status==='OPEN'&&t.tp1Hit?' · TP1 touched':'')),
+      (t.status==='OPEN'&&t.tp1Hit?' · TP1 50% banked '+t.partialNetR.toFixed(2)+'R · runner BE':'')+
+      (t.status==='AMBIGUOUS'?' · intrabar order unknown':'')),
    maxPage>selectedPage?'Older: /status '+(selectedPage+1):null,
    '',
-   'Paper signal outcomes only; TP1 is a milestone, not a partial sell.',
-   'Full position tracked to TP2 or SL, net of estimated fees/slippage.'
+   'Paper only: TP1 closes 50%, remaining 50% exits at entry BE or TP2.',
+   'Fees/slippage estimated. Same-minute uncertain outcomes excluded.'
   ].filter(x=>x!==null).join('\n');
  }
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
