@@ -165,6 +165,10 @@ const sampleTicket=oneTap.newTicket({
  symbol:'OGNUSDT',side:'LONG',entry:0.05,stop:0.049,
  tp1:0.051,tp2:0.052,at:tapNow,key:'OGNUSDT|LONG|'+tapNow},tapNow);
 oneTap.validTicket(sampleTicket,tapNow+1000);
+assert.equal(oneTap.TTL_MS,180000);
+assert.equal(oneTap.MAX_CANDLE_AGE_MS,300000);
+oneTap.validTicket(sampleTicket,tapNow+62000);
+assert.throws(()=>oneTap.validTicket(sampleTicket,tapNow+181000),/expired/);
 oneTap.storeTicket(sampleTicket);
 assert.throws(()=>oneTap.storeTicket(oneTap.newTicket({
  symbol:'OGNUSDT',side:'LONG',entry:0.05,stop:0.049,
