@@ -156,6 +156,38 @@ const tapSym={filters:[
  {filterType:'PRICE_FILTER',tickSize:'0.000001'}]};
 assert.equal(oneTap.MARGIN,5);
 assert.equal(oneTap.LEVERAGE,40);
+assert.equal(oneTap.LIQ_BUFFER_RATE,0.005);
+const brackets=oneTap.checkedBrackets([{symbol:'OGNUSDT',brackets:[
+ {notionalFloor:0,notionalCap:100000,maintMarginRatio:'0.005',initialLeverage:40}
+]}],'OGNUSDT');
+assert.throws(()=>oneTap.checkedBrackets([], 'OGNUSDT'),/brackets unavailable/);
+const testInfo={...tapSym,filters:[
+ {filterType:'MARKET_LOT_SIZE',minQty:'1',stepSize:'1',maxQty:'4000000'},
+ {filterType:'LOT_SIZE',minQty:'1',stepSize:'1',maxQty:'40000000'},
+ {filterType:'MIN_NOTIONAL',notional:'5'},
+ {filterType:'PRICE_FILTER',tickSize:'0.000001'}
+]};
+const tightLong={symbol:'OGNUSDT',side:'LONG',entry:1,stop:.992,tp1:1.008,tp2:1.016};
+const wideLong={...tightLong,stop:.97};
+const shortWide={...tightLong,side:'SHORT',stop:1.03,tp1:.97,tp2:.94};
+const high=oneTap.chooseSafeLeverage(tightLong,1,testInfo,brackets);
+assert.equal(high.leverage,40,'tight stop can still use 40x');
+assert(high.notional<=200&&high.headroom>0);
+const lower=oneTap.chooseSafeLeverage(wideLong,1,testInfo,brackets);
+assert(lower.leverage<40&&lower.leverage>1,'wide stop must reduce leverage');
+assert(Number(lower.quantity)*1/lower.leverage<=5);
+assert(oneTap.stopMarginCheck(wideLong,1.004,Number(lower.quantity),
+ lower.leverage,brackets).safe);
+assert(!oneTap.stopMarginCheck(wideLong,1.004,199,40,brackets).safe);
+const lowerShort=oneTap.chooseSafeLeverage(shortWide,1,testInfo,brackets);
+assert(lowerShort.leverage<40,'SHORT wide stop also reduces leverage');
+assert(oneTap.stopMarginCheck(shortWide,.996,Number(lowerShort.quantity),
+ lowerShort.leverage,brackets).safe);
+assert.throws(()=>oneTap.chooseSafeLeverage({...tightLong,stop:.1},1,
+ testInfo,brackets),/No leverage 1-40x/,'reject when no leverage is safe');
+assert.throws(()=>oneTap.chooseSafeLeverage(wideLong,1,testInfo,[]),
+ /No leverage 1-40x/,'fail closed if maintenance brackets missing');
+
 assert.equal(oneTap.clampQty(0.05,tapSym).quantity,'4000');
 assert.equal(oneTap.clampQty(0.05,tapSym).notional,200);
 assert.equal(oneTap.roundTrigger(0.0500003,tapSym),'0.05');
