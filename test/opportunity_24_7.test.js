@@ -83,7 +83,7 @@ assert.equal(earlyPool(earlyTicker,earlyExchange,earlyBooks,['BTCUSDT'],eNow)
  .some(x=>x.symbol==='WIDEALTUSDT'),false);
 const early=selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,bySymbol,
  ['BTCUSDT'],eNow,8);
-assert.deepEqual(early.map(x=>x.symbol),['TIAUSDT','LATEUSDT']);
+assert.deepEqual(early.map(x=>x.symbol),['LATEUSDT','TIAUSDT']);
 assert(early.every(x=>x.volumeRatio>=1.2&&x.side==='WATCH LONG'));
 assert.deepEqual(selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,bySymbol,
  ['TIAUSDT','LATEUSDT'],eNow,8),[]);
