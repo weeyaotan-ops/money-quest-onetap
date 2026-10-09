@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins}=require('../hunter_core_v1/opportunity_24_7');
+const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers}=require('../hunter_core_v1/opportunity_24_7');
 const now=Date.now();
 assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
 assert.equal(signal('BTCUSDT',[],[],now),null);
@@ -53,5 +53,56 @@ assert.deepEqual(selectAltcoins(tickers,exchange,books,['BTCUSDT','OGNUSDT'],at,
 const dynamicState={...scoreState,universe:{symbols:['BTCUSDT','OGNUSDT'],altcoins:['OGNUSDT']}};
 assert.match(commandAnswer('/status',dynamicState),/Altcoin radar: 1 active movers/);
 assert.match(commandAnswer('/scan',dynamicState),/Watchlist \(not entry signals\): OGNUSDT/);
+
+
+// Dual radar: Early Movers require mild 24h change PLUS fresh H1 volume near a
+// 12-hour breakout. Hot Movers already filter high-velocity price changes.
+const earlySymbols=['TIAUSDT','QUIETUSDT','LATEUSDT','NEWALTUSDT','WIDEALTUSDT'];
+const eNow=Date.parse('2026-10-09T12:00:00Z');
+const earlyExchange={symbols:earlySymbols.map(symbol=>({
+ symbol,quoteAsset:'USDT',contractType:'PERPETUAL',status:'TRADING',
+ onboardDate:symbol==='NEWALTUSDT'?eNow-3600000:eNow-100*86400000
+}))};
+const earlyTicker=earlySymbols.map(symbol=>({symbol,
+ quoteVolume:'64000000',priceChangePercent:'4.2',count:400000}));
+const earlyBooks=earlySymbols.map(symbol=>({symbol,bidPrice:'1',
+ askPrice:symbol==='WIDEALTUSDT'?'1.01':'1.001'}));
+const barsGood=Array.from({length:34},(_,i)=>[
+ eNow-(35-i)*3600000,100,101,99,100,100
+]);
+// Last COMPLETED H1 candle surged in volume close to resistance.
+barsGood[barsGood.length-1]=[eNow-2*3600000,100,101.3,99.8,101,280];
+const barsQuiet=barsGood.map((x,i)=>i===barsGood.length-1?[...x.slice(0,5),80]:x);
+const bySymbol={TIAUSDT:barsGood,QUIETUSDT:barsQuiet,LATEUSDT:barsGood,
+ NEWALTUSDT:barsGood,WIDEALTUSDT:barsGood};
+assert.equal(analyzeEarlyBars(barsGood,eNow).side,'WATCH LONG');
+assert.equal(analyzeEarlyBars(barsQuiet,eNow),null);
+assert.equal(earlyPool(earlyTicker,earlyExchange,earlyBooks,['BTCUSDT'],eNow)
+ .some(x=>x.symbol==='NEWALTUSDT'),false);
+assert.equal(earlyPool(earlyTicker,earlyExchange,earlyBooks,['BTCUSDT'],eNow)
+ .some(x=>x.symbol==='WIDEALTUSDT'),false);
+const early=selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,bySymbol,
+ ['BTCUSDT'],eNow,8);
+assert.deepEqual(early.map(x=>x.symbol),['TIAUSDT','LATEUSDT']);
+assert(early.every(x=>x.volumeRatio>=1.2&&x.side==='WATCH LONG'));
+assert.deepEqual(selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,bySymbol,
+ ['TIAUSDT','LATEUSDT'],eNow,8),[]);
+assert.deepEqual(selectEarlyMovers(
+ [{symbol:'TIAUSDT',quoteVolume:'64000000',priceChangePercent:'34',count:400000}],
+ earlyExchange,earlyBooks,bySymbol,[],eNow,8),[]);
+const earlyShort=barsGood.map(x=>[...x]);
+earlyShort[earlyShort.length-1]=[eNow-2*3600000,100,100.3,98.7,99,270];
+assert.equal(analyzeEarlyBars(earlyShort,eNow).side,'WATCH SHORT');
+const dualState={...scoreState,universe:{
+ symbols:['BTCUSDT','OGNUSDT','TIAUSDT'],
+ hot:['OGNUSDT'],early:['TIAUSDT'],altcoins:['OGNUSDT','TIAUSDT'],
+ hotDetails:[{symbol:'OGNUSDT',changePct:35}],
+ earlyDetails:[{symbol:'TIAUSDT',changePct:4.2,side:'WATCH LONG',volumeRatio:2.8}]
+}};
+assert.match(commandAnswer('/scan',dualState),/Early Movers · WATCH ONLY \(1\)/);
+assert.match(commandAnswer('/scan',dualState),/TIAUSDT WATCH LONG.*H1 volume ×2.8/);
+assert.match(commandAnswer('/scan',dualState),/Hot Movers · WATCH ONLY \(1\): OGNUSDT/);
+assert.match(commandAnswer('/status',dualState),/Early watch: 1 \| Hot watch: 1/);
+assert.match(commandAnswer('/signals',dualState),/No active confirmed signals/);
 
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
