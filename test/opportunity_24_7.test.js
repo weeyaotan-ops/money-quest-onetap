@@ -1,5 +1,9 @@
 'use strict';
 const assert=require('node:assert/strict');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const tapTestDir=fs.mkdtempSync(path.join(os.tmpdir(),'htr-tap-test-'));
+process.env.HTR_PULSE_TICKET_STORE=path.join(tapTestDir,'tickets.json');
+const oneTap=require('../hunter_core_v1/pulse_one_tap');
 const {signal,explainSignal,recordDiagnostic,diagnosis,rows,message,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers}=require('../hunter_core_v1/opportunity_24_7');
 const now=Date.now();
 assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
@@ -141,5 +145,37 @@ assert.equal(explainSignal('TESTUSDT',noBreakout,h1Good,dNow+1000).reason,'NO_M1
 const noVol=m15Good.map(x=>({...x}));
 noVol[noVol.length-1]={...noVol.at(-1),v:10};
 assert.equal(explainSignal('TESTUSDT',noVol,h1Good,dNow+1000).reason,'LOW_VOLUME');
+
+
+// One-Tap approval: 5 USDT max initial margin / 40x, preserving the signal.
+// This test never issues external requests or a live order.
+const tapSym={filters:[
+ {filterType:'MARKET_LOT_SIZE',minQty:'1',stepSize:'1',maxQty:'4000000'},
+ {filterType:'LOT_SIZE',minQty:'1',stepSize:'1',maxQty:'40000000'},
+ {filterType:'MIN_NOTIONAL',notional:'5'},
+ {filterType:'PRICE_FILTER',tickSize:'0.000001'}]};
+assert.equal(oneTap.MARGIN,5);
+assert.equal(oneTap.LEVERAGE,40);
+assert.equal(oneTap.clampQty(0.05,tapSym).quantity,'4000');
+assert.equal(oneTap.clampQty(0.05,tapSym).notional,200);
+assert.equal(oneTap.roundTrigger(0.0500003,tapSym),'0.05');
+assert.throws(()=>oneTap.clampQty(250,tapSym),/quantity\/notional rules/);
+const tapNow=Date.now();
+const sampleTicket=oneTap.newTicket({
+ symbol:'OGNUSDT',side:'LONG',entry:0.05,stop:0.049,
+ tp1:0.051,tp2:0.052,at:tapNow,key:'OGNUSDT|LONG|'+tapNow},tapNow);
+oneTap.validTicket(sampleTicket,tapNow+1000);
+oneTap.storeTicket(sampleTicket);
+assert.throws(()=>oneTap.storeTicket(oneTap.newTicket({
+ symbol:'OGNUSDT',side:'LONG',entry:0.05,stop:0.049,
+ tp1:0.051,tp2:0.052,at:tapNow,key:sampleTicket.key},tapNow)),/already exists/);
+const claimed=oneTap.claimTicket(sampleTicket.id);
+assert.equal(claimed.status,'PROCESSING');
+assert.throws(()=>oneTap.claimTicket(sampleTicket.id),/already used/);
+oneTap.finishTicket(sampleTicket.id,'FAILED_NO_RETRY','dry-run test');
+assert.throws(()=>oneTap.claimTicket(sampleTicket.id),/already used/);
+assert.throws(()=>oneTap.validTicket({...sampleTicket,expiresAt:tapNow-1},tapNow),/expired/);
+assert.throws(()=>oneTap.validTicket({...sampleTicket,stop:0.06},tapNow),/invalid/);
+fs.rmSync(tapTestDir,{recursive:true,force:true});
 
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
