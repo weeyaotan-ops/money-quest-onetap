@@ -33,7 +33,7 @@ assert.match(out,/TP2 hit: 1 \(2R target\)/);
 assert.match(out,/SOLUSDT SHORT.*RR \+2\.00R/);
 assert.match(out,/LINKUSDT SHORT.*RR —.*Tracking/);
 assert.match(out,/no simulated exits or PnL/);
-assert.match(commandAnswer('/scan',scoreState),/26 major coins/);
+assert.match(commandAnswer('/scan',scoreState),/26 coins/);
 assert.match(commandAnswer('/signals',scoreState),/No active confirmed signals/);
 
 
