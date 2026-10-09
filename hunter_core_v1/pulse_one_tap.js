@@ -45,7 +45,9 @@ function finishTicket(id,status,payload){
 
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const ENABLED=()=>process.env.HTR_PULSE_ONETAP_LIVE==='1';
-const MARGIN=5,LEVERAGE=40,TTL_MS=60000,MAX_DRIFT=0.004;
+// 3 minutes to approve after the Telegram message; never more than 5 minutes after the M15 close.
+// Always enforce the 0.4% live price drift and original SL/TP constraints separately.
+const MARGIN=5,LEVERAGE=40,TTL_MS=3*60000,MAX_CANDLE_AGE_MS=5*60000,MAX_DRIFT=0.004;
 const ERR=s=>{throw Error(s);};
 let timeDelta=0;
 function key(){
@@ -109,12 +111,15 @@ function validTicket(t,now=Date.now()){
  if(![t.entry,t.stop,t.tp1,t.tp2].every(x=>Number.isFinite(x)&&x>0))ERR('Invalid signal prices');
  const dir=t.side==='LONG'?1:-1;
  if(!(dir*(t.entry-t.stop)>0&&dir*(t.tp1-t.entry)>0&&dir*(t.tp2-t.tp1)>0))ERR('Original SL / TP levels invalid');
- if(now>t.expiresAt||t.expiresAt-now>TTL_MS||now<t.at||now-t.at>TTL_MS)ERR('Signal expired. Await a fresh signal.');
+ if(!Number.isFinite(t.createdAt)||!Number.isFinite(t.at)||!Number.isFinite(t.expiresAt)||
+    t.createdAt<t.at||t.expiresAt>t.createdAt+TTL_MS||t.expiresAt>t.at+MAX_CANDLE_AGE_MS||
+    now<t.at||now>t.expiresAt||now-t.at>MAX_CANDLE_AGE_MS)
+   ERR('Signal expired. Await a fresh signal.');
 }
 function newTicket(s,now=Date.now()){
  return {id:crypto.randomBytes(12).toString('hex'),key:s.key,symbol:s.symbol,side:s.side,
  entry:s.entry,stop:s.stop,tp1:s.tp1,tp2:s.tp2,
- at:s.at,expiresAt:Math.min(s.at+TTL_MS,now+TTL_MS),
+ at:s.at,expiresAt:Math.min(s.at+MAX_CANDLE_AGE_MS,now+TTL_MS),
  status:'PENDING',createdAt:now};
 }
 async function accountReady(){
@@ -249,4 +254,4 @@ async function execute(t){
   tp1:actualTp1,tp2:actualTp2,slAlgoId:sl.algoId,tp1AlgoId:tp1.algoId,
   tp2AlgoId:tp2.algoId,filled,at:Date.now()};
 }
-module.exports={newTicket,validTicket,clampQty,roundTrigger,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MARGIN,LEVERAGE};
+module.exports={newTicket,validTicket,clampQty,roundTrigger,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MAX_CANDLE_AGE_MS,MAX_DRIFT,MARGIN,LEVERAGE};
