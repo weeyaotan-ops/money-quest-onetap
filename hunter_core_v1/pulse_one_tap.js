@@ -186,6 +186,47 @@ async function accountReady(){
  checkedBrackets(brackets,'BTCUSDT'); // read-only signed access required before live buttons
  return true;
 }
+function locatePosition(rows,symbol,positionSide,side){
+ if(!Array.isArray(rows))ERR('Binance positionRisk result unavailable');
+ return rows.find(p=>p.symbol===symbol &&
+   String(p.positionSide||'BOTH')===positionSide &&
+   (side==='LONG'?Number(p.positionAmt)>0:Number(p.positionAmt)<0));
+}
+async function readPosition(symbol,positionSide,side){
+ const rows=await request('GET','/fapi/v3/positionRisk',{symbol},true);
+ return locatePosition(rows,symbol,positionSide,side)||null;
+}
+async function verifyFlat(symbol,positionSide,side){
+ for(let i=0;i<3;i++){
+  const row=await readPosition(symbol,positionSide,side);
+  if(!row)return true;
+  if(i<2)await new Promise(r=>setTimeout(r,450));
+ }
+ return false;
+}
+async function verifyLiqAfterFill(ticket,positionSide,chosenLeverage,actualStop){
+ let explanation='missing Binance filled position';
+ const stop=Number(actualStop);
+ for(let attempt=0;attempt<3;attempt++){
+  try{
+   const row=await readPosition(ticket.symbol,positionSide,ticket.side);
+   if(row){
+    const liq=Number(row.liquidationPrice),actualLev=Number(row.leverage);
+    const isIso=String(row.marginType||'').toLowerCase()==='isolated';
+    if(isIso&&actualLev===chosenLeverage&&Number.isFinite(liq)&&liq>0){
+     const safe=ticket.side==='LONG'?liq<stop*(1-LIQ_BUFFER_RATE):
+       liq>stop*(1+LIQ_BUFFER_RATE);
+     if(!safe)ERR('Binance reported liquidation ahead of SL safety buffer');
+     return {liquidationPrice:liq,leverage:actualLev};
+    }
+    explanation='liquidation / leverage / isolated status not confirmed by Binance';
+   }
+  }catch(e){explanation=String(e.message||e);}
+  if(attempt<2)await new Promise(r=>setTimeout(r,450));
+ }
+ ERR('Cannot verify filled liquidation price: '+explanation);
+}
+
 async function execute(t){
  if(!ENABLED())ERR('One-Tap live execution disabled');
  validTicket(t);
@@ -274,28 +315,16 @@ async function execute(t){
  const common={algoType:'CONDITIONAL',symbol:t.symbol,side:closing,positionSide,
   workingType:'MARK_PRICE'};
  try{
-  // Exchange-reported liquidation price is the last guard after the fill.
-  // A failed/missing report is never interpreted as safe.
-  const postPositions=await request('GET','/fapi/v3/positionRisk',
-    {symbol:t.symbol},true);
-  const newPos=Array.isArray(postPositions)?postPositions.find(x=>
-    x.symbol===t.symbol&&x.positionSide===positionSide&&
-    Math.abs(Number(x.positionAmt))>0):null;
-  const liq=Number(newPos?.liquidationPrice),actualLev=Number(newPos?.leverage);
-  if(!newPos||newPos.marginType!=='isolated'||actualLev!==chosenLeverage||
-     !Number.isFinite(liq)||liq<0)
-   ERR('Cannot verify actual isolated liquidation price and leverage');
-  // liq=0 is possible for 1x LONG, meaning no positive liquidation boundary.
-  const stopTrigger=Number(actualStop);
-  const safe=t.side==='LONG'?liq<stopTrigger*(1-LIQ_BUFFER_RATE):
-    liq>stopTrigger*(1+LIQ_BUFFER_RATE);
-  if(!safe)ERR('Binance actual liquidation price would be too close to / before original SL');
-  console.log(JSON.stringify({oneTapRisk:'POST_FILL_LIQ_VERIFIED',
-    symbol:t.symbol,leverage:chosenLeverage,liquidationPrice:liq,stop:t.stop}));
+  // Place protective stop immediately after the fill, before a position-risk
+  // lookup that may be eventually consistent. Do not leave the entry uncovered
+  // while waiting for Binance's liquidation field to appear.
   sl=await request('POST','/fapi/v1/algoOrder',{...common,type:'STOP_MARKET',
    triggerPrice:actualStop,closePosition:'true',
    clientAlgoId:'HTRS'+t.id.slice(0,24)},true);
   if(!sl.algoId)ERR('Stop order not acknowledged');
+  const verified=await verifyLiqAfterFill(t,positionSide,chosenLeverage,actualStop);
+  console.log(JSON.stringify({oneTapRisk:'POST_FILL_LIQ_VERIFIED',
+   symbol:t.symbol,leverage:chosenLeverage,liquidationPrice:verified.liquidationPrice,stop:actualStop}));
   if(!(tp1Qty>0&&tp1Qty<filled))ERR('Filled quantity cannot split TP1/TP2');
   const partial={...common,type:'TAKE_PROFIT_MARKET',
    ...(isHedge?{}:{reduceOnly:'true'})};
@@ -312,14 +341,17 @@ async function execute(t){
   if(![sl,tp1,tp2].every(x=>ids.has(String(x.algoId))))ERR('SL/TP verification incomplete');
  }catch(error){
   // Protection failure: fail closed. Market-flatten the *new* position if possible.
-  let flattened=false,closeErr='';
+  let flattened=false,closeErr='',closeResult='NOT_SENT';
   try{
    const close=await request('POST','/fapi/v1/order',{
     symbol:t.symbol,side:closing,positionSide,type:'MARKET',
     quantity:String(Number(filled.toFixed(dp))),...(isHedge?{}:{reduceOnly:'true'}),
-    newClientOrderId:'HTRF'+t.id.slice(0,24)},true);
-   flattened=Number(close.executedQty)>0||close.status==='FILLED';
-  }catch(e){closeErr=String(e.message);}
+    newOrderRespType:'RESULT',newClientOrderId:'HTRF'+t.id.slice(0,24)},true);
+   closeResult=String(close.status||'ACK');
+  }catch(e){closeErr=String(e.message||e);}
+  // Never conclude "flat" from an order ACK alone.
+  try{flattened=await verifyFlat(t.symbol,positionSide,t.side);}
+  catch(e){closeErr+=(closeErr?' | ':'')+'Position recheck '+String(e.message||e);}
   // Cancel only this ticket's created algo orders, NEVER unrelated orders.
   // If flat could not be confirmed, leave SL in place and ask for manual check.
   if(flattened){
@@ -330,8 +362,8 @@ async function execute(t){
     catch(e){console.error('one-tap stale protection cleanup',t.symbol,String(e.message));}
    }
   }
-  ERR('PROTECTION FAILED after live entry. Auto-close '+(flattened?'submitted':'NOT CONFIRMED')+
-   '. CHECK BINANCE NOW. '+String(error.message)+(closeErr?' Close error '+closeErr:''));
+  ERR('PROTECTION FAILED after live entry. Auto-close '+(flattened?'CONFIRMED FLAT':'NOT CONFIRMED')+
+   '. CHECK BINANCE NOW. '+String(error.message)+' | closeOrderStatus='+closeResult+(closeErr?' Close error '+closeErr:''));
  }
  return {orderId:entry.orderId,symbol:t.symbol,side:t.side,quantity,notional,
   leverage:chosenLeverage,margin:MARGIN,entry:entry.avgPrice||live,stop:actualStop,
@@ -339,4 +371,4 @@ async function execute(t){
   tp1:actualTp1,tp2:actualTp2,slAlgoId:sl.algoId,tp1AlgoId:tp1.algoId,
   tp2AlgoId:tp2.algoId,filled,at:Date.now()};
 }
-module.exports={newTicket,validTicket,clampQty,roundTrigger,checkedBrackets,stopMarginCheck,chooseSafeLeverage,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MAX_CANDLE_AGE_MS,MAX_DRIFT,LIQ_BUFFER_RATE,FEE_RESERVE_RATE,MARGIN,LEVERAGE};
+module.exports={newTicket,validTicket,clampQty,roundTrigger,checkedBrackets,stopMarginCheck,chooseSafeLeverage,locatePosition,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MAX_CANDLE_AGE_MS,MAX_DRIFT,LIQ_BUFFER_RATE,FEE_RESERVE_RATE,MARGIN,LEVERAGE};
