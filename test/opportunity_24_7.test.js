@@ -178,4 +178,11 @@ assert.throws(()=>oneTap.validTicket({...sampleTicket,expiresAt:tapNow-1},tapNow
 assert.throws(()=>oneTap.validTicket({...sampleTicket,stop:0.06},tapNow),/invalid/);
 fs.rmSync(tapTestDir,{recursive:true,force:true});
 
+// Guard against accidental use of legacy conditional order endpoints or a
+// missing ambiguous-acknowledgement reconciliation code path.
+const liveSource=fs.readFileSync(path.join(__dirname,'../hunter_core_v1/pulse_one_tap.js'),'utf8');
+assert.match(liveSource,/\/fapi\/v1\/algoOrder/);
+assert.match(liveSource,/ENTRY ACK UNCERTAIN/);
+assert.match(liveSource,/\/fapi\/v1\/openOrders/);
+
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
