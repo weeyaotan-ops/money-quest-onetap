@@ -48,6 +48,9 @@ const ENABLED=()=>process.env.HTR_PULSE_ONETAP_LIVE==='1';
 // 3 minutes to approve after the Telegram message; never more than 5 minutes after the M15 close.
 // Always enforce the 0.4% live price drift and original SL/TP constraints separately.
 const MARGIN=5,LEVERAGE=40,TTL_MS=3*60000,MAX_CANDLE_AGE_MS=5*60000,MAX_DRIFT=0.004;
+// The 40x ceiling is not a target. Maintain 0.5% of notional headroom at
+// the ORIGINAL stop, plus 0.2% of notional for fees / fill uncertainty.
+const LIQ_BUFFER_RATE=0.005,FEE_RESERVE_RATE=0.002;
 const ERR=s=>{throw Error(s);};
 let timeDelta=0;
 function key(){
@@ -83,21 +86,75 @@ async function syncTime(){
  timeDelta=t.serverTime-Date.now();
  if(Math.abs(timeDelta)>120000)ERR('Server clock mismatch >120s');
 }
-function clampQty(price,info){
+function clampQty(price,info,leverage=LEVERAGE){
  const rule=info.filters.find(x=>x.filterType==='MARKET_LOT_SIZE')||
  info.filters.find(x=>x.filterType==='LOT_SIZE');
  const min=Math.max(Number(rule?.minQty||0),Number(info.filters.find(x=>x.filterType==='LOT_SIZE')?.minQty||0));
  const step=Number(rule?.stepSize);
  const max=Number(rule?.maxQty||0);
  if(!(step>0&&max>0&&price>0))ERR('Unsupported Binance quantity rules');
- const qty=Math.floor((MARGIN*LEVERAGE/price)/step+1e-9)*step;
+ if(!Number.isInteger(leverage)||leverage<1||leverage>LEVERAGE)ERR('Invalid leverage');
+ const qty=Math.floor((MARGIN*leverage/price)/step+1e-9)*step;
  const digits=Math.min(12,(String(step).split('.')[1]||'').length);
  const fixed=Number(qty.toFixed(digits));
  const minimumNotional=Number(info.filters.find(x=>x.filterType==='MIN_NOTIONAL')?.notional||5);
- if(fixed<min||fixed>max||fixed*price<minimumNotional||fixed*price<150)ERR(
-  '5 USDT x 40x cannot meet this symbol quantity/notional rules at current price');
- if(fixed*price>200.000001)ERR('Order would use >5 USDT initial margin');
+ if(fixed<min||fixed>max||fixed*price<minimumNotional)ERR(
+  '5 USDT at selected leverage cannot meet this symbol quantity/notional rules');
+ if(fixed*price>MARGIN*leverage+0.000001)ERR('Order would use >5 USDT initial margin');
  return {quantity:String(fixed),notional:fixed*price,step};
+}
+function checkedBrackets(payload,symbol){
+ const item=Array.isArray(payload)?payload.find(x=>x.symbol===symbol):null;
+ if(!item||!Array.isArray(item.brackets)||!item.brackets.length)
+  ERR('Binance risk brackets unavailable; refusing to trade');
+ const arr=item.brackets.map(x=>({
+  floor:Number(x.notionalFloor),cap:Number(x.notionalCap),
+  rate:Number(x.maintMarginRatio),allowed:Number(x.initialLeverage)
+ })).sort((a,b)=>a.floor-b.floor);
+ if(arr.some(x=>!Number.isFinite(x.floor)||x.floor<0||!(x.cap>x.floor)||
+  !(x.rate>=0&&x.rate<1)||!Number.isInteger(x.allowed)||x.allowed<1))
+   ERR('Binance risk brackets incomplete');
+ return arr;
+}
+function bracketFor(notional,brackets){
+ const b=brackets.find(x=>notional>=x.floor&&notional<x.cap);
+ if(!b)ERR('Binance risk bracket does not cover position');
+ return b;
+}
+// Conservative equity-at-stop test instead of claiming an exact exchange
+// liquidation price. If equity at stop is not comfortably above maintenance
+// margin, liquidation could precede the intended stop.
+function stopMarginCheck(ticket,fillPrice,qty,leverage,brackets){
+ const dir=ticket.side==='LONG'?1:-1,atStop=qty*ticket.stop;
+ const entryNotional=qty*fillPrice;
+ const margin=entryNotional/leverage;
+ const loss=Math.max(0,-dir*qty*(ticket.stop-fillPrice));
+ const maintBracket=bracketFor(Math.max(atStop,entryNotional),brackets);
+ if(leverage>maintBracket.allowed)ERR('Selected leverage exceeds symbol bracket');
+ const maint=atStop*maintBracket.rate; // ignore 'cum' for a cautious bound
+ const reserve=Math.max(atStop,entryNotional)*(LIQ_BUFFER_RATE+FEE_RESERVE_RATE);
+ const headroom=margin-loss-maint-reserve;
+ return {safe:headroom>0,headroom,margin,loss,maint,reserve};
+}
+function chooseSafeLeverage(ticket,markPrice,info,brackets){
+ if(!(markPrice>0))ERR('Invalid mark price');
+ const dir=ticket.side==='LONG'?1:-1;
+ const conservativeEntry=markPrice*(1+dir*MAX_DRIFT);
+ // Size on an adverse higher price in both directions: max initial margin 5U.
+ const sizePrice=markPrice*(1+MAX_DRIFT);
+ const reasons=[];
+ for(let lev=LEVERAGE;lev>=1;lev--){
+  let size;try{size=clampQty(sizePrice,info,lev);}
+  catch(e){reasons.push(String(e.message));continue;}
+  try{
+   const check=stopMarginCheck(ticket,conservativeEntry,
+    Number(size.quantity),lev,brackets);
+   if(!check.safe)continue;
+   return {...size,leverage:lev,headroom:check.headroom,
+    checkedAt:Date.now(),conservativeEntry};
+  }catch(e){reasons.push(String(e.message));}
+ }
+ ERR('No leverage 1-40x keeps the original SL ahead of liquidation with safety buffer using 5 USDT. No order submitted.');
 }
 function roundTrigger(price,info){
  const filt=info.filters.find(x=>x.filterType==='PRICE_FILTER');
@@ -131,12 +188,13 @@ async function execute(t){
  if(!ENABLED())ERR('One-Tap live execution disabled');
  validTicket(t);
  await syncTime();
- const [exchange,mark,positions,mode,balance]=await Promise.all([
+ const [exchange,mark,positions,mode,balance,bracketData]=await Promise.all([
   request('GET','/fapi/v1/exchangeInfo'),
   request('GET','/fapi/v1/premiumIndex',{symbol:t.symbol}),
   request('GET','/fapi/v3/positionRisk',{symbol:t.symbol},true),
   request('GET','/fapi/v1/positionSide/dual',{},true),
-  request('GET','/fapi/v3/balance',{},true)
+  request('GET','/fapi/v3/balance',{},true),
+  request('GET','/fapi/v1/leverageBracket',{symbol:t.symbol},true)
  ]);
  const info=exchange.symbols.find(x=>x.symbol===t.symbol&&x.status==='TRADING'&&x.contractType==='PERPETUAL'&&x.quoteAsset==='USDT');
  if(!info)ERR('Symbol unavailable as USDT perpetual');
@@ -149,12 +207,18 @@ async function execute(t){
  if(!(live>0)||Math.abs(live/t.entry-1)>MAX_DRIFT)ERR('Price moved more than 0.4% from signal Entry');
  if(t.side==='LONG'&&live<=t.stop||t.side==='SHORT'&&live>=t.stop)ERR('Stop already crossed');
  if(t.side==='LONG'&&live>=t.tp1||t.side==='SHORT'&&live<=t.tp1)ERR('TP1 already crossed; stale setup');
- const {quantity,notional,step}=clampQty(live,info);
- // The 40x request is explicit: NEVER silently fall back to lower leverage.
+ const brackets=checkedBrackets(bracketData,t.symbol);
+ const selection=chooseSafeLeverage(t,live,info,brackets);
+ const {quantity,step,leverage:chosenLeverage}=selection;
+ const notional=Number(quantity)*live;
+ console.log(JSON.stringify({oneTapRisk:'PRE_ENTRY_ACCEPTED',symbol:t.symbol,
+   leverage:chosenLeverage,bufferHeadroomUSDT:+selection.headroom.toFixed(4),
+   marginBudget:MARGIN}));
+ // 40x is maximum. Choose the highest leverage passing the original stop safety check.
  try{await request('POST','/fapi/v1/marginType',{symbol:t.symbol,marginType:'ISOLATED'},true);}
  catch(e){if(!String(e.message).includes('-4046'))throw e;}
- const leverage=await request('POST','/fapi/v1/leverage',{symbol:t.symbol,leverage:LEVERAGE},true);
- if(Number(leverage.leverage)!==LEVERAGE)ERR('Exchange did not set 40x; entry cancelled');
+ const leverage=await request('POST','/fapi/v1/leverage',{symbol:t.symbol,leverage:chosenLeverage},true);
+ if(Number(leverage.leverage)!==chosenLeverage)ERR('Exchange did not set safe leverage; entry cancelled');
  const actualStop=roundTrigger(t.stop,info),actualTp1=roundTrigger(t.tp1,info),actualTp2=roundTrigger(t.tp2,info);
  if(actualStop===actualTp1||actualTp1===actualTp2)ERR('TP/SL levels too close to exchange tick size');
  // Do not create a new position when there are existing conditional orders for that symbol.
@@ -208,6 +272,23 @@ async function execute(t){
  const common={algoType:'CONDITIONAL',symbol:t.symbol,side:closing,positionSide,
   workingType:'MARK_PRICE'};
  try{
+  // Exchange-reported liquidation price is the last guard after the fill.
+  // A failed/missing report is never interpreted as safe.
+  const postPositions=await request('GET','/fapi/v3/positionRisk',
+    {symbol:t.symbol},true);
+  const newPos=Array.isArray(postPositions)?postPositions.find(x=>
+    x.symbol===t.symbol&&x.positionSide===positionSide&&
+    Math.abs(Number(x.positionAmt))>0):null;
+  const liq=Number(newPos?.liquidationPrice),actualLev=Number(newPos?.leverage);
+  if(!newPos||newPos.marginType!=='isolated'||actualLev!==chosenLeverage||
+     !Number.isFinite(liq)||liq<0)
+   ERR('Cannot verify actual isolated liquidation price and leverage');
+  // liq=0 is possible for 1x LONG, meaning no positive liquidation boundary.
+  const safe=t.side==='LONG'?liq<t.stop*(1-LIQ_BUFFER_RATE):
+    liq>t.stop*(1+LIQ_BUFFER_RATE);
+  if(!safe)ERR('Binance actual liquidation price would be too close to / before original SL');
+  console.log(JSON.stringify({oneTapRisk:'POST_FILL_LIQ_VERIFIED',
+    symbol:t.symbol,leverage:chosenLeverage,liquidationPrice:liq,stop:t.stop}));
   sl=await request('POST','/fapi/v1/algoOrder',{...common,type:'STOP_MARKET',
    triggerPrice:actualStop,closePosition:'true',
    clientAlgoId:'HTRS'+t.id.slice(0,24)},true);
@@ -250,8 +331,9 @@ async function execute(t){
    '. CHECK BINANCE NOW. '+String(error.message)+(closeErr?' Close error '+closeErr:''));
  }
  return {orderId:entry.orderId,symbol:t.symbol,side:t.side,quantity,notional,
-  leverage:LEVERAGE,margin:MARGIN,entry:entry.avgPrice||live,stop:actualStop,
+  leverage:chosenLeverage,margin:MARGIN,entry:entry.avgPrice||live,stop:actualStop,
+  liquidationSafetyHeadroom:selection.headroom,
   tp1:actualTp1,tp2:actualTp2,slAlgoId:sl.algoId,tp1AlgoId:tp1.algoId,
   tp2AlgoId:tp2.algoId,filled,at:Date.now()};
 }
-module.exports={newTicket,validTicket,clampQty,roundTrigger,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MAX_CANDLE_AGE_MS,MAX_DRIFT,MARGIN,LEVERAGE};
+module.exports={newTicket,validTicket,clampQty,roundTrigger,checkedBrackets,stopMarginCheck,chooseSafeLeverage,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MAX_CANDLE_AGE_MS,MAX_DRIFT,LIQ_BUFFER_RATE,FEE_RESERVE_RATE,MARGIN,LEVERAGE};
