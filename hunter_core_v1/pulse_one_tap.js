@@ -153,19 +153,50 @@ async function execute(t){
  const actualStop=roundTrigger(t.stop,info),actualTp1=roundTrigger(t.tp1,info),actualTp2=roundTrigger(t.tp2,info);
  if(actualStop===actualTp1||actualTp1===actualTp2)ERR('TP/SL levels too close to exchange tick size');
  // Do not create a new position when there are existing conditional orders for that symbol.
- const pending=await request('GET','/fapi/v1/openAlgoOrders',{symbol:t.symbol},true);
- if(!Array.isArray(pending)||pending.length)ERR('Existing conditional orders on this symbol; refusing to merge protections');
+ const [pending,plainOrders]=await Promise.all([
+  request('GET','/fapi/v1/openAlgoOrders',{symbol:t.symbol},true),
+  request('GET','/fapi/v1/openOrders',{symbol:t.symbol},true)
+ ]);
+ if(!Array.isArray(pending)||pending.length||!Array.isArray(plainOrders)||plainOrders.length)
+  ERR('Existing orders on this symbol; refusing to mix positions or stops');
  if(Date.now()>t.expiresAt)ERR('Signal expired during pre-flight');
  const cid='HTRP'+t.id.slice(0,24);
  let entry;try{
   entry=await request('POST','/fapi/v1/order',{symbol:t.symbol,side,positionSide,
    type:'MARKET',quantity,newOrderRespType:'RESULT',newClientOrderId:cid},true,9500);
  }catch(e){
-  // A network timeout is ambiguous: Binance may have filled the order.
-  // Do not retry entry. Escalate and require manual reconciliation.
-  ERR('ENTRY UNCERTAIN. Check Binance position immediately. '+String(e.message));
+  // On POST timeout, Binance might have accepted the order even though we
+  // never received its result. NEVER retry the opening order.
+  let uncertain='';
+  try{
+   const existing=await request('GET','/fapi/v1/order',{
+    symbol:t.symbol,origClientOrderId:cid},true);
+   if(Number(existing.executedQty)>0){
+    try{
+     const exit=await request('POST','/fapi/v1/order',{
+      symbol:t.symbol,side:closing,positionSide,type:'MARKET',
+      quantity:String(existing.executedQty),
+      ...(isHedge?{}:{reduceOnly:'true'}),
+      newClientOrderId:'HTRU'+t.id.slice(0,24)},true);
+     uncertain=Number(exit.executedQty)>0?'Emergency flatten submitted.':'Emergency flatten NOT verified.';
+    }catch(closeError){uncertain='EMERGENCY FLATTEN FAILED: '+String(closeError.message);}
+   }else{uncertain='Order found but not fully filled; manually inspect Binance.';}
+  }catch(queryError){uncertain='Order lookup failed: '+String(queryError.message);}
+  ERR('ENTRY ACK UNCERTAIN. '+uncertain+' Check Binance positions/orders NOW. '+String(e.message));
  }
  if(!(Number(entry.executedQty)>0))ERR('Binance entry not filled; no protective orders placed');
+ // If the live fill wildly deviates from the confirmed signal, flatten first.
+ if(Number(entry.avgPrice)>0&&Math.abs(Number(entry.avgPrice)/t.entry-1)>MAX_DRIFT){
+  const qtyClose=String(entry.executedQty);
+  try{
+   await request('POST','/fapi/v1/order',{symbol:t.symbol,side:closing,positionSide,
+    type:'MARKET',quantity:qtyClose,...(isHedge?{}:{reduceOnly:'true'}),
+    newClientOrderId:'HTRD'+t.id.slice(0,24)},true);
+   ERR('Live fill deviated >0.4%; emergency market close submitted. Check Binance.');
+  }catch(e){
+   ERR('Live fill price drifted >0.4%; emergency close unconfirmed. CHECK BINANCE NOW: '+String(e.message));
+  }
+ }
  const filled=Number(entry.executedQty),tp1Qty=Math.floor(filled/(2*step)+1e-9)*step;
  const dp=Math.min(12,(String(step).split('.')[1]||'').length);
  let sl=null,tp1=null,tp2=null;
