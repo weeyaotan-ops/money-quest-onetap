@@ -3,6 +3,7 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
 const {initialize:initializeHitAlerts,collect:collectHitAlerts,deliver:deliverHitAlerts}=require('./pulse_hit_alerts');
+const oneTap=require('./pulse_one_tap');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -275,7 +276,7 @@ async function trackScorecard(state,now=Date.now()){
  }
  card.lastCheckedAt=now;
 }
-async function telegram(msg){if(!TOKEN||!CHAT)throw Error('Telegram credentials missing');const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT,text:msg,disable_web_page_preview:true}),signal:AbortSignal.timeout(10000)});const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram rejected message');}
+async function telegram(msg,extra={}){if(!TOKEN||!CHAT)throw Error('Telegram credentials missing');const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT,text:msg,disable_web_page_preview:true,...extra}),signal:AbortSignal.timeout(10000)});const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram rejected message');}
 function fmt(v){return Number(v).toLocaleString('en-US',{useGrouping:false,maximumSignificantDigits:8});}
 // Display only: keep all saved timestamps and trading logic in UTC.
 // Format Last scan for the Telegram user in Singapore local time (UTC+8).
@@ -314,9 +315,24 @@ function save(s){
  fs.renameSync(tmp,STORE);
 }
 let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
+let oneTapReady=false,oneTapLastCheck=0;
+async function checkOneTapAccess(){
+ if(!oneTap.ENABLED()){oneTapReady=false;return;}
+ oneTapLastCheck=Date.now();
+ try{
+  await oneTap.accountReady();
+  oneTapReady=true;
+  console.log(JSON.stringify({htrOneTap:'LIVE_API_AUTH_OK',margin:5,leverage:40}));
+ }catch(e){
+  oneTapReady=false;
+  console.error('HTR_ONETAP_PREFLIGHT_FAILED',String(e.message||e));
+ }
+}
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
+ if(oneTap.ENABLED()&&Date.now()-oneTapLastCheck>300000)await checkOneTapAccess();
+ state.oneTapHealth=oneTap.ENABLED()?(oneTapReady?'READY':'API_UNAVAILABLE'):'DISABLED';
  const alt=await refreshAltcoins();
  const scanCoins=[...new Set([...COINS,...alt.symbols,...(alt.preScreen||[])])];
  state.universe={symbols:scanCoins,altcoins:alt.symbols,core:COINS.length,
@@ -342,8 +358,20 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        recordDiagnostic(state,symbol,a,b,checkedAt);
        const s=signal(symbol,a,b,checkedAt);if(!s)return;
        matches++;current.push(s);if(state.sent[s.key])return;
-       // An old signal is never emitted on startup; send only recently closed bars.
-       await telegram(message(s));
+       // One-Tap requires an explicit Telegram button press; signals never auto-trade.
+       // Pending tickets are persisted before sending, so callbacks cannot race a save.
+       let msg=message(s),extra={};
+       if(oneTapReady&&oneTap.ENABLED()){
+        state.oneTap||={tickets:{}};state.oneTap.tickets||={};
+        const ticket=oneTap.newTicket(s);
+        state.oneTap.tickets[ticket.id]=ticket;
+        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · 40x isolated\nPressing CONFIRM sends a REAL market order. Original SL / TP retained.';
+        extra.reply_markup={inline_keyboard:[[
+         {text:'⚡ CONFIRM LIVE 5U × 40x',callback_data:'htrtap:'+ticket.id}
+        ]]};
+        save(state);
+       }
+       await telegram(msg,extra);
        const sentAt=Date.now();
        state.sent[s.key]=sentAt;
        if(!state.scorecard.trades.some(t=>t.key===s.key)){
@@ -354,6 +382,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
    }));
  }
  const cutoff=Date.now()-8*86400000;for(const [k,t] of Object.entries(state.sent))if(t<cutoff)delete state.sent[k];
+ if(state.oneTap?.tickets){for(const [id,t] of Object.entries(state.oneTap.tickets))if(t.createdAt<cutoff&&t.status!=='PROCESSING')delete state.oneTap.tickets[id];}
  latestCandidates=current.sort((a,b)=>b.netR-a.netR);state.latestCandidates=latestCandidates;state.lastScan=Date.now();state.errors=errors;state.matches=matches;
  const audit=diagnosis(state,state.lastScan);
  save(state);lastScan=state.lastScan;lastErrors=errors;lastMatches=matches;
@@ -432,6 +461,7 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    ...(state.universe?.hot?['Early watch: '+(state.universe.early?.length||0)+' | Hot watch: '+(state.universe.hot?.length||0)]:[]),
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'pending'),
    'Scan errors: '+(state.errors??'unknown'),
+   'One-Tap Binance: '+(state.oneTapHealth||'DISABLED'),
    'Diagnostics (24h): '+diagnosis(state,now).sampled+' completed M15 checks'+
      ' | Late qualified: '+diagnosis(state,now).missed,
    '',
@@ -464,9 +494,49 @@ const crypto=require('node:crypto');
 const HOOK_DOMAIN=process.env.OPPORTUNITY_WEBHOOK_DOMAIN||'crypto-signal-publisher-production.up.railway.app';
 const HOOK_SECRET=TOKEN?crypto.createHash('sha256').update(TOKEN+'|HTR-V3-WEBHOOK').digest('hex'):'';
 const HOOK_PATH='/telegram/'+HOOK_SECRET;
+const HOOK_REQUEST_TOKEN=TOKEN?crypto.createHash('sha256').update(TOKEN+'|HTR-ONE-TAP-SECRET').digest('hex'):'';
+function isAuthorizedTap(q){
+ const chat=String(q.message?.chat?.id||'');
+ const from=String(q.from?.id||'');
+ const authorized=String(process.env.TELEGRAM_AUTH_USER_ID||CHAT||'');
+ // If this is a group chat, a private user-id allowlist must be configured.
+ return chat===String(CHAT)&&from===authorized&&!!authorized&&
+   (String(CHAT).startsWith('-')?!!process.env.TELEGRAM_AUTH_USER_ID:true);
+}
+async function acceptTap(q){
+ const id=String(q.data||'').slice('htrtap:'.length);
+ const messageId=q.message?.message_id,chat=String(q.message?.chat?.id||'');
+ await botApi('answerCallbackQuery',{callback_query_id:q.id,
+  text:'Checking live Binance order...',show_alert:false}).catch(()=>{});
+ const state=load(),ticket=state.oneTap?.tickets?.[id];
+ if(!oneTapReady||!oneTap.ENABLED())return telegram('One-Tap unavailable: Binance API preflight not verified. No order sent.');
+ if(!ticket||ticket.status!=='PENDING')return telegram('One-Tap already used or invalid. No duplicate order sent.');
+ try{oneTap.validTicket(ticket);}
+ catch(e){ticket.status='EXPIRED';save(state);return telegram('One-Tap rejected: '+String(e.message));}
+ ticket.status='PROCESSING';ticket.clickedAt=Date.now();save(state);
+ if(messageId)botApi('editMessageReplyMarkup',{chat_id:chat,message_id:messageId,reply_markup:{inline_keyboard:[]}})
+   .catch(e=>console.error('clear one-tap keyboard',String(e.message)));
+ try{
+  const result=await oneTap.execute(ticket);
+  ticket.status='FILLED_PROTECTED';ticket.result=result;ticket.doneAt=Date.now();save(state);
+  await telegram('✅ LIVE ORDER PLACED + SL/TP VERIFIED\n'+
+   result.symbol+' '+result.side+' · 40x ISOLATED\n'+
+   'Margin: ~'+(result.notional/40).toFixed(2)+' USDT | Qty: '+result.quantity+
+   '\nFilled Entry: '+result.entry+'\nSL: '+result.stop+
+   '\nTP1: '+result.tp1+' | TP2: '+result.tp2+
+   '\nBinance order ID: '+result.orderId);
+ }catch(e){
+  ticket.status='FAILED_NO_RETRY';ticket.error=String(e.message||e).slice(0,420);
+  ticket.doneAt=Date.now();save(state);
+  await telegram('⚠️ ONE-TAP EXECUTION FAILED / REQUIRES CHECK\n'+
+    ticket.symbol+' '+ticket.side+'\n'+ticket.error+
+    '\nDo not tap again. Check Binance Futures positions and active TP/SL.');
+ }
+}
 let commandQueue=Promise.resolve();
 function handleWebhook(req,res){
  if(req.method!=='POST'||req.url!==HOOK_PATH){return false;}
+ if(HOOK_REQUEST_TOKEN&&req.headers['x-telegram-bot-api-secret-token']!==HOOK_REQUEST_TOKEN){res.writeHead(403);res.end();return true;}
  if(req.headers['content-type']?.split(';')[0]!=='application/json'){
   res.writeHead(415);res.end();return true;
  }
@@ -476,6 +546,16 @@ function handleWebhook(req,res){
   if(large){res.writeHead(413);res.end();return;}
   let u;try{u=JSON.parse(body)}catch{res.writeHead(400);res.end();return;}
   res.writeHead(200);res.end('OK');
+  if(u.callback_query&&String(u.callback_query.data||'').startsWith('htrtap:')){
+   const q=u.callback_query;
+   if(!isAuthorizedTap(q)){
+    botApi('answerCallbackQuery',{callback_query_id:q.id,text:'Not authorized',show_alert:true}).catch(()=>{});
+    return;
+   }
+   commandQueue=commandQueue.catch(()=>{}).then(()=>acceptTap(q))
+    .catch(e=>console.error('One-Tap callback error',String(e.message)));
+   return;
+  }
   const chat=String(u.message?.chat?.id||'');
   if(chat!==String(CHAT))return;
   const cmd=String(u.message?.text||'').trim().split(/\s+/)[0].split('@')[0].toLowerCase();
@@ -493,7 +573,7 @@ async function setupWebhook(){
   {command:'signals',description:'Confirmed LONG / SHORT signals'},
   {command:'status',description:'Scanner status'}]});
  await botApi('setWebhook',{url:'https://'+HOOK_DOMAIN+HOOK_PATH,
-   allowed_updates:['message'],drop_pending_updates:false,max_connections:5});
+   allowed_updates:['message','callback_query'],secret_token:HOOK_REQUEST_TOKEN,drop_pending_updates:false,max_connections:5});
  const info=await botApi('getWebhookInfo',{});
  console.log(JSON.stringify({telegramWebhook:info.url?'SET':'NOT_SET',
    pending:info.pending_update_count,lastError:info.last_error_message||null}));
@@ -501,7 +581,7 @@ async function setupWebhook(){
 
 if(require.main===module){
  http.createServer((req,res)=>{if(handleWebhook(req,res))return;const ok=lastScan&&Date.now()-lastScan<3600000;res.writeHead(ok?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:!!ok,scanner:'OPPORTUNITY_24_7',lastScan,errors:lastErrors,matches:lastMatches}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
- const loop=async()=>{for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
+ const loop=async()=>{await checkOneTapAccess();for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
