@@ -192,10 +192,10 @@ async function execute(t){
    await request('POST','/fapi/v1/order',{symbol:t.symbol,side:closing,positionSide,
     type:'MARKET',quantity:qtyClose,...(isHedge?{}:{reduceOnly:'true'}),
     newClientOrderId:'HTRD'+t.id.slice(0,24)},true);
-   ERR('Live fill deviated >0.4%; emergency market close submitted. Check Binance.');
   }catch(e){
    ERR('Live fill price drifted >0.4%; emergency close unconfirmed. CHECK BINANCE NOW: '+String(e.message));
   }
+  ERR('Live fill deviated >0.4%; emergency market close submitted. Check Binance.');
  }
  const filled=Number(entry.executedQty),tp1Qty=Math.floor(filled/(2*step)+1e-9)*step;
  const dp=Math.min(12,(String(step).split('.')[1]||'').length);
