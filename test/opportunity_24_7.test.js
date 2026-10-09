@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR}=require('../hunter_core_v1/opportunity_24_7');
+const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins}=require('../hunter_core_v1/opportunity_24_7');
 const now=Date.now();
 assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
 assert.equal(signal('BTCUSDT',[],[],now),null);
@@ -35,5 +35,23 @@ assert.match(out,/LINKUSDT SHORT.*RR —.*Tracking/);
 assert.match(out,/no simulated exits or PnL/);
 assert.match(commandAnswer('/scan',scoreState),/26 major coins/);
 assert.match(commandAnswer('/signals',scoreState),/No active confirmed signals/);
+
+
+// Alt radar must accept a liquid OGNUSDT mover, not every high percentage gainer.
+const at=Date.parse('2026-10-09T09:00:00Z');
+const candidates=['OGNUSDT','THINUSDT','WIDEUSDT','NEWUSDT','STOPPEDUSDT'];
+const exchange={symbols:candidates.map(symbol=>({symbol,quoteAsset:'USDT',
+  contractType:'PERPETUAL',status:symbol==='STOPPEDUSDT'?'BREAK':'TRADING',
+  onboardDate:symbol==='NEWUSDT'?at-3600000:at-100*86400000}))};
+const tickers=candidates.map(symbol=>({symbol,
+  quoteVolume:symbol==='THINUSDT'?'800000':'75000000',
+  priceChangePercent:'45',count:75000}));
+const books=candidates.map(symbol=>({symbol,bidPrice:'1.000',askPrice:symbol==='WIDEUSDT'?'1.02':'1.001'}));
+const dynamic=selectAltcoins(tickers,exchange,books,['BTCUSDT'],at,10);
+assert.deepEqual(dynamic.map(x=>x.symbol),['OGNUSDT']);
+assert.deepEqual(selectAltcoins(tickers,exchange,books,['BTCUSDT','OGNUSDT'],at,10),[]);
+const dynamicState={...scoreState,universe:{symbols:['BTCUSDT','OGNUSDT'],altcoins:['OGNUSDT']}};
+assert.match(commandAnswer('/status',dynamicState),/Altcoin radar: 1 active movers/);
+assert.match(commandAnswer('/scan',dynamicState),/Watchlist \(not entry signals\): OGNUSDT/);
 
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
