@@ -8,6 +8,56 @@ const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
 const POLL=Math.max(60000,Number(process.env.OPPORTUNITY_POLL_MS)||60000);
 const COINS=(process.env.OPPORTUNITY_SYMBOLS||'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,SUIUSDT,NEARUSDT,ZECUSDT,APTUSDT,ATOMUSDT,BCHUSDT,TRXUSDT,ETCUSDT,UNIUSDT,FILUSDT,ICPUSDT,HBARUSDT,OPUSDT,ARBUSDT,INJUSDT').split(',').map(x=>x.trim()).filter(Boolean);
+
+const ALT_SLOTS=Math.max(0,Math.min(12,Number(process.env.OPPORTUNITY_ALT_SLOTS)||10));
+const ALT_REFRESH_MS=10*60000;
+let altCache={symbols:[],updatedAt:0,error:null};
+// Alternative-coin radar uses only active USDT perpetuals with liquid order books.
+// It does not send a trade until the existing M15 breakout system confirms one.
+function selectAltcoins(tickers,exchange,books,core=COINS,now=Date.now(),slots=ALT_SLOTS){
+ const listed=new Map((exchange.symbols||[]).filter(x=>x.status==='TRADING'&&
+   x.contractType==='PERPETUAL'&&x.quoteAsset==='USDT').map(x=>[x.symbol,x]));
+ const orderbook=new Map((books||[]).map(x=>[x.symbol,x]));
+ const existing=new Set(core);
+ const selected=(tickers||[]).filter(x=>{
+  if(!listed.has(x.symbol)||existing.has(x.symbol)||!/^[A-Z0-9]+USDT$/.test(x.symbol))return false;
+  const listing=listed.get(x.symbol),book=orderbook.get(x.symbol);
+  const volume=Number(x.quoteVolume),move=Math.abs(Number(x.priceChangePercent)),trades=Number(x.count);
+  const bid=Number(book?.bidPrice),ask=Number(book?.askPrice);
+  const listedFor=now-Number(listing.onboardDate);
+  const spread=100*(ask-bid)/((ask+bid)/2);
+  return volume>=20000000&&move>=8&&move<=120&&trades>=3000&&
+    listedFor>=5*86400000&&ask>bid&&bid>0&&spread<=0.20;
+ }).map(x=>{
+  const volume=Number(x.quoteVolume),move=Math.abs(Number(x.priceChangePercent));
+  return {symbol:x.symbol,changePct:Number(x.priceChangePercent),volume,
+    rank:move+Math.log10(volume/1000000)*4};
+ });
+ // Give a qualifying OGNUSDT a reserved slot so the requested coin is never
+ // crowded out by unrelated movers; OGN must still pass every risk filter.
+ selected.sort((a,b)=>(b.symbol==='OGNUSDT')-(a.symbol==='OGNUSDT')||
+   b.rank-a.rank||a.symbol.localeCompare(b.symbol));
+ return selected.slice(0,slots);
+}
+async function refreshAltcoins(now=Date.now()){
+ if(altCache.updatedAt&&now-altCache.updatedAt<ALT_REFRESH_MS)return altCache;
+ try{
+  const [ticker,exchange,books]=await Promise.all([
+   request(API+'/fapi/v1/ticker/24hr'),request(API+'/fapi/v1/exchangeInfo'),
+   request(API+'/fapi/v1/ticker/bookTicker')
+  ]);
+  const candidates=selectAltcoins(ticker,exchange,books,COINS,now);
+  altCache={symbols:candidates.map(x=>x.symbol),updatedAt:Date.now(),error:null};
+  console.log(JSON.stringify({altRadar:'UPDATED',added:altCache.symbols.length,
+   symbols:altCache.symbols}));
+ }catch(e){
+  // Keep the core scanner alive even if the broad market endpoint is rate limited.
+  altCache={...altCache,updatedAt:Date.now(),error:String(e.message||e)};
+  console.error('alt radar refresh failed',altCache.error);
+ }
+ return altCache;
+}
+
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function ema(a,n){if(a.length<n)return null;let v=a.slice(0,n).reduce((s,x)=>s+x,0)/n;const k=2/(n+1);for(let i=n;i<a.length;i++)v=a[i]*k+v*(1-k);return v;}
 function atr(c,n=14){if(c.length<n+1)return null;return c.slice(-n).reduce((s,x,i)=>{const prev=c[c.length-n-1+i];return s+Math.max(x.h-x.l,Math.abs(x.h-prev.c),Math.abs(x.l-prev.c))},0)/n;}
@@ -108,6 +158,10 @@ let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
+ const alt=await refreshAltcoins();
+ const scanCoins=[...new Set([...COINS,...alt.symbols])];
+ state.universe={symbols:scanCoins,altcoins:alt.symbols,core:COINS.length,
+   updatedAt:alt.updatedAt,radarError:alt.error};
  // Baseline pre-existing milestones before scanning to avoid retroactive spam.
  if(initializeHitAlerts(state)){save(state);console.log('HIT_ALERTS_BASELINE_READY');}
  await trackScorecard(state);
@@ -121,8 +175,8 @@ async function scan(){if(inProgress)return;inProgress=true;try{
   ambiguous:score.ambiguous,
   recent:state.scorecard.trades.slice(-3).map(t=>({symbol:t.symbol,side:t.side,
    status:t.status,sl:t.slHit,tp1:t.tp1Hit,tp2:t.tp2Hit}))}));
- for(let i=0;i<COINS.length;i+=5){
-   await Promise.all(COINS.slice(i,i+5).map(async symbol=>{
+ for(let i=0;i<scanCoins.length;i+=5){
+   await Promise.all(scanCoins.slice(i,i+5).map(async symbol=>{
      try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);const s=signal(symbol,a,b);if(!s)return;
        matches++;current.push(s);if(state.sent[s.key])return;
        // An old signal is never emitted on startup; send only recently closed bars.
@@ -139,7 +193,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const cutoff=Date.now()-8*86400000;for(const [k,t] of Object.entries(state.sent))if(t<cutoff)delete state.sent[k];
  latestCandidates=current.sort((a,b)=>b.netR-a.netR);state.latestCandidates=latestCandidates;state.lastScan=Date.now();state.errors=errors;state.matches=matches;
  save(state);lastScan=state.lastScan;lastErrors=errors;lastMatches=matches;
- console.log(JSON.stringify({scanner:'OPPORTUNITY_24_7',symbols:COINS.length,at:new Date(lastScan).toISOString(),matches,errors}));
+ console.log(JSON.stringify({scanner:'OPPORTUNITY_24_7',symbols:scanCoins.length,altcoins:alt.symbols.length,at:new Date(lastScan).toISOString(),matches,errors}));
  }finally{inProgress=false;}}
 // Only three public commands. Telegram's old message keyboards cannot be deleted retroactively.
 async function botApi(method,body){
@@ -167,7 +221,10 @@ function formatReachedR(t){
 }
 function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
- if(command==='/scan')return ['📡 26 major coins · latest confirmed scan',
+ if(command==='/scan')return ['📡 '+(state.universe?.symbols?.length||COINS.length)+' coins · latest confirmed scan',
+   'Altcoin radar: '+(state.universe?.altcoins?.length||0)+' active movers',
+   ...(state.universe?.altcoins?.length?['Watchlist (not entry signals): '+state.universe.altcoins.slice(0,7).join(', ')]:[]),
+   ...(state.universe?.radarError?['Altcoin data temporarily unavailable; core scanner continues.']:[]),
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'not yet'),
    ...(candidates.length?candidates.slice(0,3).map((x,i)=>(i+1)+'. '+x.symbol+' '+x.side+' · '+x.netR.toFixed(2)+' net R'):['No qualified setups now.']),
    'Only closed M15 candles qualify.'].join('\n');
@@ -184,7 +241,8 @@ function commandAnswer(command,state,now=Date.now(),page=1){
   const hit=x=>x?'✓':'—';
   return [
    '📊 HTR Pulse V1.0 · Hit Count',
-   'Scanner: 24/7 · '+COINS.length+' coins',
+   'Scanner: 24/7 · '+(state.universe?.symbols?.length||COINS.length)+' coins',
+   'Altcoin radar: '+(state.universe?.altcoins?.length||0)+' active movers',
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'pending'),
    'Scan errors: '+(state.errors??'unknown'),
    '',
@@ -258,4 +316,4 @@ if(require.main===module){
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
-module.exports={signal,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR};
+module.exports={signal,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR,selectAltcoins};
