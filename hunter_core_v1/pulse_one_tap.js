@@ -182,6 +182,8 @@ function newTicket(s,now=Date.now()){
 async function accountReady(){
  await syncTime();
  await request('GET','/fapi/v3/balance',{},true);
+ const brackets=await request('GET','/fapi/v1/leverageBracket',{symbol:'BTCUSDT'},true);
+ checkedBrackets(brackets,'BTCUSDT'); // read-only signed access required before live buttons
  return true;
 }
 async function execute(t){
@@ -284,8 +286,9 @@ async function execute(t){
      !Number.isFinite(liq)||liq<0)
    ERR('Cannot verify actual isolated liquidation price and leverage');
   // liq=0 is possible for 1x LONG, meaning no positive liquidation boundary.
-  const safe=t.side==='LONG'?liq<t.stop*(1-LIQ_BUFFER_RATE):
-    liq>t.stop*(1+LIQ_BUFFER_RATE);
+  const stopTrigger=Number(actualStop);
+  const safe=t.side==='LONG'?liq<stopTrigger*(1-LIQ_BUFFER_RATE):
+    liq>stopTrigger*(1+LIQ_BUFFER_RATE);
   if(!safe)ERR('Binance actual liquidation price would be too close to / before original SL');
   console.log(JSON.stringify({oneTapRisk:'POST_FILL_LIQ_VERIFIED',
     symbol:t.symbol,leverage:chosenLeverage,liquidationPrice:liq,stop:t.stop}));
