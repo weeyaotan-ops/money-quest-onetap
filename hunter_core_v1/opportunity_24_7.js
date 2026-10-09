@@ -364,7 +364,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        if(oneTapReady&&oneTap.ENABLED()){
         const ticket=oneTap.newTicket(s);
         oneTap.storeTicket(ticket);
-        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · 40x isolated\nPressing CONFIRM sends a REAL market order. Original SL / TP retained.';
+        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · 40x isolated\nCONFIRM within 3 min of notice (max 5 min from candle close).\nPrice must stay within 0.4% of Entry. Original SL / TP retained.\nPressing CONFIRM sends a REAL market order.';
         extra.reply_markup={inline_keyboard:[[
          {text:'⚡ CONFIRM LIVE 5U × 40x',callback_data:'htrtap:'+ticket.id}
         ]]};
@@ -500,17 +500,38 @@ function isAuthorizedTap(q){
  return chat===String(CHAT)&&from===authorized&&!!authorized&&
    (String(CHAT).startsWith('-')?!!process.env.TELEGRAM_AUTH_USER_ID:true);
 }
+async function clearTapKeyboard(chat,messageId){
+ if(!messageId||!chat)return;
+ try{await botApi('editMessageReplyMarkup',{chat_id:chat,message_id:messageId,
+   reply_markup:{inline_keyboard:[]}});}
+ catch(e){console.error('clear one-tap keyboard',String(e.message||e));}
+}
+async function answerTap(q,text,alert=false){
+ try{await botApi('answerCallbackQuery',{callback_query_id:q.id,
+   text:String(text).slice(0,180),show_alert:alert});}
+ catch(e){console.error('answer One-Tap callback',String(e.message||e));}
+}
 async function acceptTap(q){
  const id=String(q.data||'').slice('htrtap:'.length);
  const messageId=q.message?.message_id,chat=String(q.message?.chat?.id||'');
- await botApi('answerCallbackQuery',{callback_query_id:q.id,
-  text:'Checking live Binance order...',show_alert:false}).catch(()=>{});
- if(!oneTapReady||!oneTap.ENABLED())return telegram('One-Tap unavailable: Binance API preflight not verified. No order sent.');
+ if(!oneTapReady||!oneTap.ENABLED()){
+  await answerTap(q,'Live One-Tap unavailable. No order submitted.',true);
+  await clearTapKeyboard(chat,messageId);
+  return;
+ }
  let ticket;
  try{ticket=oneTap.claimTicket(id);}
- catch(e){return telegram('One-Tap rejected: '+String(e.message||e));}
- if(messageId)botApi('editMessageReplyMarkup',{chat_id:chat,message_id:messageId,reply_markup:{inline_keyboard:[]}})
-   .catch(e=>console.error('clear one-tap keyboard',String(e.message)));
+ catch(e){
+  const reason=String(e.message||e);
+  await answerTap(q,reason.includes('expired')?
+   'Signal expired. Wait for a fresh signal.':
+   'This button has already been used or is unavailable.',true);
+  // Remove expired/used button so Telegram no longer invites repeat clicks.
+  await clearTapKeyboard(chat,messageId);
+  return;
+ }
+ await answerTap(q,'Submitting Binance live order...',false);
+ await clearTapKeyboard(chat,messageId);
  try{
   const result=await oneTap.execute(ticket);
   oneTap.finishTicket(id,'FILLED_PROTECTED',result);
@@ -522,7 +543,8 @@ async function acceptTap(q){
    '\nBinance order ID: '+result.orderId);
  }catch(e){
   const reason=String(e.message||e).slice(0,420);
-  try{oneTap.finishTicket(id,'FAILED_NO_RETRY',reason);}catch(x){console.error('one tap outcome persistence',String(x.message));}
+  try{oneTap.finishTicket(id,'FAILED_NO_RETRY',reason);}
+  catch(x){console.error('one tap outcome persistence',String(x.message));}
   await telegram('⚠️ ONE-TAP EXECUTION FAILED / REQUIRES CHECK\n'+
     ticket.symbol+' '+ticket.side+'\n'+reason+
     '\nDo not tap again. Check Binance Futures positions and active TP/SL.');
