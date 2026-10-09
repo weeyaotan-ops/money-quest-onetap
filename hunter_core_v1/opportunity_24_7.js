@@ -68,6 +68,17 @@ async function trackScorecard(state,now=Date.now()){
 }
 async function telegram(msg){if(!TOKEN||!CHAT)throw Error('Telegram credentials missing');const r=await fetch('https://api.telegram.org/bot'+TOKEN+'/sendMessage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:CHAT,text:msg,disable_web_page_preview:true}),signal:AbortSignal.timeout(10000)});const j=await r.json();if(!r.ok||!j.ok)throw Error('Telegram rejected message');}
 function fmt(v){return Number(v).toLocaleString('en-US',{useGrouping:false,maximumSignificantDigits:8});}
+// Display only: keep all saved timestamps and trading logic in UTC.
+// Format Last scan for the Telegram user in Singapore local time (UTC+8).
+function formatScanTime(ms){
+ const parts=new Intl.DateTimeFormat('en-US',{
+  timeZone:'Asia/Singapore',day:'2-digit',month:'short',year:'numeric',
+  hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true
+ }).formatToParts(new Date(ms));
+ const part=type=>parts.find(x=>x.type===type).value;
+ return part('day')+' '+part('month')+' '+part('year')+', '+
+   part('hour')+':'+part('minute')+':'+part('second')+' '+part('dayPeriod').toUpperCase()+' SGT';
+}
 function message(s){return ['🚨 '+s.symbol+' · '+s.side,'','Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),'Expected net R at TP2: '+s.netR.toFixed(2),'','15m candle confirmed · H1 trend aligned','Manual trade only · signal may be invalid if price moves'].join('\n');}
 function load(){
  if(!fs.existsSync(STORE)){
@@ -157,7 +168,7 @@ function formatReachedR(t){
 function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
  if(command==='/scan')return ['📡 26 major coins · latest confirmed scan',
-   'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'not yet'),
+   'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'not yet'),
    ...(candidates.length?candidates.slice(0,3).map((x,i)=>(i+1)+'. '+x.symbol+' '+x.side+' · '+x.netR.toFixed(2)+' net R'):['No qualified setups now.']),
    'Only closed M15 candles qualify.'].join('\n');
  if(command==='/signals')return candidates.length?
@@ -174,7 +185,7 @@ function commandAnswer(command,state,now=Date.now(),page=1){
   return [
    '📊 HTR Pulse V1.0 · Hit Count',
    'Scanner: 24/7 · '+COINS.length+' coins',
-   'Last scan: '+(state.lastScan?new Date(state.lastScan).toISOString():'pending'),
+   'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'pending'),
    'Scan errors: '+(state.errors??'unknown'),
    '',
    'Total signals: '+scored.tracked,
