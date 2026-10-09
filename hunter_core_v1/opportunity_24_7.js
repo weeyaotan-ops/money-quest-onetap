@@ -322,7 +322,7 @@ async function checkOneTapAccess(){
  try{
   await oneTap.accountReady();
   oneTapReady=true;
-  console.log(JSON.stringify({htrOneTap:'LIVE_API_AUTH_OK',margin:5,leverage:40}));
+  console.log(JSON.stringify({htrOneTap:'LIVE_API_AUTH_OK',margin:5,maxLeverage:40,leverageMode:'DYNAMIC_STOP_SAFE'}));
  }catch(e){
   oneTapReady=false;
   console.error('HTR_ONETAP_PREFLIGHT_FAILED',String(e.message||e));
@@ -364,9 +364,9 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        if(oneTapReady&&oneTap.ENABLED()){
         const ticket=oneTap.newTicket(s);
         oneTap.storeTicket(ticket);
-        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · 40x isolated\nCONFIRM within 3 min of notice (max 5 min from candle close).\nPrice must stay within 0.4% of Entry. Original SL / TP retained.\nPressing CONFIRM sends a REAL market order.';
+        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · AUTO ≤40x Isolated\nLeverage auto-adjusts so liquidation is beyond original SL.\nCONFIRM within 3 min of notice (max 5 min from candle close).\nPrice must stay within 0.4% of Entry. Original SL / TP retained.\nPressing CONFIRM sends a REAL market order.';
         extra.reply_markup={inline_keyboard:[[
-         {text:'⚡ CONFIRM LIVE 5U × 40x',callback_data:'htrtap:'+ticket.id}
+         {text:'⚡ CONFIRM LIVE 5U · AUTO ≤40x',callback_data:'htrtap:'+ticket.id}
         ]]};
        }
        await telegram(msg,extra);
@@ -536,8 +536,8 @@ async function acceptTap(q){
   const result=await oneTap.execute(ticket);
   oneTap.finishTicket(id,'FILLED_PROTECTED',result);
   await telegram('✅ LIVE ORDER PLACED + SL/TP VERIFIED\n'+
-   result.symbol+' '+result.side+' · 40x ISOLATED\n'+
-   'Margin: ~'+(result.notional/40).toFixed(2)+' USDT | Qty: '+result.quantity+
+   result.symbol+' '+result.side+' · '+result.leverage+'x ISOLATED\n'+
+   'Margin: ~'+(result.notional/result.leverage).toFixed(2)+' USDT | Qty: '+result.quantity+
    '\nFilled Entry: '+result.entry+'\nSL: '+result.stop+
    '\nTP1: '+result.tp1+' | TP2: '+result.tp2+
    '\nBinance order ID: '+result.orderId);
