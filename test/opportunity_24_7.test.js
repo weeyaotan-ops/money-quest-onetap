@@ -154,6 +154,23 @@ const tapSym={filters:[
  {filterType:'LOT_SIZE',minQty:'1',stepSize:'1',maxQty:'40000000'},
  {filterType:'MIN_NOTIONAL',notional:'5'},
  {filterType:'PRICE_FILTER',tickSize:'0.000001'}]};
+// HYPE post-entry regression: Binance position selection must check side and
+// not claim an exit succeeded from an ACK without a position re-query.
+assert.equal(oneTap.locatePosition([
+ {symbol:'HYPEUSDT',positionSide:'BOTH',positionAmt:'-1.8',marginType:'isolated',leverage:'31'}
+], 'HYPEUSDT','BOTH','SHORT').leverage,'31');
+assert.equal(oneTap.locatePosition([
+ {symbol:'HYPEUSDT',positionSide:'BOTH',positionAmt:'-1.8'}
+], 'HYPEUSDT','BOTH','LONG'),undefined);
+assert.equal(oneTap.locatePosition([
+ {symbol:'HYPEUSDT',positionSide:'SHORT',positionAmt:'-1.8'}
+], 'HYPEUSDT','SHORT','SHORT').positionAmt,'-1.8');
+const executorText=fs.readFileSync(path.join(__dirname,'../hunter_core_v1/pulse_one_tap.js'),'utf8');
+const stopStatement=executorText.indexOf("sl=await request('POST','/fapi/v1/algoOrder'");
+const verifyStatement=executorText.indexOf("const verified=await verifyLiqAfterFill(");
+assert(stopStatement>0&&verifyStatement>stopStatement,'SL must be placed before post-fill liquidation lookup');
+assert.match(executorText,/newOrderRespType:'RESULT',newClientOrderId:'HTRF'/);
+assert.match(executorText,/flattened=await verifyFlat/);
 assert.equal(oneTap.MARGIN,5);
 assert.equal(oneTap.LEVERAGE,40);
 assert.equal(oneTap.LIQ_BUFFER_RATE,0.005);
