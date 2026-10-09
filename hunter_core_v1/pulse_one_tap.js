@@ -2,6 +2,47 @@
 // HTR Pulse One-Tap Futures. Only invoked by an authenticated Telegram callback.
 // No auto entries; no withdrawal permissions. Live is separately opt-in via env.
 const crypto=require('node:crypto');
+const fs=require('node:fs'),path=require('node:path');
+const TICKET_STORE=process.env.HTR_PULSE_TICKET_STORE||'/data/htr_live_onetap.json';
+function readTickets(){
+ if(!fs.existsSync(TICKET_STORE))return {tickets:{}};
+ const v=JSON.parse(fs.readFileSync(TICKET_STORE,'utf8'));
+ if(!v||typeof v.tickets!=='object'||!v.tickets)ERR('Ticket database invalid');
+ return v;
+}
+function writeTickets(state){
+ fs.mkdirSync(path.dirname(TICKET_STORE),{recursive:true});
+ const tmp=TICKET_STORE+'.tmp';
+ fs.writeFileSync(tmp,JSON.stringify(state),{mode:0o600});
+ fs.renameSync(tmp,TICKET_STORE);
+}
+function storeTicket(ticket){
+ const state=readTickets();
+ if(Object.values(state.tickets).some(x=>x.key===ticket.key&&x.status==='PENDING'))ERR('Pending ticket for this signal already exists');
+ state.tickets[ticket.id]=ticket;
+ const cutoff=Date.now()-8*86400000;
+ for(const [id,t] of Object.entries(state.tickets)){
+  if(t.createdAt<cutoff&&t.status!=='PROCESSING')delete state.tickets[id];
+ }
+ writeTickets(state);
+}
+function claimTicket(id){
+ const state=readTickets(),t=state.tickets[id];
+ if(!t||t.status!=='PENDING')ERR('This ticket is invalid or already used');
+ try{validTicket(t);}catch(e){t.status='EXPIRED';writeTickets(state);throw e;}
+ t.status='PROCESSING';t.clickedAt=Date.now();
+ writeTickets(state);
+ return {...t};
+}
+function finishTicket(id,status,payload){
+ const state=readTickets(),t=state.tickets[id];
+ if(!t||t.status!=='PROCESSING')ERR('Ticket completion state mismatch');
+ t.status=status;t.doneAt=Date.now();
+ if(status==='FILLED_PROTECTED')t.result=payload;
+ else t.error=String(payload).slice(0,440);
+ writeTickets(state);
+}
+
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const ENABLED=()=>process.env.HTR_PULSE_ONETAP_LIVE==='1';
 const MARGIN=5,LEVERAGE=40,TTL_MS=60000,MAX_DRIFT=0.004;
@@ -71,7 +112,7 @@ function validTicket(t,now=Date.now()){
  if(now>t.expiresAt||t.expiresAt-now>TTL_MS||now<t.at||now-t.at>TTL_MS)ERR('Signal expired. Await a fresh signal.');
 }
 function newTicket(s,now=Date.now()){
- return {id:crypto.randomBytes(12).toString('hex'),symbol:s.symbol,side:s.side,
+ return {id:crypto.randomBytes(12).toString('hex'),key:s.key,symbol:s.symbol,side:s.side,
  entry:s.entry,stop:s.stop,tp1:s.tp1,tp2:s.tp2,
  at:s.at,expiresAt:Math.min(s.at+TTL_MS,now+TTL_MS),
  status:'PENDING',createdAt:now};
@@ -159,6 +200,16 @@ async function execute(t){
     newClientOrderId:'HTRF'+t.id.slice(0,24)},true);
    flattened=Number(close.executedQty)>0||close.status==='FILLED';
   }catch(e){closeErr=String(e.message);}
+  // Cancel only this ticket's created algo orders, NEVER unrelated orders.
+  // If flat could not be confirmed, leave SL in place and ask for manual check.
+  if(flattened){
+   for(const algo of [sl,tp1,tp2]){
+    if(!algo?.algoId)continue;
+    try{await request('DELETE','/fapi/v1/algoOrder',{
+     symbol:t.symbol,algoId:algo.algoId},true);}
+    catch(e){console.error('one-tap stale protection cleanup',t.symbol,String(e.message));}
+   }
+  }
   ERR('PROTECTION FAILED after live entry. Auto-close '+(flattened?'submitted':'NOT CONFIRMED')+
    '. CHECK BINANCE NOW. '+String(error.message)+(closeErr?' Close error '+closeErr:''));
  }
@@ -167,4 +218,4 @@ async function execute(t){
   tp1:actualTp1,tp2:actualTp2,slAlgoId:sl.algoId,tp1AlgoId:tp1.algoId,
   tp2AlgoId:tp2.algoId,filled,at:Date.now()};
 }
-module.exports={newTicket,validTicket,clampQty,roundTrigger,accountReady,execute,ENABLED,TTL_MS,MARGIN,LEVERAGE};
+module.exports={newTicket,validTicket,clampQty,roundTrigger,storeTicket,claimTicket,finishTicket,accountReady,execute,ENABLED,TTL_MS,MARGIN,LEVERAGE};
