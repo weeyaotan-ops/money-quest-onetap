@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {signal,message,rows,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers}=require('../hunter_core_v1/opportunity_24_7');
+const {signal,explainSignal,recordDiagnostic,diagnosis,rows,message,commandAnswer,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers}=require('../hunter_core_v1/opportunity_24_7');
 const now=Date.now();
 assert.deepEqual(rows([['0','1','2','0.5','1.5','100']])[0],{t:0,o:1,h:2,l:0.5,c:1.5,v:100});
 assert.equal(signal('BTCUSDT',[],[],now),null);
@@ -104,5 +104,42 @@ assert.match(commandAnswer('/scan',dualState),/TIAUSDT WATCH LONG.*H1 volume ×2
 assert.match(commandAnswer('/scan',dualState),/Hot Movers · WATCH ONLY \(1\): OGNUSDT/);
 assert.match(commandAnswer('/status',dualState),/Early watch: 1 \| Hot watch: 1/);
 assert.match(commandAnswer('/signals',dualState),/No active confirmed signals/);
+
+
+// Regression: a liquid Early pre-screen passes its market eligibility even if
+// the extra hourly watch badge does not. It should still be scanned for M15.
+assert(earlyPool(earlyTicker,earlyExchange,earlyBooks,[],eNow)
+ .some(x=>x.symbol==='QUIETUSDT'));
+assert.equal(selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,
+ {QUIETUSDT:barsQuiet},['TIAUSDT','LATEUSDT'],eNow).length,0);
+
+// The formal signal remains byte-for-byte identical in logic: diagnostics must
+// agree with it on qualified bars and never send stale alerts.
+const dNow=Date.parse('2026-10-09T12:15:00Z');
+const m15Good=Array.from({length:100},(_,i)=>({
+ t:dNow-(100-i)*900000,o:100,h:101,l:99,c:100,v:100
+}));
+m15Good[m15Good.length-1]={t:dNow-900000,o:100,h:102,l:99.8,c:101.8,v:260};
+const h1Good=Array.from({length:100},(_,i)=>({
+ t:dNow-(100-i)*3600000,o:90+i*0.2,h:91+i*0.2,
+ l:89+i*0.2,c:90+i*0.2,v:100
+}));
+const confirmed=signal('TESTUSDT',m15Good,h1Good,dNow+1000);
+assert(confirmed&&confirmed.side==='LONG');
+assert.equal(explainSignal('TESTUSDT',m15Good,h1Good,dNow+1000).reason,'QUALIFIED');
+assert.equal(signal('TESTUSDT',m15Good,h1Good,dNow+5*60000),null);
+const diagState={};
+recordDiagnostic(diagState,'TESTUSDT',m15Good,h1Good,dNow+5*60000);
+recordDiagnostic(diagState,'TESTUSDT',m15Good,h1Good,dNow+6*60000);
+assert.equal(diagState.diagnostics.samples.length,1);
+assert.equal(diagState.diagnostics.samples[0].reason,'MISSED_AGE');
+assert.equal(diagnosis(diagState,dNow+6*60000).missed,1);
+assert.match(commandAnswer('/scan',{...scoreState,diagnostics:diagState.diagnostics},dNow+6*60000),/Missed alert window: 1/);
+const noBreakout=m15Good.map(x=>({...x}));
+noBreakout[noBreakout.length-1]={...noBreakout.at(-1),c:100};
+assert.equal(explainSignal('TESTUSDT',noBreakout,h1Good,dNow+1000).reason,'NO_M15_BREAKOUT');
+const noVol=m15Good.map(x=>({...x}));
+noVol[noVol.length-1]={...noVol.at(-1),v:10};
+assert.equal(explainSignal('TESTUSDT',noVol,h1Good,dNow+1000).reason,'LOW_VOLUME');
 
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
