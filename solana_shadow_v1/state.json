@@ -6,9 +6,9 @@
   "startedAt": "2026-09-26T06:53:00Z",
   "bankrollReferenceSol": 100,
   "counts": {
-    "scans": 60,
-    "discovered": 9974,
-    "candidateDecisions": 9974,
+    "scans": 61,
+    "discovered": 10151,
+    "candidateDecisions": 10151,
     "eligibleSignals": 0,
     "resolved1h": 0,
     "resolved6h": 0,
@@ -47,11 +47,11 @@
     "Thresholds are frozen until 100 eligible candidates are resolved at the 6h horizon."
   ],
   "seenEligibleMints": {},
-  "lastRunAt": "2026-10-08T22:01:30.531Z",
+  "lastRunAt": "2026-10-09T02:05:25.821Z",
   "lastScanSummary": {
-    "startedAt": "2026-10-08T22:01:30.531Z",
-    "finishedAt": "2026-10-08T22:02:25.927Z",
-    "discovered": 183,
+    "startedAt": "2026-10-09T02:05:25.821Z",
+    "finishedAt": "2026-10-09T02:06:20.757Z",
+    "discovered": 177,
     "eligible": 0
   }
 }
