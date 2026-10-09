@@ -362,14 +362,12 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        // Pending tickets are persisted before sending, so callbacks cannot race a save.
        let msg=message(s),extra={};
        if(oneTapReady&&oneTap.ENABLED()){
-        state.oneTap||={tickets:{}};state.oneTap.tickets||={};
         const ticket=oneTap.newTicket(s);
-        state.oneTap.tickets[ticket.id]=ticket;
+        oneTap.storeTicket(ticket);
         msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · 40x isolated\nPressing CONFIRM sends a REAL market order. Original SL / TP retained.';
         extra.reply_markup={inline_keyboard:[[
          {text:'⚡ CONFIRM LIVE 5U × 40x',callback_data:'htrtap:'+ticket.id}
         ]]};
-        save(state);
        }
        await telegram(msg,extra);
        const sentAt=Date.now();
@@ -382,7 +380,6 @@ async function scan(){if(inProgress)return;inProgress=true;try{
    }));
  }
  const cutoff=Date.now()-8*86400000;for(const [k,t] of Object.entries(state.sent))if(t<cutoff)delete state.sent[k];
- if(state.oneTap?.tickets){for(const [id,t] of Object.entries(state.oneTap.tickets))if(t.createdAt<cutoff&&t.status!=='PROCESSING')delete state.oneTap.tickets[id];}
  latestCandidates=current.sort((a,b)=>b.netR-a.netR);state.latestCandidates=latestCandidates;state.lastScan=Date.now();state.errors=errors;state.matches=matches;
  const audit=diagnosis(state,state.lastScan);
  save(state);lastScan=state.lastScan;lastErrors=errors;lastMatches=matches;
@@ -508,17 +505,15 @@ async function acceptTap(q){
  const messageId=q.message?.message_id,chat=String(q.message?.chat?.id||'');
  await botApi('answerCallbackQuery',{callback_query_id:q.id,
   text:'Checking live Binance order...',show_alert:false}).catch(()=>{});
- const state=load(),ticket=state.oneTap?.tickets?.[id];
  if(!oneTapReady||!oneTap.ENABLED())return telegram('One-Tap unavailable: Binance API preflight not verified. No order sent.');
- if(!ticket||ticket.status!=='PENDING')return telegram('One-Tap already used or invalid. No duplicate order sent.');
- try{oneTap.validTicket(ticket);}
- catch(e){ticket.status='EXPIRED';save(state);return telegram('One-Tap rejected: '+String(e.message));}
- ticket.status='PROCESSING';ticket.clickedAt=Date.now();save(state);
+ let ticket;
+ try{ticket=oneTap.claimTicket(id);}
+ catch(e){return telegram('One-Tap rejected: '+String(e.message||e));}
  if(messageId)botApi('editMessageReplyMarkup',{chat_id:chat,message_id:messageId,reply_markup:{inline_keyboard:[]}})
    .catch(e=>console.error('clear one-tap keyboard',String(e.message)));
  try{
   const result=await oneTap.execute(ticket);
-  ticket.status='FILLED_PROTECTED';ticket.result=result;ticket.doneAt=Date.now();save(state);
+  oneTap.finishTicket(id,'FILLED_PROTECTED',result);
   await telegram('✅ LIVE ORDER PLACED + SL/TP VERIFIED\n'+
    result.symbol+' '+result.side+' · 40x ISOLATED\n'+
    'Margin: ~'+(result.notional/40).toFixed(2)+' USDT | Qty: '+result.quantity+
@@ -526,10 +521,10 @@ async function acceptTap(q){
    '\nTP1: '+result.tp1+' | TP2: '+result.tp2+
    '\nBinance order ID: '+result.orderId);
  }catch(e){
-  ticket.status='FAILED_NO_RETRY';ticket.error=String(e.message||e).slice(0,420);
-  ticket.doneAt=Date.now();save(state);
+  const reason=String(e.message||e).slice(0,420);
+  try{oneTap.finishTicket(id,'FAILED_NO_RETRY',reason);}catch(x){console.error('one tap outcome persistence',String(x.message));}
   await telegram('⚠️ ONE-TAP EXECUTION FAILED / REQUIRES CHECK\n'+
-    ticket.symbol+' '+ticket.side+'\n'+ticket.error+
+    ticket.symbol+' '+ticket.side+'\n'+reason+
     '\nDo not tap again. Check Binance Futures positions and active TP/SL.');
  }
 }
