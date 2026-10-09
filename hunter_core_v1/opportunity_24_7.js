@@ -11,7 +11,7 @@ const COINS=(process.env.OPPORTUNITY_SYMBOLS||'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,B
 
 const ALT_SLOTS=Math.max(0,Math.min(12,Number(process.env.OPPORTUNITY_ALT_SLOTS)||10));
 const ALT_REFRESH_MS=10*60000;
-let altCache={symbols:[],updatedAt:0,error:null};
+let altCache={symbols:[],hot:[],early:[],hotDetails:[],earlyDetails:[],updatedAt:0,error:null};
 // Alternative-coin radar uses only active USDT perpetuals with liquid order books.
 // It does not send a trade until the existing M15 breakout system confirms one.
 function selectAltcoins(tickers,exchange,books,core=COINS,now=Date.now(),slots=ALT_SLOTS){
@@ -39,6 +39,72 @@ function selectAltcoins(tickers,exchange,books,core=COINS,now=Date.now(),slots=A
    b.rank-a.rank||a.symbol.localeCompare(b.symbol));
  return selected.slice(0,slots);
 }
+// Early Movers: liquid but not yet heavily extended (0.8% to <8% 24h change).
+// 24h ticker is pre-screen only; a completed hourly bar must show both
+// extra volume and price near a recent breakout level before it is watchlisted.
+function earlyPool(tickers,exchange,books,excluded,now=Date.now(),limit=24){
+ const listed=new Map((exchange.symbols||[]).filter(x=>x.status==='TRADING'&&
+   x.quoteAsset==='USDT'&&x.contractType==='PERPETUAL').map(x=>[x.symbol,x]));
+ const orderbook=new Map((books||[]).map(x=>[x.symbol,x]));
+ const skip=new Set(excluded);
+ return (tickers||[]).filter(x=>{
+  if(skip.has(x.symbol)||!listed.has(x.symbol)||!/^[A-Z0-9]+USDT$/.test(x.symbol))return false;
+  const vol=Number(x.quoteVolume),move=Math.abs(Number(x.priceChangePercent));
+  const count=Number(x.count),book=orderbook.get(x.symbol),bid=Number(book?.bidPrice),ask=Number(book?.askPrice);
+  const spread=(ask-bid)*200/(ask+bid);
+  return vol>=25000000&&Number.isFinite(move)&&move>=0.8&&move<8&&count>=3000&&
+    now-Number(listed.get(x.symbol).onboardDate)>=5*86400000&&
+    bid>0&&ask>bid&&spread<=0.15;
+ }).sort((a,b)=>{
+  const rank=x=>Math.log10(Number(x.quoteVolume)/1000000)*4+Math.abs(Number(x.priceChangePercent));
+  return rank(b)-rank(a)||a.symbol.localeCompare(b.symbol);
+ }).slice(0,limit);
+}
+function analyzeEarlyBars(raw,now=Date.now()){
+ if(!Array.isArray(raw))return null;
+ const bars=rows(raw).filter(x=>x.t+3600000<=now);
+ if(bars.length<18)return null;
+ const recent=bars.at(-1),previous=bars.slice(-13,-1);
+ const avg=previous.slice(-8).reduce((a,b)=>a+b.v,0)/8;
+ const ratio=recent.v/avg,range=atr(bars,14);
+ if(!(avg>0)||!(range>0)||!Number.isFinite(ratio)||ratio<1.2)return null;
+ const high=Math.max(...previous.map(x=>x.h)),low=Math.min(...previous.map(x=>x.l));
+ const nearHigh=(high-recent.c)/range,nearLow=(recent.c-low)/range;
+ // No chasing an hourly bar that has already exploded far beyond its previous range.
+ const notExtended=Math.abs(recent.c-recent.o)<=2.2*range;
+ const up=notExtended&&recent.c>previous.at(-1).c&&nearHigh>=-0.35&&nearHigh<=0.75;
+ const down=notExtended&&recent.c<previous.at(-1).c&&nearLow>=-0.35&&nearLow<=0.75;
+ if(!up&&!down)return null;
+ const side=up&&(!down||nearHigh<=nearLow)?'WATCH LONG':'WATCH SHORT';
+ const gap=side==='WATCH LONG'?nearHigh:nearLow;
+ return {side,volumeRatio:ratio,gapAtr:gap,barClosedAt:recent.t+3600000};
+}
+function selectEarlyMovers(tickers,exchange,books,barsBySymbol,exclude=COINS,
+  now=Date.now(),slots=8){
+ const pool=earlyPool(tickers,exchange,books,exclude,now);
+ return pool.map(x=>{
+  const setup=analyzeEarlyBars(barsBySymbol[x.symbol],now);
+  if(!setup)return null;
+  const pct=Number(x.priceChangePercent),volume=Number(x.quoteVolume);
+  return {symbol:x.symbol,changePct:pct,volume,...setup,
+    rank:setup.volumeRatio*5+Math.log10(volume/1000000)*3+
+      Math.abs(pct)*0.3-Math.max(0,setup.gapAtr)*2};
+ }).filter(Boolean).sort((a,b)=>b.rank-a.rank||a.symbol.localeCompare(b.symbol))
+  .slice(0,Math.max(0,slots));
+}
+async function optionalOiChange(symbol){
+ try{
+  // Binance can deny historical OI in some regions; this is NEVER a hard gate.
+  const url=API+'/futures/data/openInterestHist?symbol='+encodeURIComponent(symbol)+
+    '&period=1h&limit=2';
+  const r=await fetch(url,{signal:AbortSignal.timeout(2500)});
+  if(!r.ok)return null;
+  const j=await r.json();
+  const a=Number(j?.[0]?.sumOpenInterestValue),b=Number(j?.at(-1)?.sumOpenInterestValue);
+  return Array.isArray(j)&&j.length>=2&&a>0&&Number.isFinite(b)?
+    Math.round((b/a-1)*10000)/100:null;
+ }catch{return null;}
+}
 async function refreshAltcoins(now=Date.now()){
  if(altCache.updatedAt&&now-altCache.updatedAt<ALT_REFRESH_MS)return altCache;
  try{
@@ -46,14 +112,32 @@ async function refreshAltcoins(now=Date.now()){
    request(API+'/fapi/v1/ticker/24hr'),request(API+'/fapi/v1/exchangeInfo'),
    request(API+'/fapi/v1/ticker/bookTicker')
   ]);
-  const candidates=selectAltcoins(ticker,exchange,books,COINS,now);
-  altCache={symbols:candidates.map(x=>x.symbol),updatedAt:Date.now(),error:null};
-  console.log(JSON.stringify({altRadar:'UPDATED',added:altCache.symbols.length,
-   symbols:altCache.symbols}));
+  const hotDetails=selectAltcoins(ticker,exchange,books,COINS,now);
+  const hot=hotDetails.map(x=>x.symbol);
+  const pool=earlyPool(ticker,exchange,books,[...COINS,...hot],now);
+  const barsBySymbol={};
+  // Four requests at a time; unsuccessful symbols are skipped, never guessed.
+  for(let i=0;i<pool.length;i+=4){
+   await Promise.all(pool.slice(i,i+4).map(async x=>{
+    try{barsBySymbol[x.symbol]=await request(API+'/fapi/v1/klines?symbol='+
+      encodeURIComponent(x.symbol)+'&interval=1h&limit=40');}
+    catch(e){console.error('early bars',x.symbol,String(e.message||e));}
+   }));
+  }
+  const earlyDetails=selectEarlyMovers(ticker,exchange,books,barsBySymbol,
+    [...COINS,...hot],now,8);
+  await Promise.all(earlyDetails.slice(0,4).map(async x=>{
+   x.oiChangePct=await optionalOiChange(x.symbol);
+  }));
+  const early=earlyDetails.map(x=>x.symbol);
+  altCache={symbols:[...hot,...early],hot,early,hotDetails,earlyDetails,
+   updatedAt:Date.now(),error:null};
+  console.log(JSON.stringify({altRadar:'DUAL_UPDATED',hot,early,
+   earlyOI:earlyDetails.map(x=>({symbol:x.symbol,oiChangePct:x.oiChangePct??null}))}));
  }catch(e){
-  // Keep the core scanner alive even if the broad market endpoint is rate limited.
+  // Keep the last valid watchlist and the main scanner alive on a network failure.
   altCache={...altCache,updatedAt:Date.now(),error:String(e.message||e)};
-  console.error('alt radar refresh failed',altCache.error);
+  console.error('dual radar refresh failed',altCache.error);
  }
  return altCache;
 }
@@ -161,6 +245,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const alt=await refreshAltcoins();
  const scanCoins=[...new Set([...COINS,...alt.symbols])];
  state.universe={symbols:scanCoins,altcoins:alt.symbols,core:COINS.length,
+   hot:alt.hot,early:alt.early,hotDetails:alt.hotDetails,earlyDetails:alt.earlyDetails,
    updatedAt:alt.updatedAt,radarError:alt.error};
  // Baseline pre-existing milestones before scanning to avoid retroactive spam.
  if(initializeHitAlerts(state)){save(state);console.log('HIT_ALERTS_BASELINE_READY');}
@@ -193,7 +278,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const cutoff=Date.now()-8*86400000;for(const [k,t] of Object.entries(state.sent))if(t<cutoff)delete state.sent[k];
  latestCandidates=current.sort((a,b)=>b.netR-a.netR);state.latestCandidates=latestCandidates;state.lastScan=Date.now();state.errors=errors;state.matches=matches;
  save(state);lastScan=state.lastScan;lastErrors=errors;lastMatches=matches;
- console.log(JSON.stringify({scanner:'OPPORTUNITY_24_7',symbols:scanCoins.length,altcoins:alt.symbols.length,at:new Date(lastScan).toISOString(),matches,errors}));
+ console.log(JSON.stringify({scanner:'OPPORTUNITY_24_7',symbols:scanCoins.length,hot:alt.hot.length,early:alt.early.length,altcoins:alt.symbols.length,at:new Date(lastScan).toISOString(),matches,errors}));
  }finally{inProgress=false;}}
 // Only three public commands. Telegram's old message keyboards cannot be deleted retroactively.
 async function botApi(method,body){
@@ -223,7 +308,15 @@ function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
  if(command==='/scan')return ['📡 '+(state.universe?.symbols?.length||COINS.length)+' coins · latest confirmed scan',
    'Altcoin radar: '+(state.universe?.altcoins?.length||0)+' active movers',
-   ...(state.universe?.altcoins?.length?['Watchlist (not entry signals): '+state.universe.altcoins.slice(0,7).join(', ')]:[]),
+   ...(state.universe?.hot?[
+    'Early Movers · WATCH ONLY ('+(state.universe.early?.length||0)+'):',
+    ...(state.universe.earlyDetails||[]).slice(0,3).map(x=>
+      x.symbol+' '+x.side+' | 24h '+x.changePct.toFixed(1)+'% | H1 volume ×'+x.volumeRatio.toFixed(1)+
+      (Number.isFinite(x.oiChangePct)?' | OI '+(x.oiChangePct>=0?'+':'')+x.oiChangePct.toFixed(1)+'%':'')),
+    'Hot Movers · WATCH ONLY ('+(state.universe.hot?.length||0)+'): '+
+      (state.universe.hot||[]).slice(0,5).join(', ')
+   ]:state.universe?.altcoins?.length?
+    ['Watchlist (not entry signals): '+state.universe.altcoins.slice(0,7).join(', ')]:[]),
    ...(state.universe?.radarError?['Altcoin data temporarily unavailable; core scanner continues.']:[]),
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'not yet'),
    ...(candidates.length?candidates.slice(0,3).map((x,i)=>(i+1)+'. '+x.symbol+' '+x.side+' · '+x.netR.toFixed(2)+' net R'):['No qualified setups now.']),
@@ -243,6 +336,7 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    '📊 HTR Pulse V1.0 · Hit Count',
    'Scanner: 24/7 · '+(state.universe?.symbols?.length||COINS.length)+' coins',
    'Altcoin radar: '+(state.universe?.altcoins?.length||0)+' active movers',
+   ...(state.universe?.hot?['Early watch: '+(state.universe.early?.length||0)+' | Hot watch: '+(state.universe.hot?.length||0)]:[]),
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'pending'),
    'Scan errors: '+(state.errors??'unknown'),
    '',
@@ -300,7 +394,7 @@ function handleWebhook(req,res){
 async function setupWebhook(){
  if(!TOKEN||!CHAT){console.error('Telegram command registration disabled: missing credentials');return;}
  await botApi('setMyCommands',{commands:[
-  {command:'scan',description:'Scan 26 major coins'},
+  {command:'scan',description:'Core + Early / Hot Movers radar'},
   {command:'signals',description:'Confirmed LONG / SHORT signals'},
   {command:'status',description:'Scanner status'}]});
  await botApi('setWebhook',{url:'https://'+HOOK_DOMAIN+HOOK_PATH,
@@ -316,4 +410,4 @@ if(require.main===module){
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
-module.exports={signal,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR,selectAltcoins};
+module.exports={signal,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers};
