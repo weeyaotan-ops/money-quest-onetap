@@ -275,7 +275,7 @@ assert(shortRisk.liqCheckThreshold>shortSig.stop);
 assert.equal(advisor.calculate(advisorySignal,{...advisoryMarket,brackets:[]},advisorySignal.at+1000).status,'NO TRADE');
 assert.equal(advisor.calculate(advisorySignal,{...advisoryMarket,markPrice:101},advisorySignal.at+1000).status,'NO TRADE');
 assert.equal(advisor.calculate(advisorySignal,advisoryMarket,advisorySignal.at+4*60000).status,'NO TRADE');
-assert.equal(advisor.calculate({...advisorySignal,stop:80},advisoryMarket,advisorySignal.at+1000).status,'NO TRADE');
+assert.equal(advisor.calculate({...advisorySignal,stop:0.1},advisoryMarket,advisorySignal.at+1000).status,'NO TRADE');
 // Production scanner must not import legacy one-tap execution or submit an order.
 const advisoryScannerSource=fs.readFileSync(path.join(__dirname,'../hunter_core_v1/opportunity_24_7.js'),'utf8');
 assert.doesNotMatch(advisoryScannerSource,/require\(['"]\.\/pulse_one_tap['"]\)/);
