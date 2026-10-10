@@ -3,6 +3,7 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
 const {initialize:initializeHitAlerts,collect:collectHitAlerts,deliver:deliverHitAlerts}=require('./pulse_hit_alerts');
+const riskAdvisor=require('./pulse_risk_advisor');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -172,7 +173,13 @@ function signal(symbol,m15,h1,now=Date.now()){
  if(netR<1.5)return null;
  const body=Math.abs(c.c-c.o),range=c.h-c.l;
  if(!(range>0)||body/range<0.50)return null;
- return {symbol,side,entry:c.c,stop,tp1,tp2,netR,at:c.t+900000,key:symbol+'|'+side+'|'+(c.t+900000)};
+ const setupScore=riskAdvisor.scoreSetup({
+  volumeRatio:c.v/Math.max(avgVol,1e-9),bodyRatio:body/range,
+  netR,extensionAtr:extension/vol,
+  trendSpread:Math.abs(h20-h50)/c.c
+ });
+ return {symbol,side,entry:c.c,stop,tp1,tp2,netR,setupScore,
+  at:c.t+900000,key:symbol+'|'+side+'|'+(c.t+900000)};
 }
 
 // Diagnostic mirror of signal(). Do not loosen ANY order-entry condition.
@@ -288,7 +295,34 @@ function formatScanTime(ms){
  return part('day')+' '+part('month')+' '+part('year')+', '+
    part('hour')+':'+part('minute')+':'+part('second')+' '+part('dayPeriod').toUpperCase()+' SGT';
 }
-function message(s){return ['🚨 '+s.symbol+' · '+s.side,'','Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),'Expected net R at TP2: '+s.netR.toFixed(2),'','15m candle confirmed · H1 trend aligned','Manual trade only · signal may be invalid if price moves'].join('\n');}
+function message(s,advice=s.riskAdvice,now=Date.now()){
+ const lines=['🚨 '+s.symbol+' · '+s.side,'',
+  'Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),
+  'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),
+  'Expected net R at TP2: '+s.netR.toFixed(2),'',
+  '15m candle confirmed · H1 trend aligned',
+  'Manual trade only · NO automatic orders','',
+  'RISK ADVISOR · ISOLATED ONLY',
+  'Setup score: '+(Number.isFinite(s.setupScore)?s.setupScore+'/100 (heuristic, NOT win probability)':'unavailable'),
+  'Margin budget: '+(Number.isFinite(advice?.margin)?advice.margin.toFixed(2)+' USDT (max 10U)':'unavailable')];
+ if(!advice||!Number.isFinite(s.at)||now-s.at>180000||now<s.at){
+   lines.push('NO TRADE · Risk check unavailable or signal expired');
+ }else if(advice.status==='NO TRADE'){
+   lines.push('NO TRADE · '+advice.reason);
+ }else{
+   lines.push('Leverage: '+advice.leverage+'x (max 40x)',
+    'Manual qty: '+fmt(advice.quantity)+' '+s.symbol.replace('USDT',''),
+    'Estimated position: '+advice.notional.toFixed(2)+' USDT',
+    'Estimated loss at SL: -'+advice.estimatedLoss.toFixed(2)+' USDT (incl. estimated fees/slippage; NOT capped at 2U)',
+    'Modeled headroom at SL: +'+advice.modelBuffer.toFixed(2)+' USDT',
+    'Model: PASS · Actual liquidation UNVERIFIED',
+    'Binance isolated liquidation MUST be '+(s.side==='LONG'?'BELOW ':'ABOVE ')+fmt(advice.liqCheckThreshold),
+    'CHECK BINANCE · If actual liquidation/qty differs or cannot be verified: NO TRADE',
+    'Prices can slip beyond SL; loss may exceed estimate.');
+ }
+ lines.push('No One-Tap. You must place and verify orders manually.');
+ return lines.join('\n');
+}
 function load(){
  if(!fs.existsSync(STORE)){
   if(fs.existsSync(STORE+'.bak'))return JSON.parse(fs.readFileSync(STORE+'.bak','utf8'));
@@ -342,8 +376,16 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        const checkedAt=Date.now();
        recordDiagnostic(state,symbol,a,b,checkedAt);
        const s=signal(symbol,a,b,checkedAt);if(!s)return;
-       matches++;current.push(s);if(state.sent[s.key])return;
-       // Informational signal only; no exchange order can be placed here.
+       matches++;
+       if(state.sent[s.key]){
+         const previous=(state.latestCandidates||[]).find(x=>x.key===s.key);
+         if(previous?.riskAdvice)s.riskAdvice=previous.riskAdvice;
+         current.push(s);
+         return;
+       }
+       // Purely read-only risk data. Never submit an order to Binance.
+       s.riskAdvice=await riskAdvisor.advise(s);
+       current.push(s);
        await telegram(message(s));
        const sentAt=Date.now();
        state.sent[s.key]=sentAt;
