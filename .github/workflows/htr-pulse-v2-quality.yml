@@ -1,0 +1,24 @@
+name: HTR Pulse V2 quality check
+on:
+  push:
+    branches: [htr-pulse-v2-quality-20261010]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax and safety
+        run: |
+          node --check hunter_core_v1/opportunity_24_7.js
+          node --check hunter_core_v1/pulse_risk_advisor.js
+          node --check hunter_core_v1/pulse_scorecard.js
+          node --check test/opportunity_24_7.test.js
+      - name: Strategy, safety and scorecard regression
+        run: |
+          node test/opportunity_24_7.test.js
+          node test/pulse_scorecard.test.js
+          node test/pulse_hit_alerts.test.js
