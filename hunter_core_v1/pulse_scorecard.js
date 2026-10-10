@@ -24,7 +24,7 @@ function createTrade(s,notifiedAt=Date.now()){
  const received=Number(notifiedAt);
  if(!Number.isFinite(received))throw Error('invalid notification time');
  return {
-  key:String(s.key),symbol:String(s.symbol),side,entry,stop,tp1,tp2,
+  key:String(s.key),symbol:String(s.symbol),side,mode:String(s.mode||'LEGACY'),entry,stop,tp1,tp2,
   notifiedAt:received,eligibleFrom:Number(s.eligibleFrom)||Math.ceil(received/MINUTE)*MINUTE,
   source:s.source||'HTR_PULSE_TELEGRAM',timingNote:s.timingNote||null,
   accountingVersion:VERSION,policy:'LEVEL_TOUCH_ONLY',
