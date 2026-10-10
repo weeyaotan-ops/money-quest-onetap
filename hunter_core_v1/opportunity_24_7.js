@@ -544,6 +544,11 @@ function commandAnswer(command,state,now=Date.now(),page=1){
   const scored=scoreStats(state.scorecard||{trades:[]});
   const size=6,maxPage=Math.max(1,Math.ceil(all.length/size));
   const selectedPage=Math.max(1,Math.min(maxPage,Number(page)||1));
+  const modeStats=['MOMENTUM','RETEST','LEGACY'].map(mode=>{
+   const batch=all.filter(x=>(x.mode||'LEGACY')===mode);
+   return {mode,total:batch.length,tp1:batch.filter(x=>x.tp1Hit).length,
+    tp2:batch.filter(x=>x.tp2Hit).length,sl:batch.filter(x=>x.slHit).length};
+  }).filter(x=>x.total>0);
   const results=[...all].sort((a,b)=>b.notifiedAt-a.notifiedAt)
     .slice((selectedPage-1)*size,selectedPage*size);
   const hit=x=>x?'✓':'—';
@@ -562,6 +567,8 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    '🎯 TP1 hit: '+scored.tp1Hits+' (1R target)',
    '🎯 TP2 hit: '+scored.tp2Hits+' (2R target)',
    'Still tracking: '+scored.open,
+   'By entry method (level touches, NOT profit):',
+   ...modeStats.map(x=>x.mode+': '+x.total+' signals | TP1 '+x.tp1+' | TP2 '+x.tp2+' | SL '+x.sl),
    scored.ambiguous?'Both sides touched in same minute (order unknown): '+scored.ambiguous:null,
    scored.dataGaps?'Incomplete price history: '+scored.dataGaps:null,
    '',
