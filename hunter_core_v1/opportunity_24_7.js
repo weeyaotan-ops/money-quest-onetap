@@ -3,7 +3,6 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
 const {initialize:initializeHitAlerts,collect:collectHitAlerts,deliver:deliverHitAlerts}=require('./pulse_hit_alerts');
-const oneTap=require('./pulse_one_tap');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -315,24 +314,10 @@ function save(s){
  fs.renameSync(tmp,STORE);
 }
 let lastScan=0,lastErrors=0,lastMatches=0,inProgress=false;
-let oneTapReady=false,oneTapLastCheck=0;
-async function checkOneTapAccess(){
- if(!oneTap.ENABLED()){oneTapReady=false;return;}
- oneTapLastCheck=Date.now();
- try{
-  await oneTap.accountReady();
-  oneTapReady=true;
-  console.log(JSON.stringify({htrOneTap:'LIVE_API_AUTH_OK',margin:5,maxLeverage:40,leverageMode:'DYNAMIC_STOP_SAFE'}));
- }catch(e){
-  oneTapReady=false;
-  console.error('HTR_ONETAP_PREFLIGHT_FAILED',String(e.message||e));
- }
-}
 let latestCandidates=[];
 async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
- if(oneTap.ENABLED()&&Date.now()-oneTapLastCheck>300000)await checkOneTapAccess();
- state.oneTapHealth=oneTap.ENABLED()?(oneTapReady?'READY':'API_UNAVAILABLE'):'DISABLED';
+ delete state.oneTapHealth; // discard obsolete One-Tap state
  const alt=await refreshAltcoins();
  const scanCoins=[...new Set([...COINS,...alt.symbols,...(alt.preScreen||[])])];
  state.universe={symbols:scanCoins,altcoins:alt.symbols,core:COINS.length,
@@ -358,18 +343,8 @@ async function scan(){if(inProgress)return;inProgress=true;try{
        recordDiagnostic(state,symbol,a,b,checkedAt);
        const s=signal(symbol,a,b,checkedAt);if(!s)return;
        matches++;current.push(s);if(state.sent[s.key])return;
-       // One-Tap requires an explicit Telegram button press; signals never auto-trade.
-       // Pending tickets are persisted before sending, so callbacks cannot race a save.
-       let msg=message(s),extra={};
-       if(oneTapReady&&oneTap.ENABLED()){
-        const ticket=oneTap.newTicket(s);
-        oneTap.storeTicket(ticket);
-        msg+='\n\n⚡ LIVE One-Tap · 5 USDT margin · AUTO ≤40x Isolated\nLeverage auto-adjusts so liquidation is beyond original SL.\nCONFIRM within 3 min of notice (max 5 min from candle close).\nPrice must stay within 0.4% of Entry. Original SL / TP retained.\nPressing CONFIRM sends a REAL market order.';
-        extra.reply_markup={inline_keyboard:[[
-         {text:'⚡ CONFIRM LIVE 5U · AUTO ≤40x',callback_data:'htrtap:'+ticket.id}
-        ]]};
-       }
-       await telegram(msg,extra);
+       // Informational signal only; no exchange order can be placed here.
+       await telegram(message(s));
        const sentAt=Date.now();
        state.sent[s.key]=sentAt;
        if(!state.scorecard.trades.some(t=>t.key===s.key)){
@@ -458,7 +433,6 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    ...(state.universe?.hot?['Early watch: '+(state.universe.early?.length||0)+' | Hot watch: '+(state.universe.hot?.length||0)]:[]),
    'Last scan: '+(state.lastScan?formatScanTime(state.lastScan):'pending'),
    'Scan errors: '+(state.errors??'unknown'),
-   'One-Tap Binance: '+(state.oneTapHealth||'DISABLED'),
    'Diagnostics (24h): '+diagnosis(state,now).sampled+' completed M15 checks'+
      ' | Late qualified: '+diagnosis(state,now).missed,
    '',
@@ -492,63 +466,18 @@ const HOOK_DOMAIN=process.env.OPPORTUNITY_WEBHOOK_DOMAIN||'crypto-signal-publish
 const HOOK_SECRET=TOKEN?crypto.createHash('sha256').update(TOKEN+'|HTR-V3-WEBHOOK').digest('hex'):'';
 const HOOK_PATH='/telegram/'+HOOK_SECRET;
 const HOOK_REQUEST_TOKEN=TOKEN?crypto.createHash('sha256').update(TOKEN+'|HTR-ONE-TAP-SECRET').digest('hex'):'';
-function isAuthorizedTap(q){
+// Previously sent Telegram messages can still contain historical CONFIRM buttons.
+// Acknowledge and remove those buttons without calling an exchange.
+async function rejectLegacyTap(q){
+ try{await botApi('answerCallbackQuery',{callback_query_id:q.id,
+   text:'One-Tap removed. No trade executed.',show_alert:true});}
+ catch(e){console.error('legacy button acknowledgement',String(e.message||e));}
  const chat=String(q.message?.chat?.id||'');
- const from=String(q.from?.id||'');
- const authorized=String(process.env.TELEGRAM_AUTH_USER_ID||CHAT||'');
- // If this is a group chat, a private user-id allowlist must be configured.
- return chat===String(CHAT)&&from===authorized&&!!authorized&&
-   (String(CHAT).startsWith('-')?!!process.env.TELEGRAM_AUTH_USER_ID:true);
-}
-async function clearTapKeyboard(chat,messageId){
- if(!messageId||!chat)return;
+ const messageId=q.message?.message_id;
+ if(chat!==String(CHAT)||!messageId)return;
  try{await botApi('editMessageReplyMarkup',{chat_id:chat,message_id:messageId,
    reply_markup:{inline_keyboard:[]}});}
- catch(e){console.error('clear one-tap keyboard',String(e.message||e));}
-}
-async function answerTap(q,text,alert=false){
- try{await botApi('answerCallbackQuery',{callback_query_id:q.id,
-   text:String(text).slice(0,180),show_alert:alert});}
- catch(e){console.error('answer One-Tap callback',String(e.message||e));}
-}
-async function acceptTap(q){
- const id=String(q.data||'').slice('htrtap:'.length);
- const messageId=q.message?.message_id,chat=String(q.message?.chat?.id||'');
- if(!oneTapReady||!oneTap.ENABLED()){
-  await answerTap(q,'Live One-Tap unavailable. No order submitted.',true);
-  await clearTapKeyboard(chat,messageId);
-  return;
- }
- let ticket;
- try{ticket=oneTap.claimTicket(id);}
- catch(e){
-  const reason=String(e.message||e);
-  await answerTap(q,reason.includes('expired')?
-   'Signal expired. Wait for a fresh signal.':
-   'This button has already been used or is unavailable.',true);
-  // Remove expired/used button so Telegram no longer invites repeat clicks.
-  await clearTapKeyboard(chat,messageId);
-  return;
- }
- await answerTap(q,'Submitting Binance live order...',false);
- await clearTapKeyboard(chat,messageId);
- try{
-  const result=await oneTap.execute(ticket);
-  oneTap.finishTicket(id,'FILLED_PROTECTED',result);
-  await telegram('✅ LIVE ORDER PLACED + SL/TP VERIFIED\n'+
-   result.symbol+' '+result.side+' · '+result.leverage+'x ISOLATED\n'+
-   'Margin: ~'+(result.notional/result.leverage).toFixed(2)+' USDT | Qty: '+result.quantity+
-   '\nFilled Entry: '+result.entry+'\nSL: '+result.stop+
-   '\nTP1: '+result.tp1+' | TP2: '+result.tp2+
-   '\nBinance order ID: '+result.orderId);
- }catch(e){
-  const reason=String(e.message||e).slice(0,420);
-  try{oneTap.finishTicket(id,'FAILED_NO_RETRY',reason);}
-  catch(x){console.error('one tap outcome persistence',String(x.message));}
-  await telegram('⚠️ ONE-TAP EXECUTION FAILED / REQUIRES CHECK\n'+
-    ticket.symbol+' '+ticket.side+'\n'+reason+
-    '\nDo not tap again. Check Binance Futures positions and active TP/SL.');
- }
+ catch(e){console.error('legacy button cleanup',String(e.message||e));}
 }
 let commandQueue=Promise.resolve();
 function handleWebhook(req,res){
@@ -564,13 +493,8 @@ function handleWebhook(req,res){
   let u;try{u=JSON.parse(body)}catch{res.writeHead(400);res.end();return;}
   res.writeHead(200);res.end('OK');
   if(u.callback_query&&String(u.callback_query.data||'').startsWith('htrtap:')){
-   const q=u.callback_query;
-   if(!isAuthorizedTap(q)){
-    botApi('answerCallbackQuery',{callback_query_id:q.id,text:'Not authorized',show_alert:true}).catch(()=>{});
-    return;
-   }
-   commandQueue=commandQueue.catch(()=>{}).then(()=>acceptTap(q))
-    .catch(e=>console.error('One-Tap callback error',String(e.message)));
+   commandQueue=commandQueue.catch(()=>{}).then(()=>rejectLegacyTap(u.callback_query))
+    .catch(e=>console.error('legacy button rejected',String(e.message||e)));
    return;
   }
   const chat=String(u.message?.chat?.id||'');
@@ -598,7 +522,7 @@ async function setupWebhook(){
 
 if(require.main===module){
  http.createServer((req,res)=>{if(handleWebhook(req,res))return;const ok=lastScan&&Date.now()-lastScan<3600000;res.writeHead(ok?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:!!ok,scanner:'OPPORTUNITY_24_7',lastScan,errors:lastErrors,matches:lastMatches}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
- const loop=async()=>{await checkOneTapAccess();for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
+ const loop=async()=>{for(;;){try{await scan()}catch(e){console.error('scan fatal',e)}await wait(POLL)}};
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
