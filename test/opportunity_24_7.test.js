@@ -238,4 +238,49 @@ assert.match(liveSource,/\/fapi\/v1\/algoOrder/);
 assert.match(liveSource,/ENTRY ACK UNCERTAIN/);
 assert.match(liveSource,/\/fapi\/v1\/openOrders/);
 
+
+// Pure-signal risk advisor: margin follows setup quality and loss follows SL.
+// There is intentionally NO arbitrary 2 USDT stop-loss cap.
+const advisor=require('../hunter_core_v1/pulse_risk_advisor');
+assert.equal(advisor.marginForScore(22),3);
+assert.equal(advisor.marginForScore(56),5);
+assert.equal(advisor.marginForScore(70),7);
+assert.equal(advisor.marginForScore(90),10);
+assert(advisor.scoreSetup({volumeRatio:2.5,bodyRatio:.83,netR:1.82,extensionAtr:.05,trendSpread:.02})>
+ advisor.scoreSetup({volumeRatio:1.25,bodyRatio:.52,netR:1.52,extensionAtr:.6,trendSpread:.001}));
+const advisorySignal={symbol:'TESTUSDT',side:'LONG',entry:100,stop:99,
+ tp1:101,tp2:102,at:Date.now(),setupScore:92};
+const advisoryMarket={markPrice:100,markTime:Date.now(),exchange:{symbols:[{
+ symbol:'TESTUSDT',status:'TRADING',contractType:'PERPETUAL',quoteAsset:'USDT',filters:[
+ {filterType:'MARKET_LOT_SIZE',minQty:'.001',stepSize:'.001',maxQty:'1000000'},
+ {filterType:'LOT_SIZE',minQty:'.001',stepSize:'.001',maxQty:'1000000'},
+ {filterType:'MIN_NOTIONAL',notional:'5'}
+ ]}]},brackets:[{symbol:'TESTUSDT',brackets:[
+ {notionalFloor:'0',notionalCap:'50000',maintMarginRatio:'.005',initialLeverage:40}
+ ]}]};
+const highRisk=advisor.calculate(advisorySignal,advisoryMarket,advisorySignal.at+1000);
+assert.equal(highRisk.status,'CHECK BINANCE');
+assert.equal(highRisk.margin,10);
+assert(highRisk.leverage<=40&&highRisk.leverage>=1);
+assert(highRisk.estimatedLoss>2,'Risk follows actual stop distance, not a forced 2U ceiling');
+assert(highRisk.quantity>0&&highRisk.notional>0&&highRisk.modelBuffer>0);
+assert(highRisk.liqCheckThreshold<advisorySignal.stop);
+const smallerRisk=advisor.calculate({...advisorySignal,setupScore:33},advisoryMarket,advisorySignal.at+1000);
+assert.equal(smallerRisk.status,'CHECK BINANCE');
+assert.equal(smallerRisk.margin,3);
+const shortSig={...advisorySignal,side:'SHORT',stop:101,tp1:99,tp2:98};
+const shortRisk=advisor.calculate(shortSig,advisoryMarket,shortSig.at+1000);
+assert.equal(shortRisk.status,'CHECK BINANCE');
+assert(shortRisk.liqCheckThreshold>shortSig.stop);
+assert.equal(advisor.calculate(advisorySignal,{...advisoryMarket,brackets:[]},advisorySignal.at+1000).status,'NO TRADE');
+assert.equal(advisor.calculate(advisorySignal,{...advisoryMarket,markPrice:101},advisorySignal.at+1000).status,'NO TRADE');
+assert.equal(advisor.calculate(advisorySignal,advisoryMarket,advisorySignal.at+4*60000).status,'NO TRADE');
+assert.equal(advisor.calculate({...advisorySignal,stop:80},advisoryMarket,advisorySignal.at+1000).status,'NO TRADE');
+// Production scanner must not import legacy one-tap execution or submit an order.
+const advisoryScannerSource=fs.readFileSync(path.join(__dirname,'../hunter_core_v1/opportunity_24_7.js'),'utf8');
+assert.doesNotMatch(advisoryScannerSource,/require\(['"]\.\/pulse_one_tap['"]\)/);
+assert.doesNotMatch(advisoryScannerSource,/\/fapi\/v1\/order|\/fapi\/v1\/algoOrder|execute\(ticket\)/);
+assert.match(advisoryScannerSource,/riskAdvisor\.advise\(s\)/);
+assert.match(advisoryScannerSource,/NO TRADE/);
+
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
