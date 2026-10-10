@@ -175,7 +175,7 @@ function evaluateSignal(symbol,m15,h1,now=Date.now(),options={}){
  const short=h.at(-1)<h20&&h20<h50&&slope< -0.0005;
  if(!long&&!short)return {reason:'NO_H1_TREND'};
  if(spread<0.0012)return {reason:'CHOPPY_TREND'};
- const history=a.slice(-21,-1);
+ const history=a.slice(-21,-1),beforePrior=a.slice(-22,-2);
  const hi=Math.max(...history.map(x=>x.h)),lo=Math.min(...history.map(x=>x.l));
  const avgVol=history.reduce((s,x)=>s+x.v,0)/history.length;
  const body=Math.abs(c.c-c.o),range=c.h-c.l;
@@ -184,10 +184,10 @@ function evaluateSignal(symbol,m15,h1,now=Date.now(),options={}){
  let mode=null,side=null,level=null,extension=null;
  // IMMEDIATE: only a strong, first-time breakout, close near the extreme,
  // reasonable stretch and exceptional volume. No double-counted prev-close test.
- const impulseLong=long&&a.at(-2).c<=hi&&c.c>hi&&c.c>c.o+
+ const impulseLong=long&&a.at(-2).c<=Math.max(...beforePrior.map(x=>x.h))&&c.c>hi&&c.c>c.o+
   0.35*vol&&bodyRatio>=0.65&&volumeRatio>=1.8&&
   (c.h-c.c)/range<=0.25&&c.c-hi<=0.50*vol;
- const impulseShort=short&&a.at(-2).c>=lo&&c.c<lo&&c.o>c.c+
+ const impulseShort=short&&a.at(-2).c>=Math.min(...beforePrior.map(x=>x.l))&&c.c<lo&&c.o>c.c+
   0.35*vol&&bodyRatio>=0.65&&volumeRatio>=1.8&&
   (c.c-c.l)/range<=0.25&&lo-c.c<=0.50*vol;
  if(impulseLong||impulseShort){
