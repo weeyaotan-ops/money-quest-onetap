@@ -147,75 +147,144 @@ async function refreshAltcoins(now=Date.now()){
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function ema(a,n){if(a.length<n)return null;let v=a.slice(0,n).reduce((s,x)=>s+x,0)/n;const k=2/(n+1);for(let i=n;i<a.length;i++)v=a[i]*k+v*(1-k);return v;}
 function atr(c,n=14){if(c.length<n+1)return null;return c.slice(-n).reduce((s,x,i)=>{const prev=c[c.length-n-1+i];return s+Math.max(x.h-x.l,Math.abs(x.h-prev.c),Math.abs(x.l-prev.c))},0)/n;}
-function signal(symbol,m15,h1,now=Date.now()){
- if(m15.length<80||h1.length<80)return null;
- const a=m15.filter(x=>x.t+900000<=now),b=h1.filter(x=>x.t+3600000<=now);
- if(a.length<70||b.length<70)return null;
- const c=a.at(-1),prev=a.at(-2);if(now-(c.t+900000)>180000)return null;
- const h=b.map(x=>x.c),h20=ema(h,20),h50=ema(h,50),vol=atr(a);
- if(!(vol>0)||!(h20>0)||!(h50>0))return null;
- const long=h.at(-1)>h20&&h20>h50,short=h.at(-1)<h20&&h20<h50;
- const history=a.slice(-21,-1),hi=Math.max(...history.map(x=>x.h)),lo=Math.min(...history.map(x=>x.l));
- const avgVol=history.reduce((s,x)=>s+x.v,0)/history.length;
- const buy=long&&prev.c<=hi&&c.c>hi&&c.c-c.o>0.35*vol;
- const sell=short&&prev.c>=lo&&c.c<lo&&c.o-c.c>0.35*vol;
- if(!buy&&!sell)return null;
- if(c.v<avgVol*1.20)return null;
- const side=buy?'LONG':'SHORT',dir=buy?1:-1;
- const extension=buy?c.c-hi:lo-c.c;
- if(extension>0.7*vol)return null;
- const stop=buy?Math.min(lo+0.45*(hi-lo),c.c-1.2*vol):Math.max(hi-0.45*(hi-lo),c.c+1.2*vol);
- const risk=dir*(c.c-stop);
- if(risk<0.7*vol||risk>2.2*vol)return null;
- const tp1=c.c+dir*risk,tp2=c.c+dir*2*risk;
- // Conservative round-trip taker fee + slippage, in R.
- const fee=0.0012*c.c,netR=(2*risk-fee)/(risk+fee);
- if(netR<1.5)return null;
- const body=Math.abs(c.c-c.o),range=c.h-c.l;
- if(!(range>0)||body/range<0.50)return null;
- const setupScore=riskAdvisor.scoreSetup({
-  volumeRatio:c.v/Math.max(avgVol,1e-9),bodyRatio:body/range,
-  netR,extensionAtr:extension/vol,
-  trendSpread:Math.abs(h20-h50)/c.c
- });
- return {symbol,side,entry:c.c,stop,tp1,tp2,netR,setupScore,
-  at:c.t+900000,key:symbol+'|'+side+'|'+(c.t+900000)};
+// HTR Pulse V2: two different entries, both evaluated ONLY on closed candles.
+// A high-conviction impulse may enter immediately; normal breakouts must retest.
+// Scores are heuristic rankings, NOT calibrated winning probabilities.
+function btcMarketBias(h1,now=Date.now()){
+ const b=(h1||[]).filter(x=>x.t+3600000<=now);
+ if(b.length<65)return 'UNKNOWN';
+ const closes=b.map(x=>x.c),fast=ema(closes,20),slow=ema(closes,50);
+ const spread=(fast-slow)/closes.at(-1);
+ if(spread>=0.003&&closes.at(-1)>fast)return 'BULL';
+ if(spread<=-0.003&&closes.at(-1)<fast)return 'BEAR';
+ return 'SIDEWAYS';
 }
-
-// Diagnostic mirror of signal(). Do not loosen ANY order-entry condition.
-// Evaluate at each M15 close, so the report also catches qualified bars that
-// become too old before an API scan can send an actionable alert.
-function explainSignal(symbol,m15,h1,now=Date.now()){
+function evaluateSignal(symbol,m15,h1,now=Date.now(),options={}){
  if(m15.length<80||h1.length<80)return {reason:'INSUFFICIENT_DATA'};
  const a=m15.filter(x=>x.t+900000<=now),b=h1.filter(x=>x.t+3600000<=now);
  if(a.length<70||b.length<70)return {reason:'INSUFFICIENT_DATA'};
- const c=a.at(-1),prev=a.at(-2);
- if(now-(c.t+900000)>180000)return {reason:'OUTSIDE_ALERT_WINDOW'};
+ const c=a.at(-1);
+ if(now-(c.t+900000)>180000||now<c.t+900000)
+  return {reason:'OUTSIDE_ALERT_WINDOW'};
  const h=b.map(x=>x.c),h20=ema(h,20),h50=ema(h,50),vol=atr(a);
- if(!(vol>0)||!(h20>0)||!(h50>0))return {reason:'INSUFFICIENT_DATA'};
- const long=h.at(-1)>h20&&h20>h50,short=h.at(-1)<h20&&h20<h50;
+ if(!(vol>0&&h20>0&&h50>0))return {reason:'INSUFFICIENT_DATA'};
+ const spread=Math.abs(h20-h50)/h.at(-1);
+ const past20=ema(h.slice(0,-3),20);
+ const slope=past20===null?0:(h20-past20)/h.at(-1);
+ const long=h.at(-1)>h20&&h20>h50&&slope>0.0005;
+ const short=h.at(-1)<h20&&h20<h50&&slope< -0.0005;
  if(!long&&!short)return {reason:'NO_H1_TREND'};
- const history=a.slice(-21,-1),hi=Math.max(...history.map(x=>x.h)),lo=Math.min(...history.map(x=>x.l));
+ if(spread<0.0012)return {reason:'CHOPPY_TREND'};
+ const history=a.slice(-21,-1);
+ const hi=Math.max(...history.map(x=>x.h)),lo=Math.min(...history.map(x=>x.l));
  const avgVol=history.reduce((s,x)=>s+x.v,0)/history.length;
- const buy=long&&prev.c<=hi&&c.c>hi&&c.c-c.o>0.35*vol;
- const sell=short&&prev.c>=lo&&c.c<lo&&c.o-c.c>0.35*vol;
- if(!buy&&!sell)return {reason:'NO_M15_BREAKOUT'};
- if(c.v<avgVol*1.20)return {reason:'LOW_VOLUME'};
- const dir=buy?1:-1,extension=buy?c.c-hi:lo-c.c;
- if(extension>0.7*vol)return {reason:'OVEREXTENDED'};
- const stop=buy?Math.min(lo+0.45*(hi-lo),c.c-1.2*vol):Math.max(hi-0.45*(hi-lo),c.c+1.2*vol);
- const risk=dir*(c.c-stop);
- if(risk<0.7*vol||risk>2.2*vol)return {reason:'STOP_TOO_WIDE_OR_TIGHT'};
- const fee=0.0012*c.c,netR=(2*risk-fee)/(risk+fee);
- if(netR<1.5)return {reason:'LOW_NET_R'};
  const body=Math.abs(c.c-c.o),range=c.h-c.l;
- if(!(range>0)||body/range<0.50)return {reason:'WEAK_CANDLE'};
- // Final authority is the unchanged production signal function.
- const s=signal(symbol,m15,h1,now);
- return s?{reason:'QUALIFIED',signal:s}:{reason:'CHECK_MISMATCH'};
+ if(!(avgVol>0&&range>0))return {reason:'INSUFFICIENT_DATA'};
+ const bodyRatio=body/range,volumeRatio=c.v/avgVol;
+ let mode=null,side=null,level=null,extension=null;
+ // IMMEDIATE: only a strong, first-time breakout, close near the extreme,
+ // reasonable stretch and exceptional volume. No double-counted prev-close test.
+ const impulseLong=long&&a.at(-2).c<=hi&&c.c>hi&&c.c>c.o+
+  0.35*vol&&bodyRatio>=0.65&&volumeRatio>=1.8&&
+  (c.h-c.c)/range<=0.25&&c.c-hi<=0.50*vol;
+ const impulseShort=short&&a.at(-2).c>=lo&&c.c<lo&&c.o>c.c+
+  0.35*vol&&bodyRatio>=0.65&&volumeRatio>=1.8&&
+  (c.c-c.l)/range<=0.25&&lo-c.c<=0.50*vol;
+ if(impulseLong||impulseShort){
+  mode='MOMENTUM';side=impulseLong?'LONG':'SHORT';
+  level=impulseLong?hi:lo;
+  extension=impulseLong?c.c-hi:lo-c.c;
+ }else{
+  // RETEST: first revisit of a breakout made 1-4 M15 bars ago.
+  // Do not repeatedly signal the same level after previous touches.
+  for(let ago=1;ago<=4&&!mode;ago++){
+   const idx=a.length-1-ago, breakout=a[idx];
+   const prior=a.slice(idx-20,idx),before=a[idx-1];
+   if(prior.length<20)continue;
+   const oldHi=Math.max(...prior.map(x=>x.h));
+   const oldLo=Math.min(...prior.map(x=>x.l));
+   const oldAvg=prior.reduce((s,x)=>s+x.v,0)/prior.length;
+   if(!(oldAvg>0))continue;
+   const forLong=long&&before.c<=oldHi&&breakout.c>oldHi+0.10*vol&&
+    breakout.c>breakout.o&&breakout.v>=oldAvg*1.2;
+   const forShort=short&&before.c>=oldLo&&breakout.c<oldLo-0.10*vol&&
+    breakout.c<breakout.o&&breakout.v>=oldAvg*1.2;
+   if(!forLong&&!forShort)continue;
+   const hold=a.slice(idx+1,-1);
+   if(forLong&&hold.every(x=>x.l>oldHi+0.20*vol)&&
+    c.l>=oldHi-0.35*vol&&c.l<=oldHi+0.25*vol&&
+    c.c>oldHi+0.15*vol&&c.c>c.o&&bodyRatio>=0.45&&
+    volumeRatio>=0.85){
+    mode='RETEST';side='LONG';level=oldHi;extension=Math.max(0,c.c-oldHi);
+   }else if(forShort&&hold.every(x=>x.h<oldLo-0.20*vol)&&
+    c.h<=oldLo+0.35*vol&&c.h>=oldLo-0.25*vol&&
+    c.c<oldLo-0.15*vol&&c.c<c.o&&bodyRatio>=0.45&&
+    volumeRatio>=0.85){
+    mode='RETEST';side='SHORT';level=oldLo;extension=Math.max(0,oldLo-c.c);
+   }
+  }
+ }
+ if(!mode){
+  const crosses=(long&&c.c>hi)||(short&&c.c<lo);
+  if(crosses&&volumeRatio<1.8)return {reason:'LOW_VOLUME'};
+  if(crosses&&(c.c>hi?c.c-hi:lo-c.c)>0.5*vol)
+   return {reason:'OVEREXTENDED'};
+  if(crosses)return {reason:'WEAK_BREAKOUT'};
+  return {reason:'NO_M15_BREAKOUT'};
+ }
+ // BTC leads alt risk. Reject alt trades opposite an established BTC trend.
+ // Missing BTC context is not silently treated as neutral in live scans.
+ const btcBias=options.btcBias;
+ if(symbol!=='BTCUSDT'&&options.enforceBtc===true){
+  if(!['BULL','BEAR','SIDEWAYS'].includes(btcBias))
+   return {reason:'BTC_DATA_UNAVAILABLE'};
+  if((side==='LONG'&&btcBias==='BEAR')||
+     (side==='SHORT'&&btcBias==='BULL'))return {reason:'BTC_TREND_CONFLICT'};
+ }
+ // Movers > 20% in 24h must prove they can retest, not be chased on first impulse.
+ if(mode==='MOMENTUM'&&Number.isFinite(options.changePct)&&
+    Math.abs(options.changePct)>20)return {reason:'HOT_MOVER_WAIT_RETEST'};
+ const dir=side==='LONG'?1:-1;
+ const structure=side==='LONG'?
+  Math.min(c.l,mode==='RETEST'?a.at(-2).l:c.l)-0.12*vol:
+  Math.max(c.h,mode==='RETEST'?a.at(-2).h:c.h)+0.12*vol;
+ const risk=dir*(c.c-structure);
+ if(risk<0.60*vol||risk>2.30*vol)return {reason:'STRUCTURE_STOP_INVALID'};
+ // Obstacle check: don't long directly into H1 overhead / short into H1 support.
+ // Use earlier closed H1 bars only (exclude the last bar, which can overlap setup).
+ const priorH1=b.slice(-25,-1),obstacle=side==='LONG'?
+  Math.min(...priorH1.map(x=>x.h).filter(x=>x>c.c)):
+  Math.max(...priorH1.map(x=>x.l).filter(x=>x<c.c));
+ if(Number.isFinite(obstacle)&&dir*(obstacle-c.c)<1.25*risk)
+  return {reason:'H1_BARRIER_TOO_CLOSE'};
+ const entry=c.c,stop=structure,tp1=entry+dir*risk,tp2=entry+dir*2*risk;
+ const fee=0.0012*entry,netR=(2*risk-fee)/(risk+fee);
+ if(netR<1.5)return {reason:'LOW_NET_R'};
+ const setupScore=riskAdvisor.scoreSetup({
+  volumeRatio,bodyRatio,netR,extensionAtr:Math.max(0,extension)/vol,
+  trendSpread:spread
+ });
+ const s={symbol,side,mode,entry,stop,tp1,tp2,netR,setupScore,
+  at:c.t+900000,key:symbol+'|'+side+'|'+(c.t+900000),
+  breakoutLevel:level,btcBias:btcBias||'UNVERIFIED'};
+ return {reason:'QUALIFIED',signal:s};
 }
+function signal(symbol,m15,h1,now=Date.now(),options={}){
+ return evaluateSignal(symbol,m15,h1,now,options).signal||null;
+}
+function explainSignal(symbol,m15,h1,now=Date.now(),options={}){
+ return evaluateSignal(symbol,m15,h1,now,options);
+}
+
 const DIAG_LABELS={
  NO_H1_TREND:'H1 trend unclear',
+ CHOPPY_TREND:'H1 trend too flat',
+ WEAK_BREAKOUT:'Breakout lacks confirmation',
+ STRUCTURE_STOP_INVALID:'Structure stop unsuitable',
+ H1_BARRIER_TOO_CLOSE:'Nearby H1 price barrier',
+ BTC_DATA_UNAVAILABLE:'BTC trend feed unavailable',
+ BTC_TREND_CONFLICT:'BTC moving against alt setup',
+ HOT_MOVER_WAIT_RETEST:'Hot mover needs retest',
  NO_M15_BREAKOUT:'No M15 breakout',
  LOW_VOLUME:'Volume too low',
  OVEREXTENDED:'Already too far from breakout',
@@ -227,7 +296,7 @@ const DIAG_LABELS={
  QUALIFIED:'Qualified',
  CHECK_MISMATCH:'Diagnostic mismatch'
 };
-function recordDiagnostic(state,symbol,m15,h1,now=Date.now()){
+function recordDiagnostic(state,symbol,m15,h1,now=Date.now(),options={}){
  const bars=m15.filter(x=>x.t+900000<=now);
  if(!bars.length)return;
  const closedAt=bars.at(-1).t+900000;
@@ -236,7 +305,7 @@ function recordDiagnostic(state,symbol,m15,h1,now=Date.now()){
  diag.lastBar||={};diag.samples||=[];
  if(diag.lastBar[symbol]===closedAt)return;
  // Never replay old signals; this is reporting only.
- const evaluated=explainSignal(symbol,m15,h1,closedAt+1000);
+ const evaluated=explainSignal(symbol,m15,h1,closedAt+1000,options);
  const late=now-closedAt>180000;
  const reason=late&&evaluated.reason==='QUALIFIED'?'MISSED_AGE':evaluated.reason;
  diag.lastBar[symbol]=closedAt;
@@ -296,11 +365,12 @@ function formatScanTime(ms){
    part('hour')+':'+part('minute')+':'+part('second')+' '+part('dayPeriod').toUpperCase()+' SGT';
 }
 function message(s,advice=s.riskAdvice,now=Date.now()){
- const lines=['🚨 '+s.symbol+' · '+s.side,'',
+ const lines=['🚨 '+s.symbol+' · '+s.side+' · '+(s.mode||'BREAKOUT'),'',
   'Entry: '+fmt(s.entry),'SL: '+fmt(s.stop),
   'TP1 (1R): '+fmt(s.tp1),'TP2 (2R): '+fmt(s.tp2),
   'Expected net R at TP2: '+s.netR.toFixed(2),'',
-  '15m candle confirmed · H1 trend aligned',
+  '15m candle confirmed · H1 trend aligned · structural SL',
+  'BTC trend: '+(s.btcBias||'not checked'),
   'Manual trade only · NO automatic orders','',
   'RISK ADVISOR · ISOLATED ONLY',
   'Setup score: '+(Number.isFinite(s.setupScore)?s.setupScore+'/100 (heuristic, NOT win probability)':'unavailable'),
@@ -353,6 +423,13 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const state=load();state.sent||={};initScorecard(state);let errors=0,matches=0;const current=[];
  delete state.oneTapHealth; // discard obsolete One-Tap state
  const alt=await refreshAltcoins();
+ // Fetch BTC's last COMPLETED H1 trend once per cycle, not once per altcoin.
+ let btcH1=null,btcBias='UNKNOWN';
+ try{btcH1=await candles('BTCUSDT','1h');btcBias=btcMarketBias(btcH1);}
+ catch(e){console.error('btc regime feed',String(e.message||e));}
+ const altChanges=new Map([...(alt.hotDetails||[]),...(alt.earlyDetails||[])]
+  .map(x=>[x.symbol,Number(x.changePct)]));
+ state.btcBias=btcBias;
  const scanCoins=[...new Set([...COINS,...alt.symbols,...(alt.preScreen||[])])];
  state.universe={symbols:scanCoins,altcoins:alt.symbols,core:COINS.length,
    hot:alt.hot,early:alt.early,preScreen:alt.preScreen||[],hotDetails:alt.hotDetails,earlyDetails:alt.earlyDetails,
@@ -372,10 +449,11 @@ async function scan(){if(inProgress)return;inProgress=true;try{
    status:t.status,sl:t.slHit,tp1:t.tp1Hit,tp2:t.tp2Hit}))}));
  for(let i=0;i<scanCoins.length;i+=5){
    await Promise.all(scanCoins.slice(i,i+5).map(async symbol=>{
-     try{const [a,b]=await Promise.all([candles(symbol,'15m'),candles(symbol,'1h')]);
+     try{const [a,b]=await Promise.all([candles(symbol,'15m'),symbol==='BTCUSDT'&&btcH1?Promise.resolve(btcH1):candles(symbol,'1h')]);
        const checkedAt=Date.now();
-       recordDiagnostic(state,symbol,a,b,checkedAt);
-       const s=signal(symbol,a,b,checkedAt);if(!s)return;
+       const filter={btcBias,enforceBtc:true,changePct:altChanges.get(symbol)};
+       recordDiagnostic(state,symbol,a,b,checkedAt,filter);
+       const s=signal(symbol,a,b,checkedAt,filter);if(!s)return;
        matches++;
        if(state.sent[s.key]){
          const previous=(state.latestCandidates||[]).find(x=>x.key===s.key);
@@ -442,6 +520,7 @@ function commandAnswer(command,state,now=Date.now(),page=1){
  const candidates=(state.latestCandidates||[]).filter(x=>now-Number(x.at)<30*60000).sort((a,b)=>b.netR-a.netR);
  if(command==='/scan')return ['📡 '+(state.universe?.symbols?.length||COINS.length)+' coins · latest confirmed scan',
    'Altcoin radar: '+(state.universe?.altcoins?.length||0)+' active movers',
+   'HTR strategy: V2 Momentum + Retest | BTC: '+(state.btcBias||'unknown'),
    ...(state.universe?.hot?[
     'Early Movers · WATCH ONLY ('+(state.universe.early?.length||0)+'):',
     ...(state.universe.earlyDetails||[]).slice(0,3).map(x=>
@@ -568,4 +647,4 @@ if(require.main===module){
  loop();
  setupWebhook().catch(e=>console.error('webhook setup',e.message));
 }
-module.exports={signal,explainSignal,recordDiagnostic,diagnosis,diagnosticLines,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers};
+module.exports={signal,explainSignal,btcMarketBias,evaluateSignal,recordDiagnostic,diagnosis,diagnosticLines,rows,message,commandAnswer,trackScorecard,rrAtLevel,formatReachedR,selectAltcoins,earlyPool,analyzeEarlyBars,selectEarlyMovers};
