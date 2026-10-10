@@ -117,7 +117,7 @@ assert(earlyPool(earlyTicker,earlyExchange,earlyBooks,[],eNow)
 assert.equal(selectEarlyMovers(earlyTicker,earlyExchange,earlyBooks,
  {QUIETUSDT:barsQuiet},['TIAUSDT','LATEUSDT'],eNow).length,0);
 
-// The formal signal remains byte-for-byte identical in logic: diagnostics must
+// Formal production signal and diagnostics must
 // agree with it on qualified bars and never send stale alerts.
 const dNow=Date.parse('2026-10-09T12:15:00Z');
 const m15Good=Array.from({length:100},(_,i)=>({
@@ -146,6 +146,55 @@ const noVol=m15Good.map(x=>({...x}));
 noVol[noVol.length-1]={...noVol.at(-1),v:10};
 assert.equal(explainSignal('TESTUSDT',noVol,h1Good,dNow+1000).reason,'LOW_VOLUME');
 
+
+// V2 strategy quality: mode selection, anti-chase, BTC regime, structural stop.
+assert.equal(confirmed.mode,'MOMENTUM');
+assert(confirmed.stop<m15Good.at(-1).l,'long SL must be beyond setup candle low');
+assert.equal(signal('TESTUSDT',m15Good,h1Good,dNow+1000,{
+ btcBias:'BEAR',enforceBtc:true
+}),null,'alt LONG must not fight established BTC downtrend');
+assert(signal('TESTUSDT',m15Good,h1Good,dNow+1000,{
+ btcBias:'BULL',enforceBtc:true
+}),'aligned BTC regime should permit a good setup');
+assert.equal(signal('TESTUSDT',m15Good,h1Good,dNow+1000,{
+ btcBias:'UNKNOWN',enforceBtc:true
+}),null,'BTC feed outage must fail closed');
+assert.equal(signal('TESTUSDT',m15Good,h1Good,dNow+1000,{
+ btcBias:'SIDEWAYS',enforceBtc:true,changePct:38
+}),null,'hot alt cannot be chased on first impulse');
+const priorBreakout=m15Good.map(x=>({...x}));
+priorBreakout[priorBreakout.length-2]={
+ t:dNow-2*900000,o:100,h:102.3,l:100.5,c:102.1,v:260};
+priorBreakout[priorBreakout.length-1]={
+ t:dNow-900000,o:101.1,h:102.1,l:100.6,c:102.0,v:155};
+const retest=signal('TESTUSDT',priorBreakout,h1Good,dNow+1000,{
+ btcBias:'SIDEWAYS',enforceBtc:true,changePct:35
+});
+assert(retest&&retest.mode==='RETEST','hot coin retest should be allowed');
+assert(retest.stop<priorBreakout.at(-1).l&&retest.tp2>retest.tp1);
+const failedRetest=priorBreakout.map(x=>({...x}));
+failedRetest[failedRetest.length-1].l=99.9;
+assert.equal(signal('TESTUSDT',failedRetest,h1Good,dNow+1000),null,
+ 'failed support retest must not trigger');
+const weakVolume=m15Good.map(x=>({...x}));
+weakVolume[weakVolume.length-1].v=125;
+assert.equal(signal('TESTUSDT',weakVolume,h1Good,dNow+1000),null);
+const shortsH1=Array.from({length:100},(_,i)=>({
+ t:dNow-(100-i)*3600000,o:110-i*0.2,h:111-i*0.2,
+ l:109-i*0.2,c:110-i*0.2,v:100
+}));
+const shortCandles=m15Good.map(x=>({...x}));
+shortCandles[shortCandles.length-1]={
+ t:dNow-900000,o:100,h:100.2,l:97.8,c:98,v:260};
+const shortEntry=signal('TESTUSDT',shortCandles,shortsH1,dNow+1000);
+assert(shortEntry&&shortEntry.side==='SHORT'&&shortEntry.stop>shortEntry.entry,
+ 'the improved engine must still issue SHORTs');
+const flatH1=Array.from({length:100},(_,i)=>({
+ t:dNow-(100-i)*3600000,o:100,h:101,l:99,c:100,v:100
+}));
+assert.equal(signal('TESTUSDT',m15Good,flatH1,dNow+1000),null,
+ 'sideways H1 must be rejected');
+console.log('HTR_V2_QUALITY_REGRESSION_PASS');
 
 // One-Tap approval: 5 USDT max initial margin / 40x, preserving the signal.
 // This test never issues external requests or a live order.
