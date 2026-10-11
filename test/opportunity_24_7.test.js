@@ -36,7 +36,10 @@ assert.match(out,/TP1 hit: 1 \(1R target\)/);
 assert.match(out,/TP2 hit: 1 \(2R target\)/);
 assert.match(out,/SOLUSDT SHORT.*RR \+2\.00R/);
 assert.match(out,/LINKUSDT SHORT.*RR —.*Tracking/);
-assert.match(out,/no simulated exits or PnL/);
+assert.match(out,/PAPER RESULT/);
+assert.match(out,/Earlier history excluded: 2/);
+assert.match(out,/NOT actual fills\/PnL/);
+assert.match(out,/RR \+2\.00R \| Paper old \/ not verified/);
 assert.match(commandAnswer('/scan',scoreState),/26 coins/);
 assert.match(commandAnswer('/signals',scoreState),/No active confirmed signals/);
 
@@ -332,4 +335,9 @@ assert.doesNotMatch(advisoryScannerSource,/\/fapi\/v1\/order|\/fapi\/v1\/algoOrd
 assert.match(advisoryScannerSource,/riskAdvisor\.advise\(s\)/);
 assert.match(advisoryScannerSource,/NO TRADE/);
 
+// Do not truncate an active dynamic coin radar's 24h diagnostics at 1,800 bars.
+const bulk={diagnostics:{lastBar:{},samples:Array.from({length:1800},(_,i)=>({
+ symbol:'XUSDT',at:dNow-i%90*900000,reason:'NO_M15_BREAKOUT'}))}};
+recordDiagnostic(bulk,'TESTUSDT',m15Good,h1Good,dNow+1000);
+assert.equal(bulk.diagnostics.samples.length,1801);
 console.log('OPPORTUNITY_SCANNER_TEST_PASS');
