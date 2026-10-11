@@ -1,0 +1,27 @@
+name: HTR Paper RR safety and quality
+on:
+  push:
+    branches: [htr-pulse-simrr-coverage-20261011]
+  pull_request:
+    branches: [hunter-adaptive-v2-1-shadow]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax
+        run: |
+          node --check hunter_core_v1/opportunity_24_7.js
+          node --check hunter_core_v1/pulse_scorecard.js
+          node --check hunter_core_v1/pulse_simulator.js
+          node --check test/pulse_simulator.test.js
+      - name: Test paper exits, scanner, legacy hit counts and notifications
+        run: |
+          node test/pulse_simulator.test.js
+          node test/pulse_scorecard.test.js
+          node test/pulse_hit_alerts.test.js
+          node test/opportunity_24_7.test.js
