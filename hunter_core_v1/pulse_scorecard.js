@@ -3,6 +3,7 @@
 // A signal can count TP1 and SL (or TP1 and TP2) because each is a separate
 // threshold milestone. SL/TP2 ends observation; same 1m bar extremes prove
 // both prices were reached but cannot resolve which occurred first.
+const paper=require('./pulse_simulator');
 const MINUTE=60000;
 const VERSION=3;
 const FIRST_SIGNAL={
@@ -30,7 +31,8 @@ function createTrade(s,notifiedAt=Date.now()){
   accountingVersion:VERSION,policy:'LEVEL_TOUCH_ONLY',
   status:'OPEN',tp1Hit:false,tp2Hit:false,slHit:false,
   tp1At:null,tp2At:null,slAt:null,closedAt:null,reason:null,
-  lastBar:null,lastPrice:null,dataGapAt:null
+  lastBar:null,lastPrice:null,dataGapAt:null,
+  simulation:paper.fresh()
  };
 }
 function upgradeTrade(t){
@@ -57,9 +59,11 @@ function initScorecard(state){
  if(!state.scorecard||!Array.isArray(state.scorecard.trades))
    state.scorecard={version:VERSION,startAt:FIRST_SIGNAL.notifiedAt,trades:[]};
  const card=state.scorecard;
- if(!card.trades.some(t=>t.key===FIRST_SIGNAL.key))
-   card.trades.unshift(createTrade(FIRST_SIGNAL,FIRST_SIGNAL.notifiedAt));
- for(const t of card.trades)upgradeTrade(t);
+ if(!card.trades.some(t=>t.key===FIRST_SIGNAL.key)){
+  const first=createTrade(FIRST_SIGNAL,FIRST_SIGNAL.notifiedAt);
+  delete first.simulation;paper.baseline(first);card.trades.unshift(first);
+ }
+ for(const t of card.trades){upgradeTrade(t);paper.baseline(t);}
  card.version=VERSION;
  return card;
 }
@@ -82,6 +86,7 @@ function applyBars(trade,bars,now=Date.now()){
   if(bar.t<next||bar.t>=completeThrough)continue;
   if(bar.t>next){trade.dataGapAt=next;break;}
   if(!validBar(bar)){trade.dataGapAt=bar.t;break;}
+  paper.advance(trade,bar);
   const sl=reached(trade,bar,trade.stop,false);
   const tp1=reached(trade,bar,trade.tp1,true);
   const tp2=reached(trade,bar,trade.tp2,true);
