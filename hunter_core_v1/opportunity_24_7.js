@@ -4,6 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {initScorecard,createTrade,applyBars,stats:scoreStats}=require('./pulse_scorecard');
 const {initialize:initializeHitAlerts,collect:collectHitAlerts,deliver:deliverHitAlerts}=require('./pulse_hit_alerts');
 const riskAdvisor=require('./pulse_risk_advisor');
+const paper=require('./pulse_simulator');
 const API=process.env.BINANCE_FUTURES_REST_BASE||'https://fapi.binance.com';
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN,CHAT=process.env.TELEGRAM_CHAT_ID;
 const STORE=process.env.OPPORTUNITY_STATE_PATH||'/data/opportunity_signals.json';
@@ -310,7 +311,8 @@ function recordDiagnostic(state,symbol,m15,h1,now=Date.now(),options={}){
  const reason=late&&evaluated.reason==='QUALIFIED'?'MISSED_AGE':evaluated.reason;
  diag.lastBar[symbol]=closedAt;
  diag.samples.push({symbol,at:closedAt,reason});
- if(diag.samples.length>1800)diag.samples=diag.samples.slice(-1800);
+ // Keep a rolling day for a 59+ coin dynamic universe, not just 1,800 records.
+ if(diag.samples.length>12000)diag.samples=diag.samples.filter(x=>x.at>=now-24*3600000).slice(-12000);
 }
 function diagnosis(state,now=Date.now()){
  const samples=(state.diagnostics?.samples||[]).filter(x=>x.at>=now-24*3600000);
@@ -442,7 +444,7 @@ async function scan(){if(inProgress)return;inProgress=true;try{
  const delivered=await deliverHitAlerts(state,telegram,save);
  if(queued.length||delivered)console.log(JSON.stringify({hitAlerts:'TRACKED_LEVELS',queued:queued.length,delivered,pending:Object.keys(state.hitAlerts.pending).length}));
  const score=scoreStats(state.scorecard);
- console.log(JSON.stringify({scorecard:'PULSE_LEVEL_TOUCH_V3',tracked:score.tracked,
+ console.log(JSON.stringify({scorecard:'PULSE_TOUCH_AND_PAPER_V1',tracked:score.tracked,
   slHits:score.slHits,tp1Hits:score.tp1Hits,tp2Hits:score.tp2Hits,open:score.open,
   ambiguous:score.ambiguous,
   recent:state.scorecard.trades.slice(-3).map(t=>({symbol:t.symbol,side:t.side,
@@ -509,6 +511,10 @@ function diagnosticLines(state,now=Date.now()){
  if(!d.sampled)return ['Signal diagnostics: waiting for closed M15 data'];
  return [
   'Signal checks (24h): '+d.sampled+' closed M15 bars',
+   ...(state.universe?.symbols?.length?[
+    'Latest-universe freshness (20m): '+state.universe.symbols.filter(symbol=>
+      Number(state.diagnostics?.lastBar?.[symbol]||0)>=now-20*60000).length+
+      '/'+state.universe.symbols.length+' symbols (dynamic watchlist)']:[]),
   'Main blocks: '+(d.top.length?d.top.map(([k,n])=>(DIAG_LABELS[k]||k)+' '+n).join(' | '):'none'),
   ...(d.missed?['Missed alert window: '+d.missed+' (historical, NOT fresh entry)']:[]),
   ...(d.nearby.length?['Almost qualified (last 2h): '+
@@ -542,6 +548,8 @@ function commandAnswer(command,state,now=Date.now(),page=1){
  if(command==='/status'){
   const all=state.scorecard?.trades||[];
   const scored=scoreStats(state.scorecard||{trades:[]});
+  const simulated=paper.summarize(all);
+  const netR=v=>(v>=0?'+':'')+v.toFixed(2)+'R';
   const size=6,maxPage=Math.max(1,Math.ceil(all.length/size));
   const selectedPage=Math.max(1,Math.min(maxPage,Number(page)||1));
   const modeStats=['MOMENTUM','RETEST','LEGACY'].map(mode=>{
@@ -572,16 +580,30 @@ function commandAnswer(command,state,now=Date.now(),page=1){
    scored.ambiguous?'Both sides touched in same minute (order unknown): '+scored.ambiguous:null,
    scored.dataGaps?'Incomplete price history: '+scored.dataGaps:null,
    '',
+   'PAPER RESULT · New alerts only (TP1 half, rest to 2R with BE stop):',
+   'Closed: '+simulated.closed+' | TP2 '+simulated.exitCounts.TP2+
+      ' | BE '+simulated.exitCounts.BE_EXIT+' | SL '+simulated.exitCounts.SL+
+      ' | Unknown '+simulated.uncertain,
+   'Estimated net: '+netR(simulated.netTotal)+
+      (simulated.closed?' | Avg '+netR(simulated.netTotal/simulated.closed):' | waiting for closed samples'),
+   'Sample check: '+simulated.closed+'/'+simulated.validationMinimum+
+      ' closed | NOT VALIDATED | Earlier history excluded: '+simulated.historical,
+   ...['RETEST','MOMENTUM','LEGACY'].filter(mode=>simulated.modes[mode]?.eligible).map(mode=>{
+      const x=simulated.modes[mode];return 'Paper '+mode+': '+x.resolved+
+       ' closed | '+netR(x.netR)+' est. net | '+x.uncertain+' unknown';
+   }),
+   '',
    'History ('+selectedPage+'/'+maxPage+'):',
    ...results.map(t=>t.symbol+' '+t.side+
        ' | SL '+hit(t.slHit)+' | TP1 '+hit(t.tp1Hit)+' | TP2 '+hit(t.tp2Hit)+
-       ' | RR '+formatReachedR(t)+
+       ' | RR '+formatReachedR(t)+' | Paper '+paper.paperLabel(t)+
        (t.status==='OPEN'?' | Tracking':'')+
        (t.status==='AMBIGUOUS'?' | Sequence unknown':'')),
    maxPage>selectedPage?'Older: /status '+(selectedPage+1):null,
    '',
-   'RR = furthest target touched ÷ original SL risk (gross, not profit).',
-   'TP2 also counts TP1. Hits are independent; no simulated exits or PnL.'
+   'RR level = highest target touched, NOT trade profit.',
+   'Paper net R = hypothetical 50/50 exits minus estimated fees/slippage; NOT actual fills/PnL.',
+   'Same-minute conflicts excluded. Prior hit-count history preserved.'
   ].filter(x=>x!==null).join('\n');
  }
  return 'HTR Signal Bot\n/scan — scan results\n/signals — confirmed entries\n/status — scanner health';
