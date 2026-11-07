@@ -6,10 +6,10 @@
   "startedAt": "2026-09-26T06:53:00Z",
   "bankrollReferenceSol": 100,
   "counts": {
-    "scans": 196,
-    "discovered": 34252,
-    "candidateDecisions": 34252,
-    "eligibleSignals": 0,
+    "scans": 197,
+    "discovered": 34425,
+    "candidateDecisions": 34425,
+    "eligibleSignals": 1,
     "resolved1h": 0,
     "resolved6h": 0,
     "resolved24h": 0,
@@ -23,14 +23,14 @@
     "meanNetReturn24hPct": null,
     "rugRate": null,
     "simulated100SolMark": 100,
-    "paperEquityUsdt": 100,
-    "paperReturnPct": 0,
+    "paperEquityUsdt": 99.49665024630542,
+    "paperReturnPct": -0.5033497536945819,
     "paperClosedTrades": 0,
     "paperWins": 0,
     "paperLosses": 0,
-    "paperMaxDrawdownPct": 0,
+    "paperMaxDrawdownPct": 0.5033497536945788,
     "paperProfitFactor": null,
-    "paperOpenPositions": 0
+    "paperOpenPositions": 1
   },
   "promotionGate": {
     "minimumResolvedCandidates": 100,
@@ -40,18 +40,49 @@
     "maximumRugRate": 0.1,
     "status": "INSUFFICIENT_SAMPLE"
   },
-  "signals": [],
+  "signals": [
+    {
+      "observedAt": "2026-11-07T16:23:23.457Z",
+      "mint": "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump",
+      "symbol": "HODL",
+      "pairAddress": "ANS69UDTbMCWbW7ZuCYXLZ4HMCQkvzPMtCW9zjPZQGKR",
+      "priceUsd": 0.004924,
+      "liquidityUsd": 185524.62,
+      "marketCapUsd": 4902570,
+      "ageMin": 1033.7362,
+      "volume5mUsd": 68074.91,
+      "volume1hUsd": 150009.53,
+      "buys5m": 1278,
+      "sells5m": 298,
+      "buySellRatio5m": 4.2885906040268456,
+      "volumeAcceleration": 5.445646819905376,
+      "priceChange5mPct": 9.73,
+      "priceChange1hPct": 11.31,
+      "score": 0.7524,
+      "action": "ELIGIBLE",
+      "reasons": [],
+      "audit": {
+        "status": "OK",
+        "mintAuthorityDisabled": true,
+        "freezeAuthorityDisabled": true,
+        "topHolderPct": null
+      },
+      "recordedAt": "2026-11-07T16:22:28.369Z"
+    }
+  ],
   "notes": [
     "Only decisions recorded before outcomes count.",
     "No live orders are authorized.",
     "Thresholds are frozen until 100 eligible candidates are resolved at the 6h horizon."
   ],
-  "seenEligibleMints": {},
-  "lastRunAt": "2026-11-07T09:57:30.788Z",
+  "seenEligibleMints": {
+    "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump": "2026-11-07T16:23:23.457Z"
+  },
+  "lastRunAt": "2026-11-07T16:22:28.369Z",
   "lastScanSummary": {
-    "startedAt": "2026-11-07T09:57:30.788Z",
-    "finishedAt": "2026-11-07T09:58:25.351Z",
-    "discovered": 172,
-    "eligible": 0
+    "startedAt": "2026-11-07T16:22:28.370Z",
+    "finishedAt": "2026-11-07T16:23:28.302Z",
+    "discovered": 173,
+    "eligible": 1
   }
 }

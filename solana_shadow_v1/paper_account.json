@@ -5,17 +5,39 @@
   "currency": "USDT",
   "startedAt": "2026-09-26T07:00:00Z",
   "startingCashUsdt": 100,
-  "cashUsdt": 100,
-  "equityUsdt": 100,
+  "cashUsdt": 84.97,
+  "equityUsdt": 99.49665024630542,
   "realizedPnlUsdt": 0,
-  "unrealizedPnlUsdt": 0,
-  "returnPct": 0,
+  "unrealizedPnlUsdt": -0.503349753694577,
+  "returnPct": -0.5033497536945819,
   "peakEquityUsdt": 100,
-  "maxDrawdownPct": 0,
-  "openPositions": [],
+  "maxDrawdownPct": 0.5033497536945788,
+  "openPositions": [
+    {
+      "id": "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump@1794068548369",
+      "mint": "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump",
+      "symbol": "HODL",
+      "pairAddress": "ANS69UDTbMCWbW7ZuCYXLZ4HMCQkvzPMtCW9zjPZQGKR",
+      "enteredAt": "2026-11-07T16:22:28.369Z",
+      "sourceDecisionAt": "2026-11-07T16:23:23.457Z",
+      "score": 0.7524,
+      "entryReferencePrice": 0.004924,
+      "effectiveEntryPrice": 0.00499786,
+      "qty": 3001.284549787309,
+      "notionalUsdt": 15,
+      "entryFeeUsdt": 0.03,
+      "costBasisUsdt": 15.03,
+      "liquidityAtEntryUsd": 185524.62,
+      "marketCapAtEntryUsd": 4902570,
+      "lastObservedAt": "2026-11-07T16:22:28.369Z",
+      "lastObservedPrice": 0.004924,
+      "lastLiquidityUsd": 185524.62,
+      "lastMarkNet": 14.526650246305422
+    }
+  ],
   "closedTrades": [],
   "stats": {
-    "entries": 0,
+    "entries": 1,
     "closed": 0,
     "wins": 0,
     "losses": 0,
@@ -34,12 +56,12 @@
     "No perfect stop fill is assumed during gaps or liquidity collapses.",
     "Costs are charged per the frozen paper portfolio protocol."
   ],
-  "lastRunAt": "2026-11-07T09:57:30.788Z",
-  "scanCount": 196,
+  "lastRunAt": "2026-11-07T16:22:28.369Z",
+  "scanCount": 197,
   "lastScanSummary": {
-    "startedAt": "2026-11-07T09:57:30.788Z",
-    "finishedAt": "2026-11-07T09:58:25.351Z",
-    "discovered": 172,
-    "eligible": 0
+    "startedAt": "2026-11-07T16:22:28.370Z",
+    "finishedAt": "2026-11-07T16:23:28.302Z",
+    "discovered": 173,
+    "eligible": 1
   }
 }
