@@ -5,14 +5,15 @@
   "currency": "USDT",
   "startedAt": "2026-09-26T07:00:00Z",
   "startingCashUsdt": 100,
-  "cashUsdt": 84.97,
-  "equityUsdt": 99.49665024630542,
-  "realizedPnlUsdt": 0,
-  "unrealizedPnlUsdt": -0.503349753694577,
-  "returnPct": -0.5033497536945819,
+  "cashUsdt": 86.55441647024927,
+  "equityUsdt": 86.55441647024927,
+  "realizedPnlUsdt": -13.445583529750733,
+  "unrealizedPnlUsdt": 0,
+  "returnPct": -13.445583529750738,
   "peakEquityUsdt": 100,
-  "maxDrawdownPct": 0.5033497536945788,
-  "openPositions": [
+  "maxDrawdownPct": 13.445583529750735,
+  "openPositions": [],
+  "closedTrades": [
     {
       "id": "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump@1794068548369",
       "mint": "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump",
@@ -29,24 +30,30 @@
       "costBasisUsdt": 15.03,
       "liquidityAtEntryUsd": 185524.62,
       "marketCapAtEntryUsd": 4902570,
-      "lastObservedAt": "2026-11-07T16:22:28.369Z",
-      "lastObservedPrice": 0.004924,
-      "lastLiquidityUsd": 185524.62,
-      "lastMarkNet": 14.526650246305422
+      "lastObservedAt": "2026-11-07T20:50:31.911Z",
+      "lastObservedPrice": 0.0005461,
+      "lastLiquidityUsd": 61564.9,
+      "lastMarkNet": 1.5844164702492667,
+      "exitedAt": "2026-11-07T20:50:31.911Z",
+      "exitObservedPrice": 0.0005461,
+      "exitLiquidityUsd": 61564.9,
+      "exitNetProceedsUsdt": 1.5844164702492667,
+      "pnlUsdt": -13.445583529750733,
+      "returnPct": -89.45830691783588,
+      "exitReason": "RUG_OR_LIQUIDITY_COLLAPSE"
     }
   ],
-  "closedTrades": [],
   "stats": {
     "entries": 1,
-    "closed": 0,
+    "closed": 1,
     "wins": 0,
-    "losses": 0,
+    "losses": 1,
     "breakeven": 0,
-    "winRate": null,
-    "profitFactor": null,
-    "largestWinUsdt": null,
-    "largestLossUsdt": null,
-    "rugLosses": 0,
+    "winRate": 0,
+    "profitFactor": 0,
+    "largestWinUsdt": -13.445583529750733,
+    "largestLossUsdt": -13.445583529750733,
+    "rugLosses": 1,
     "rejectedForCashOrCapacity": 0,
     "noFillOrBadQuote": 0
   },
@@ -56,12 +63,12 @@
     "No perfect stop fill is assumed during gaps or liquidity collapses.",
     "Costs are charged per the frozen paper portfolio protocol."
   ],
-  "lastRunAt": "2026-11-07T16:22:28.369Z",
-  "scanCount": 197,
+  "lastRunAt": "2026-11-07T20:50:31.911Z",
+  "scanCount": 198,
   "lastScanSummary": {
-    "startedAt": "2026-11-07T16:22:28.370Z",
-    "finishedAt": "2026-11-07T16:23:28.302Z",
-    "discovered": 173,
-    "eligible": 1
+    "startedAt": "2026-11-07T20:50:32.030Z",
+    "finishedAt": "2026-11-07T20:51:26.523Z",
+    "discovered": 168,
+    "eligible": 0
   }
 }
