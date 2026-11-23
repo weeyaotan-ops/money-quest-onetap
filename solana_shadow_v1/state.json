@@ -6,9 +6,9 @@
   "startedAt": "2026-09-26T06:53:00Z",
   "bankrollReferenceSol": 100,
   "counts": {
-    "scans": 250,
-    "discovered": 43097,
-    "candidateDecisions": 43097,
+    "scans": 251,
+    "discovered": 43207,
+    "candidateDecisions": 43207,
     "eligibleSignals": 1,
     "resolved1h": 0,
     "resolved6h": 0,
@@ -78,11 +78,11 @@
   "seenEligibleMints": {
     "DKtofLM6bhb54GQy5YFSWQjQmGiZqAkjzkQJ1LTopump": "2026-11-07T16:23:23.457Z"
   },
-  "lastRunAt": "2026-11-23T02:39:01.900Z",
+  "lastRunAt": "2026-11-23T12:20:02.540Z",
   "lastScanSummary": {
-    "startedAt": "2026-11-23T02:39:01.900Z",
-    "finishedAt": "2026-11-23T02:40:01.895Z",
-    "discovered": 129,
+    "startedAt": "2026-11-23T12:20:02.540Z",
+    "finishedAt": "2026-11-23T12:21:02.700Z",
+    "discovered": 110,
     "eligible": 0
   }
 }
